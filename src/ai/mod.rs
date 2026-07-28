@@ -1,0 +1,24 @@
+pub mod resonance_attention;
+pub mod router;
+pub mod core;
+pub mod memory_store;
+pub mod answer_engine;
+pub mod codegen;
+pub mod moe;
+pub mod hnsw;
+pub mod jepa;
+pub mod hierarchical_jepa;
+pub mod prompts;
+pub mod world;
+pub mod wave_mesh;
+
+pub use codegen::CodegenResult;
+pub use resonance_attention::{ResonanceAttention, AttentionCell};
+pub use router::{DynamicRouter, TargetExpert, ExpertConfig};
+pub use core::{FugaAI, AIOutput};
+pub use memory_store::{MemoryStore, MemoryEntry, AttractorIndex, NUM_ATTRACTORS};
+pub use moe::MoEStore;
+pub use answer_engine::{AnswerEngine, AnswerResult, AnswerHit};
+pub use jepa::JepaPredictor;
+pub use hierarchical_jepa::HierarchicalJEPA;
+pub use prompts::PromptVectors;

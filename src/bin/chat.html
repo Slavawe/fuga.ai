@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fuga Omni 1.0</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', -apple-system, sans-serif;
+    background: #0a0e17;
+    color: #c8d6e5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
+    background: linear-gradient(135deg, #0f1923 0%, #1a2a3a 100%);
+    border-bottom: 1px solid #1e3a5f;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .header h1 { font-size: 18px; color: #4fc3f7; letter-spacing: 1px; }
+  .header .sub { font-size: 12px; color: #607d8b; }
+  .header .stats { margin-left: auto; font-size: 11px; color: #546e7a; font-family: 'Courier New', monospace; }
+  .tabs {
+    display: flex;
+    background: #0f1923;
+    border-bottom: 1px solid #1e3a5f;
+    flex-shrink: 0;
+  }
+  .tab {
+    padding: 10px 24px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #607d8b;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .tab:hover { color: #b0bec5; }
+  .tab.active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
+  .tab-content { display: none; flex: 1; flex-direction: column; }
+  .tab-content.active { display: flex; }
+  #chat-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+  .message {
+    max-width: 85%;
+    padding: 14px 18px;
+    border-radius: 12px;
+    line-height: 1.5;
+    font-size: 14px;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .user { align-self: flex-end; background: #1a3a5c; color: #e3f2fd; border-bottom-right-radius: 4px; }
+  .assistant { align-self: flex-start; background: #141e2b; color: #b0bec5; border-bottom-left-radius: 4px; border: 1px solid #1e3a5f; }
+  .domain-badge {
+    display: inline-block; padding: 2px 10px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 8px;
+  }
+  .domain-code { background: #76ff0333; color: #b2ff59; border: 1px solid #76ff0366; }
+  .domain-general { background: #78909c33; color: #90a4ae; border: 1px solid #78909c66; }
+  .domain-zfc { background: #7c4dff33; color: #b388ff; border: 1px solid #7c4dff66; }
+  .domain-geometry { background: #00bcd433; color: #4dd0e1; border: 1px solid #00bcd466; }
+  .omni-output {
+    font-family: 'Courier New', monospace; font-size: 12px; color: #78909c;
+    margin-top: 8px; padding: 8px; background: #0a0e17; border-radius: 6px;
+    white-space: pre-wrap; max-height: 300px; overflow-y: auto;
+  }
+  .input-area {
+    display: flex; gap: 8px; padding: 12px 20px;
+    background: #0f1923; border-top: 1px solid #1e3a5f; flex-shrink: 0;
+  }
+  .input-area input {
+    flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e3a5f;
+    background: #141e2b; color: #e3f2fd; font-size: 14px; outline: none;
+  }
+  .input-area input:focus { border-color: #4fc3f7; }
+  .input-area button {
+    padding: 10px 20px; border-radius: 8px; border: none;
+    background: #1a3a5c; color: #4fc3f7; font-size: 14px; cursor: pointer; transition: 0.2s;
+  }
+  .input-area button:hover { background: #1e4a7a; }
+
+  .code-panel {
+    flex: 1; display: flex; flex-direction: column; padding: 16px 20px; gap: 12px;
+    overflow: hidden;
+  }
+  .code-controls { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+  .code-controls select {
+    padding: 8px 12px; border-radius: 6px; border: 1px solid #1e3a5f;
+    background: #141e2b; color: #e3f2fd; font-size: 13px; outline: none;
+  }
+  .code-controls button {
+    padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer; transition: 0.2s;
+  }
+  .btn-analyze { background: #1a3a5c; color: #4fc3f7; }
+  .btn-analyze:hover { background: #1e4a7a; }
+  .btn-fix { background: #1a5c3a; color: #69f0ae; }
+  .btn-fix:hover { background: #1e7a4a; }
+  .btn-generate { background: #5c1a5c; color: #ce93d8; }
+  .btn-generate:hover { background: #7a1e7a; }
+  .code-editor {
+    flex: 1; min-height: 120px; border-radius: 8px; border: 1px solid #1e3a5f;
+    background: #0d1520; color: #e3f2fd; font-family: 'Courier New', monospace;
+    font-size: 13px; padding: 12px; resize: vertical; outline: none;
+  }
+  .code-editor:focus { border-color: #4fc3f7; }
+  .code-results {
+    flex-shrink: 0; max-height: 300px; overflow-y: auto;
+    background: #0d1520; border-radius: 8px; border: 1px solid #1e3a5f; padding: 12px;
+    font-family: 'Courier New', monospace; font-size: 12px;
+  }
+  .score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .score-item { text-align: center; padding: 6px; border-radius: 4px; background: #141e2b; }
+  .score-item .label { font-size: 10px; color: #607d8b; }
+  .score-item .value { font-size: 16px; font-weight: 600; }
+  .score-green { color: #69f0ae; }
+  .score-yellow { color: #ffd740; }
+  .score-red { color: #ff5252; }
+  .fix-diff {
+    white-space: pre-wrap; background: #0a0e17; padding: 8px; border-radius: 4px;
+    border-left: 3px solid #69f0ae; margin-top: 8px; font-size: 12px;
+  }
+  .loading { opacity: 0.5; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>FUGA</h1>
+  <span class="sub">Omni 1.0 + Code Analysis</span>
+  <span class="stats" id="stats">—</span>
+</div>
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('chat')">Chat</div>
+  <div class="tab" onclick="switchTab('code')">Code Analysis</div>
+</div>
+
+<div id="tab-chat" class="tab-content active">
+  <div id="chat-container"></div>
+  <div class="input-area">
+    <input id="chat-input" type="text" placeholder="Ask Fuga anything..." onkeydown="if(event.key==='Enter') sendChat()">
+    <button onclick="sendChat()">Send</button>
+  </div>
+</div>
+
+<div id="tab-code" class="tab-content">
+  <div class="code-panel">
+    <div class="code-controls">
+      <select id="code-lang">
+        <option value="rust">Rust</option>
+        <option value="c">C</option>
+        <option value="cpp">C++</option>
+        <option value="go">Go</option>
+        <option value="python">Python</option>
+        <option value="ts">TypeScript</option>
+      </select>
+      <button class="btn-analyze" onclick="analyzeCode()">Analyze</button>
+      <button class="btn-fix" onclick="fixCode()">Fix</button>
+      <button class="btn-generate" onclick="generateCode()">Generate</button>
+    </div>
+    <textarea id="code-input" class="code-editor" placeholder="Paste code for analysis, or enter a prompt for generation (click Generate)...">fn divide(a: i32, b: i32) -> i32 {
+    a / b
+}
+
+fn main() {
+    let x = divide(10, 0);
+    let y = Some(5).unwrap();
+    println!("{} {}", x, y);
+}</textarea>
+    <div id="code-results" class="code-results">
+      <div style="color:#607d8b;">Results will appear here after analysis.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let statsInterval;
+
+async function api(path, data) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data),
+  });
+  return r.json();
+}
+
+async function fetchStats() {
+  try {
+    const r = await fetch('/api/stats');
+    const s = await r.json();
+    document.getElementById('stats').textContent =
+      `entropy ${s.entropy} | coherence ${s.coherence} | mem ${s.memory}`;
+  } catch(e) { /* ignore */ }
+}
+
+function addMessage(text, cls) {
+  const c = document.getElementById('chat-container');
+  const m = document.createElement('div');
+  m.className = `message ${cls}`;
+  m.innerHTML = text;
+  c.appendChild(m);
+  c.scrollTop = c.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+  addMessage(escapeHtml(q), 'user');
+  addMessage('<span style="color:#607d8b;">thinking...</span>', 'assistant');
+  try {
+    const r = await api('/api/chat', {query: q});
+    const msgs = document.querySelectorAll('.assistant');
+    const last = msgs[msgs.length - 1];
+    const domain = r.domain || 'general';
+    let codeHtml = '';
+    if (r.generated_code && r.generated_code.length > 10) {
+      codeHtml = `<div style="margin-top:8px;border:1px solid #1e3a5f;border-radius:8px;overflow:hidden;">` +
+        `<div style="background:#0f1923;padding:4px 12px;font-size:11px;color:#607d8b;border-bottom:1px solid #1e3a5f;">` +
+        `Generated Code</div>` +
+        `<pre style="margin:0;padding:12px;font-size:12px;background:#0a0e17;overflow-x:auto;white-space:pre-wrap;color:#e3f2fd;">${escapeHtml(r.generated_code)}</pre></div>`;
+    }
+    let analysisHtml = '';
+    if (r.code_analysis && r.code_analysis !== null) {
+      const ca = r.code_analysis;
+      let mwHtml = '';
+      if (ca.microwave && ca.microwave !== null) {
+        const m = ca.microwave;
+        mwHtml = '<div style="margin-top:6px;padding:4px 8px;background:#141e2b;border-radius:4px;font-size:11px;">' +
+          `<div style="color:#607d8b;margin-bottom:2px;">Microwave</div>` +
+          (m.COMPILES ? `<div>Compiles: <span class="${m.COMPILES === 'true' ? 'score-green' : 'score-red'}">${m.COMPILES}</span></div>` : '') +
+          (m.ERRORS ? `<div>Errors: ${m.ERRORS}</div>` : '') +
+          (m.WARNINGS ? `<div>Warnings: ${m.WARNINGS}</div>` : '') +
+          (m.REWARD ? `<div>Reward: <span class="${scoreClass(parseFloat(m.REWARD), 1, 0)}">${parseFloat(m.REWARD).toFixed(2)}</span></div>` : '') +
+          '</div>';
+      }
+      analysisHtml = `<div style="margin-top:8px;border:1px solid #1e3a5f;border-radius:8px;overflow:hidden;">` +
+        `<div style="background:#0f1923;padding:4px 12px;font-size:11px;color:#607d8b;border-bottom:1px solid #1e3a5f;">` +
+        `Code Analysis <span style="color:#4fc3f7;">${escapeHtml(ca.language || '')}</span></div>` +
+        `<div style="padding:8px 12px;font-size:12px;background:#0a0e17;">` +
+        `<div class="score-grid" style="grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px;">` +
+        renderScore('Weight', ca.weight, 2, 0.8, 0.4) +
+        renderScore('Safety', ca.safety, 2, 0.8, 0.4) +
+        `<div class="score-item"><div class="label">Bugs</div><div class="value ${ca.bugs ? 'score-red' : 'score-green'}">${escapeHtml(ca.bugs_text || '')}</div></div>` +
+        `<div class="score-item"><div class="label">Violations</div><div class="value ${ca.violations > 0 ? 'score-red' : 'score-green'}">${escapeHtml(ca.violations_text || '')}</div></div>` +
+        `</div>` +
+        (ca.summary ? `<div style="color:#607d8b;font-size:11px;margin-bottom:4px;">${escapeHtml(ca.summary)}</div>` : '') +
+        mwHtml + `</div></div>`;
+    }
+    last.innerHTML = `<span class="domain-badge domain-${domain}">${domain}</span>` +
+      r.conversational +
+      codeHtml +
+      analysisHtml +
+      (r.omni_output ? `<div class="omni-output">${escapeHtml(r.omni_output)}</div>` : '') +
+      (r.system_vector ? `<div style="font-size:11px;color:#4fc3f7;margin-top:4px;">ψ = ${escapeHtml(r.system_vector)}</div>` : '');
+  } catch(e) {
+    const msgs = document.querySelectorAll('.assistant');
+    msgs[msgs.length - 1].innerHTML = `<span style="color:#ff5252;">Error: ${e}</span>`;
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function scoreClass(v, high, mid) {
+  if (v >= high) return 'score-green';
+  if (v >= mid) return 'score-yellow';
+  return 'score-red';
+}
+
+function renderScore(label, value, fmt, high, mid) {
+  const v = typeof value === 'number' ? value : parseFloat(value);
+  const f = fmt ? value.toFixed(fmt) : value;
+  return `<div class="score-item"><div class="label">${label}</div><div class="value ${scoreClass(v, high, mid)}">${f}</div></div>`;
+}
+
+async function analyzeCode() {
+  const code = document.getElementById('code-input').value;
+  const lang = document.getElementById('code-lang').value;
+  const results = document.getElementById('code-results');
+  results.innerHTML = '<div style="color:#607d8b;">Analyzing...</div>';
+  document.getElementById('tab-code').classList.add('loading');
+  try {
+    const r = await api('/api/code-analyze', {code, language: lang});
+    if (r.error) { results.innerHTML = `<div style="color:#ff5252;">Error: ${r.error}</div>`; return; }
+    let mwHtml = '';
+    if (r.microwave && r.microwave !== null) {
+      mwHtml = '<div style="margin-top:8px;padding:6px;background:#141e2b;border-radius:4px;">' +
+        '<div style="font-size:10px;color:#607d8b;">Microwave Sandbox</div>' +
+        `<div>Compiles: <span class="${r.microwave.COMPILES === 'true' ? 'score-green' : 'score-red'}">${r.microwave.COMPILES}</span></div>` +
+        `<div>Errors: ${r.microwave.ERRORS || '0'} | Warnings: ${r.microwave.WARNINGS || '0'}</div>` +
+        `<div>Reward: <span class="${scoreClass(parseFloat(r.microwave.REWARD || 0), 1, 0)}">${parseFloat(r.microwave.REWARD || 0).toFixed(2)}</span></div>` +
+        `<div>Collage: ${parseFloat(r.microwave.COLLAGE || 0).toFixed(2)}</div>` +
+        '</div>';
+    }
+    results.innerHTML =
+      `<div class="score-grid">` +
+      renderScore('Weight', r.weight, 2, 0.8, 0.4) +
+      renderScore('Safety', r.safety, 2, 0.8, 0.4) +
+      renderScore('Coherence', r.coherence, 2, 0.8, 0.4) +
+      renderScore('Violations', r.violations, 0, 1, 5) +
+      renderScore('Attacks', r.attacks, 0, 0, 2) +
+      `<div class="score-item"><div class="label">Bugs</div><div class="value ${r.bugs ? 'score-red' : 'score-green'}">${r.bugs ? 'DETECTED' : 'none'}</div></div>` +
+      `</div>` +
+      `<div style="color:#607d8b;font-size:11px;margin-bottom:4px;">${escapeHtml(r.summary)}</div>` +
+      mwHtml;
+  } catch(e) {
+    results.innerHTML = `<div style="color:#ff5252;">Error: ${e}</div>`;
+  }
+  document.getElementById('tab-code').classList.remove('loading');
+}
+
+async function fixCode() {
+  const code = document.getElementById('code-input').value;
+  const lang = document.getElementById('code-lang').value;
+  const results = document.getElementById('code-results');
+  results.innerHTML = '<div style="color:#607d8b;">Generating fixes...</div>';
+  document.getElementById('tab-code').classList.add('loading');
+  try {
+    const r = await api('/api/code-fix', {code, language: lang});
+    if (r.error) { results.innerHTML = `<div style="color:#ff5252;">Error: ${r.error}</div>`; return; }
+    if (!r.fixed) {
+      results.innerHTML = `<div style="color:#69f0ae;">No fixes needed. ${r.message || ''}</div>` +
+        `<div class="score-grid">` +
+        renderScore('Weight', r.original_score.weight, 2, 0.8, 0.4) +
+        renderScore('Safety', r.original_score.safety, 2, 0.8, 0.4) +
+        `</div>`;
+      return;
+    }
+    let proposalsHtml = '<div style="margin-bottom:8px;">';
+    for (const p of r.proposals) {
+      proposalsHtml += `<div style="padding:4px 0;border-bottom:1px solid #1e3a5f;font-size:12px;">` +
+        `<span style="color:#4fc3f7;">[${(p.confidence * 100).toFixed(0)}%]</span> ${escapeHtml(p.description)}</div>`;
+    }
+    proposalsHtml += '</div>';
+
+    const mwHtml = (r.microwave_original && r.microwave_fixed) ?
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0;">` +
+      `<div style="padding:6px;background:#141e2b;border-radius:4px;">` +
+        `<div style="font-size:10px;color:#607d8b;">Original (microwave)</div>` +
+        `<div>Errors: ${r.microwave_original.ERRORS || '0'} | Reward: ${parseFloat(r.microwave_original.REWARD || 0).toFixed(2)}</div>` +
+      `</div>` +
+      `<div style="padding:6px;background:#141e2b;border-radius:4px;">` +
+        `<div style="font-size:10px;color:#607d8b;">Fixed (microwave)</div>` +
+        `<div>Errors: ${r.microwave_fixed.ERRORS || '0'} | Reward: ${parseFloat(r.microwave_fixed.REWARD || 0).toFixed(2)}</div>` +
+      `</div></div>` : '';
+
+    results.innerHTML =
+      `<div class="score-grid">` +
+      `<div class="score-item"><div class="label">Weight</div><div class="value">${r.original_score.weight.toFixed(2)} → <span class="${scoreClass(r.fixed_score.weight, 0.8, 0.4)}">${r.fixed_score.weight.toFixed(2)}</span></div></div>` +
+      `<div class="score-item"><div class="label">Safety</div><div class="value">${r.original_score.safety.toFixed(2)} → <span class="${scoreClass(r.fixed_score.safety, 0.8, 0.4)}">${r.fixed_score.safety.toFixed(2)}</span></div></div>` +
+      `<div class="score-item"><div class="label">Violations</div><div class="value">${r.original_score.violations} → <span class="${r.fixed_score.violations <= r.original_score.violations ? 'score-green' : 'score-red'}">${r.fixed_score.violations}</span></div></div>` +
+      `</div>` +
+      proposalsHtml +
+      mwHtml +
+      `<div class="fix-diff">${escapeHtml(r.fixed_code)}</div>`;
+    document.getElementById('code-input').value = r.fixed_code;
+  } catch(e) {
+    results.innerHTML = `<div style="color:#ff5252;">Error: ${e}</div>`;
+  }
+  document.getElementById('tab-code').classList.remove('loading');
+}
+
+async function generateCode() {
+  const prompt = document.getElementById('code-input').value;
+  const lang = document.getElementById('code-lang').value;
+  const results = document.getElementById('code-results');
+  results.innerHTML = '<div style="color:#607d8b;">Generating code...</div>';
+  document.getElementById('tab-code').classList.add('loading');
+  try {
+    const r = await api('/api/code-generate', {prompt, language: lang});
+    if (r.error) { results.innerHTML = `<div style="color:#ff5252;">Error: ${r.error}</div>`; return; }
+    let snippetsHtml = '';
+    if (r.snippets && r.snippets.length > 0) {
+      for (const s of r.snippets) {
+        snippetsHtml += `<div style="margin-bottom:8px;padding:8px;background:#0a0e17;border-radius:4px;border-left:3px solid #ce93d8;">` +
+          `<div style="font-size:10px;color:#607d8b;">similarity: ${s.similarity}</div>` +
+          `<pre style="margin:4px 0 0;font-size:12px;white-space:pre-wrap;color:#e3f2fd;">${escapeHtml(s.code)}</pre></div>`;
+      }
+    } else {
+      snippetsHtml = '<div style="color:#ffab40;">No code patterns found in trained memory.</div>';
+    }
+    results.innerHTML =
+      `<div style="margin-bottom:8px;">` +
+      `<span class="domain-badge domain-${r.domain || 'code'}">${r.domain || 'code'}</span>` +
+      `<span style="font-size:11px;color:#607d8b;margin-left:8px;">${r.hits} patterns | entropy ${r.entropy}</span>` +
+      `</div>` +
+      snippetsHtml;
+  } catch(e) {
+    results.innerHTML = `<div style="color:#ff5252;">Error: ${e}</div>`;
+  }
+  document.getElementById('tab-code').classList.remove('loading');
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab:nth-child(${name === 'chat' ? 1 : 2})`).classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+fetchStats();
+statsInterval = setInterval(fetchStats, 5000);
+</script>
+</body>
+</html>

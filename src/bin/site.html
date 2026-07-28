@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fuga Omni — VSA Geometry Engine</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
+body { font-family: 'Inter', sans-serif; background: #0a0a12; color: #e0e0f0; overflow-x: hidden; }
+
+canvas#bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+
+.section { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem 2rem; }
+
+.hero { text-align: center; }
+.hero h1 { font-size: clamp(3rem, 10vw, 7rem); font-weight: 800; background: linear-gradient(135deg, #00d4ff, #7b2ff7, #ff2d95); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; letter-spacing: -0.03em; }
+.hero .sub { font-size: clamp(1rem, 2.5vw, 1.5rem); color: #8888bb; margin-top: 1rem; font-weight: 300; }
+.hero .badge { display: inline-block; margin-top: 2rem; padding: 0.5rem 1.5rem; border: 1px solid #7b2ff7; border-radius: 2rem; color: #7b2ff7; font-size: 0.85rem; letter-spacing: 0.1em; text-transform: uppercase; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; max-width: 1000px; width: 100%; margin-top: 3rem; }
+.stat-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 1rem; padding: 1.5rem; text-align: center; backdrop-filter: blur(10px); transition: transform 0.3s, border-color 0.3s; }
+.stat-card:hover { transform: translateY(-4px); border-color: rgba(123,47,247,0.3); }
+.stat-card .num { font-size: 2rem; font-weight: 700; color: #00d4ff; }
+.stat-card .label { font-size: 0.8rem; color: #8888bb; margin-top: 0.3rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.stat-card .bar { margin-top: 0.8rem; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #00d4ff, #7b2ff7); transition: width 1.5s ease; width: 0%; }
+
+.arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; max-width: 1100px; width: 100%; margin-top: 2rem; }
+.arch-card { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 1rem; padding: 2rem; transition: all 0.3s; }
+.arch-card:hover { border-color: rgba(0,212,255,0.3); background: rgba(0,212,255,0.03); }
+.arch-card .icon { font-size: 2rem; margin-bottom: 0.8rem; }
+.arch-card h3 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; }
+.arch-card p { font-size: 0.85rem; color: #8888bb; line-height: 1.6; }
+
+.cube-viz { width: 300px; height: 300px; position: relative; margin: 2rem auto; }
+.cube-viz canvas { width: 100%; height: 100%; }
+
+.chat-box { max-width: 600px; width: 100%; margin-top: 2rem; }
+.chat-box input { width: 100%; padding: 1rem 1.5rem; border: 1px solid rgba(255,255,255,0.1); border-radius: 2rem; background: rgba(255,255,255,0.03); color: #e0e0f0; font-size: 1rem; outline: none; transition: border-color 0.3s; }
+.chat-box input:focus { border-color: #7b2ff7; }
+.chat-box input::placeholder { color: #555; }
+.chat-response { margin-top: 1rem; padding: 1rem 1.5rem; border-radius: 1rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); min-height: 3rem; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.6; display: none; }
+
+.domain-ring { position: relative; width: 280px; height: 280px; margin: 2rem auto; }
+.domain-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.domain-ring .center-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; }
+.domain-ring .center-label .big { font-size: 1.8rem; font-weight: 700; color: #00d4ff; }
+.domain-ring .center-label .sml { font-size: 0.75rem; color: #8888bb; }
+
+.terminal { max-width: 700px; width: 100%; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.06); border-radius: 0.75rem; padding: 1.5rem; font-family: 'Courier New', monospace; font-size: 0.8rem; line-height: 1.8; margin-top: 2rem; }
+.terminal .prompt { color: #00d4ff; }
+.terminal .cmd { color: #e0e0f0; }
+.terminal .out { color: #8888bb; }
+.terminal .blink { animation: blink 1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.expert-line { display: flex; align-items: center; gap: 0.8rem; margin: 0.5rem 0; }
+.expert-line .name { width: 100px; text-align: right; font-size: 0.8rem; color: #8888bb; }
+.expert-line .track { flex: 1; height: 8px; background: rgba(255,255,255,0.05); border-radius: 4px; overflow: hidden; }
+.expert-line .fill { height: 100%; border-radius: 4px; transition: width 1.5s ease; width: 0%; }
+
+footer { text-align: center; padding: 3rem; color: #555; font-size: 0.8rem; border-top: 1px solid rgba(255,255,255,0.04); }
+footer a { color: #7b2ff7; text-decoration: none; }
+
+.floating { animation: float 6s ease-in-out infinite; }
+@keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
+
+@media(max-width:600px) {
+  .stats-grid { grid-template-columns: repeat(2,1fr); }
+  .arch-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+
+<section class="section hero">
+  <div class="badge">v1.0 — VSA Geometry Engine</div>
+  <h1>Fuga Omni</h1>
+  <p class="sub">636 239 векторов · 7 экспертов · O(1) резонанс</p>
+  <div class="stats-grid" id="statsGrid"></div>
+  <div class="terminal" id="terminal">
+    <div><span class="prompt">$</span> <span class="cmd">fuga omni --status</span></div>
+    <div><span class="out">cube: 4³=64 cells, dim=8192</span></div>
+    <div><span class="out">entropy: 0.5001</span></div>
+    <div><span class="out">coherence: 0.5059</span></div>
+    <div><span class="prompt">$</span> <span class="cmd" id="typing"></span><span class="blink">▌</span></div>
+  </div>
+</section>
+
+<section class="section" style="background: radial-gradient(ellipse at center, rgba(123,47,247,0.05), transparent 70%);">
+  <h2 style="font-size:2rem;font-weight:700;margin-bottom:0.5rem;">Архитектура</h2>
+  <p style="color:#8888bb;margin-bottom:2rem;">Mixture of Experts · 7 доменов</p>
+  <div class="arch-grid">
+    <div class="arch-card"><div class="icon">💬</div><h3>dialogue</h3><p>233K диалоговых пар из OpenSubtitles</p></div>
+    <div class="arch-card"><div class="icon">📖</div><h3>narrative</h3><p>346K фрагментов из Gutenberg + MDN/docs/skills</p></div>
+    <div class="arch-card"><div class="icon">⚡</div><h3>code</h3><p>55K паттернов из 463 файлов (JS/TS/HTML/CSS)</p></div>
+    <div class="arch-card"><div class="icon">🧮</div><h3>general</h3><p>Общий слой для неклассифицированных данных</p></div>
+    <div class="arch-card"><div class="icon">🔬</div><h3>forum</h3><p>1.3K записей</p></div>
+    <div class="arch-card"><div class="icon">🌀</div><h3>VSA Cube</h3><p>4³=64 ячейки · Hypervector 8192 · GPU резонанс</p></div>
+  </div>
+
+  <div style="max-width:500px;width:100%;margin-top:3rem;" id="expertBars"></div>
+</section>
+
+<section class="section" style="background: radial-gradient(ellipse at center, rgba(0,212,255,0.04), transparent 70%);">
+  <h2 style="font-size:2rem;font-weight:700;margin-bottom:0.5rem;">Попробуй</h2>
+  <p style="color:#8888bb;margin-bottom:1rem;">Задай вопрос из обученной памяти</p>
+  <div class="chat-box">
+    <input id="chatInput" type="text" placeholder="например: расскажи о квантовых вычислениях..." autofocus>
+    <div class="chat-response" id="chatResponse"></div>
+  </div>
+  <div style="margin-top:2rem;display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:center;">
+    <span style="padding:0.3rem 1rem;background:rgba(123,47,247,0.1);border:1px solid rgba(123,47,247,0.2);border-radius:2rem;font-size:0.75rem;cursor:pointer;" onclick="quickQuery('привет')">привет</span>
+    <span style="padding:0.3rem 1rem;background:rgba(0,212,255,0.1);border:1px solid rgba(0,212,255,0.2);border-radius:2rem;font-size:0.75rem;cursor:pointer;" onclick="quickQuery('расскажи историю')">расскажи историю</span>
+    <span style="padding:0.3rem 1rem;background:rgba(255,45,149,0.1);border:1px solid rgba(255,45,149,0.2);border-radius:2rem;font-size:0.75rem;cursor:pointer;" onclick="quickQuery('напиши функцию на js')">напиши функцию</span>
+  </div>
+</section>
+
+<footer>
+  built with ❤️ by <a href="#">Fuga Omni</a> · VSA Geometry · O(1) Inference · 2026
+</footer>
+
+<script>
+const domains = [
+  {name:'narrative', size:346179, color:'#00d4ff'},
+  {name:'dialogue', size:233116, color:'#7b2ff7'},
+  {name:'code', size:55623, color:'#ff2d95'},
+  {name:'forum', size:1320, color:'#ffaa00'},
+  {name:'general', size:1, color:'#8888bb'},
+];
+const total = domains.reduce((a,d)=>a+d.size, 0);
+
+// Stats grid
+const sg = document.getElementById('statsGrid');
+domains.forEach(d => {
+  const pct = ((d.size/total)*100).toFixed(1);
+  const card = document.createElement('div');
+  card.className = 'stat-card';
+  card.innerHTML = `<div class="num">${(d.size/1000).toFixed(0)}K</div><div class="label">${d.name}</div><div class="bar" style="background:${d.color}" data-pct="${pct}"></div>`;
+  sg.appendChild(card);
+});
+setTimeout(() => {
+  document.querySelectorAll('.bar').forEach(b => b.style.width = b.dataset.pct + '%');
+}, 300);
+
+// Expert bars
+const eb = document.getElementById('expertBars');
+domains.forEach(d => {
+  const pct = ((d.size/total)*100).toFixed(1);
+  const row = document.createElement('div');
+  row.className = 'expert-line';
+  row.innerHTML = `<div class="name">${d.name}</div><div class="track"><div class="fill" style="background:${d.color}" data-pct="${pct}"></div></div><div style="font-size:0.75rem;color:#8888bb;width:50px;text-align:right;">${pct}%</div>`;
+  eb.appendChild(row);
+});
+setTimeout(() => {
+  document.querySelectorAll('#expertBars .fill').forEach(f => f.style.width = f.dataset.pct + '%');
+}, 500);
+
+// Typing effect
+const typingEl = document.getElementById('typing');
+const cmds = ['fuga ui "interactive dashboard"', 'fuga scan src/ --security', 'fuga agent "deploy to cachyos"', 'fuga train-code datasets/'];
+let ci = 0;
+function typeCmd() {
+  const cmd = cmds[ci];
+  let pos = 0;
+  typingEl.textContent = '';
+  function tick() {
+    if (pos < cmd.length) {
+      typingEl.textContent += cmd[pos++];
+      setTimeout(tick, 50);
+    } else {
+      setTimeout(() => {
+        ci = (ci + 1) % cmds.length;
+        setTimeout(typeCmd, 500);
+      }, 2000);
+    }
+  }
+  tick();
+}
+typeCmd();
+
+// Background canvas
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+let w, h, particles = [];
+function resize() {
+  w = canvas.width = window.innerWidth;
+  h = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+class Particle {
+  constructor() { this.reset(); }
+  reset() {
+    this.x = Math.random() * w;
+    this.y = Math.random() * h;
+    this.z = Math.random() * 3 + 1;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
+    this.r = Math.random() * 1.5 + 0.5;
+    this.a = Math.random() * 0.5 + 0.1;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < 0 || this.x > w) this.vx *= -1;
+    if (this.y < 0 || this.y > h) this.vy *= -1;
+  }
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.r * this.z, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(123, 47, 247, ${this.a * this.z * 0.2})`;
+    ctx.fill();
+  }
+}
+
+for (let i = 0; i < 120; i++) particles.push(new Particle());
+
+let mouseX = w/2, mouseY = h/2;
+window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+
+function animate() {
+  ctx.clearRect(0, 0, w, h);
+  particles.forEach(p => { p.update(); p.draw(); });
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 150) {
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = `rgba(123, 47, 247, ${0.08 * (1 - dist / 150)})`;
+        ctx.stroke();
+      }
+    }
+  }
+  // connection to mouse
+  particles.forEach(p => {
+    const dx = p.x - mouseX, dy = p.y - mouseY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist < 200) {
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(mouseX, mouseY);
+      ctx.strokeStyle = `rgba(0, 212, 255, ${0.05 * (1 - dist / 200)})`;
+      ctx.stroke();
+    }
+  });
+  requestAnimationFrame(animate);
+}
+animate();
+
+// Quick query buttons
+function quickQuery(q) {
+  document.getElementById('chatInput').value = q;
+  doChat(q);
+}
+
+// Chat via internal endpoint
+document.getElementById('chatInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const q = e.target.value.trim();
+    if (q) doChat(q);
+  }
+});
+
+async function doChat(query) {
+  const resp = document.getElementById('chatResponse');
+  resp.style.display = 'block';
+  resp.textContent = '🔄 ищу в памяти...';
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: query})
+    });
+    const data = await res.json();
+    resp.textContent = data.reply || 'Нет ответа';
+  } catch(e) {
+    resp.textContent = '⚡ Ответ из эксперта code (offline):\n' +
+      'Fuga Omni — VSA Engine 636K vectors.\n' +
+      'Для online-режима запусти fuga-web.';
+  }
+}
+</script>
+</body>
+</html>

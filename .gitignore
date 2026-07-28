@@ -1,0 +1,26 @@
+# Rust build
+/target
+**/*.rs.bk
+
+# Data & temp repos
+/temp_repos
+/data
+/datasets
+*.bin
+*.gguf
+
+# Logs, dumps, configs
+*.log
+*.tmp
+*.token
+.env
+.env.*
+
+# JSON corpora (large generated data, not source)
+*.jsonl
+
+# Editor / OS files
+.idea/
+.vscode/
+.DS_Store
+*.swp
