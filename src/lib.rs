@@ -12,6 +12,8 @@ pub mod multi;
 pub mod multi_engine;
 pub mod weaver;
 pub mod ai;
+pub mod anomaly;
+
 pub mod quality_filter;
 pub mod text_quality;
 pub mod fisig_formatter;
@@ -19,6 +21,10 @@ pub mod omni;
 pub mod speech;
 pub mod microwave;
 pub mod gpu;
+pub mod vsa;
+pub mod safety;
+pub mod patcher;
+pub mod gguf;
 
 pub use core::hypervector::Hypervector;
 pub use core::information_triangle::InformationTriangle;
@@ -82,6 +88,12 @@ pub use ai::{
     MemoryStore, MemoryEntry, MoEStore,
     AnswerEngine, AnswerResult, AnswerHit,
     CodegenResult, JepaPredictor, HierarchicalJEPA, PromptVectors,
+    SdrVector, SdrIndex, SdrStore, sparsify, encode_text, domain_sdr,
+    SDR_DIM, SDR_DENSITY, SDR_WORDS,
+    TemporalMemory, TemporalCell, DendriteSegment, Synapse,
+    AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,
+    temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
+    self_mirror::{SelfMirror, PhaseNode, AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, RawChunk},
 };
 
 pub use quality_filter::{

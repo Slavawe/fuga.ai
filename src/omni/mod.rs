@@ -1,4 +1,4 @@
-use crate::ai::{FugaAI, MemoryStore, AIOutput};
+use crate::ai::{FugaAI, MemoryStore};
 use crate::core::wave_cube::WaveCube;
 use crate::weaver::pattern_matcher::TokenInfo;
 use crate::weaver::token_builder::TokenBuilder;
@@ -290,7 +290,7 @@ pub fn omni_train<const N: usize, const S: usize>(
     save_path: &str,
 ) -> Result<(usize, f64, f64), String> {
     let docs = crate::load_corpus(corpus_path)?;
-    let dim = ai.dim;
+    let _dim = ai.dim;
     let mut total_paras = 0usize;
 
     let mut builder = TokenBuilder::new();

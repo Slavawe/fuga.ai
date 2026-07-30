@@ -6,8 +6,7 @@ use fuga::{
     WeaverEngine, TokenBuilder, TokenInfo, TokenVocabulary, TokenExplorer,
     FugaAI, WaveCube, CorpusDoc,
     CodeQualityFilter, summarize_quality,
-    TextQualityFilter, TextSourceType, extract_dialogue_pairs,
-    summarize_text_quality,
+    SDR_DIM,
 };
 use fuga::core::wave_cube::peek_cube_header;
 use fuga::weaver::token_id;
@@ -422,6 +421,165 @@ fn main() {
             let dim = parse_dim(&args, 3).unwrap_or(8192);
             run_hierarchical_jepa_predict(text, dim);
         }
+        "cross-domain" => {
+            let dim = parse_dim(&args, 2).unwrap_or(8192);
+            let epochs = args.get(3).and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+            run_cross_domain(dim, epochs);
+        }
+        "sdr-build" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga_code_cube_mem.bin");
+            let max_entries = args.get(3).and_then(|s| s.parse::<usize>().ok()).unwrap_or(100000);
+            println!("Building SDR index from {} (max {} entries)", path, max_entries);
+            match fuga::SdrStore::build_from_mem(path, max_entries) {
+                Ok(store) => {
+                    let sdr_path = "fuga_sdr_index.bin";
+                    let mut f = std::fs::File::create(sdr_path).unwrap();
+                    use std::io::Write;
+                    let count = store.index.nodes.len() as u32;
+                    f.write_all(&count.to_le_bytes()).ok();
+                    for node in &store.index.nodes {
+                        for w in &node.bits {
+                            f.write_all(&w.to_le_bytes()).ok();
+                        }
+                    }
+                    let tcount = store.index.texts.len() as u32;
+                    f.write_all(&tcount.to_le_bytes()).ok();
+                    for t in &store.index.texts {
+                        let tb = t.as_bytes();
+                        f.write_all(&(tb.len() as u32).to_le_bytes()).ok();
+                        f.write_all(tb).ok();
+                    }
+                    println!("  Saved {} SDR nodes + {} texts to {}", count, tcount, sdr_path);
+                }
+                Err(e) => eprintln!("  SDR build failed: {}", e),
+            }
+        }
+        "sdr-query" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga sdr-query <text>"); return; }
+            run_sdr_query(&text);
+        }
+        "sdr-query-cross" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga sdr-query-cross <text>"); return; }
+            run_sdr_query_cross(&text);
+        }
+        "htm-train" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga_code_cube_code_mem.bin");
+            let steps = args.get(3).and_then(|s| s.parse::<usize>().ok()).unwrap_or(1000);
+            run_htm_train(path, steps);
+        }
+        "htm-predict" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga htm-predict <text>"); return; }
+            run_htm_predict(&text);
+        }
+        "htm-feed" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga htm-feed <text>"); return; }
+            run_htm_feed(&text);
+        }
+        "mirror-index" => {
+            let dir = if args.len() > 2 { args[2].as_str() } else { "src/ai" };
+            run_mirror_index(dir);
+        }
+        "inspect-dir" | "id" => {
+            let dir = if args.len() > 2 { args[2].as_str() } else { "." };
+            run_inspect_dir(dir);
+        }
+        "auto-correct" | "ac" => {
+            let path = if args.len() > 2 { args[2].as_str() } else { "" };
+            if path.is_empty() { eprintln!("Usage: fuga auto-correct <file>"); return; }
+            run_auto_correct(path);
+        }
+        "generate-code" | "gen-code" => {
+            let beam = parse_int(&args, "--beam").unwrap_or(1);
+            let temp = parse_float(&args, "--temp").unwrap_or(1.0);
+            let gen_mode = args.iter().any(|a| a == "--gen");
+            let token_mode = args.iter().any(|a| a == "--tokens");
+            let mut text_parts: Vec<String> = Vec::new();
+            let mut skip_next = false;
+            for s in args[2..].iter() {
+                if skip_next { skip_next = false; continue; }
+                if s == "--beam" || s == "--temp" || s == "--model" { skip_next = true; continue; }
+                if s == "--gen" || s == "--tokens" || s.starts_with("--") { continue; }
+                text_parts.push(s.clone());
+            }
+            let text = text_parts.join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga generate-code <text> [--beam N] [--temp T] [--gen] [--tokens]"); return; }
+            run_generate_code(&text, beam, temp, gen_mode, token_mode);
+        }
+        "train-predictor" | "tp" => {
+            let epochs = if args.len() > 2 { args[2].parse().unwrap_or(5) } else { 5 };
+            let chunk_size = parse_int(&args, "--chunk").unwrap_or(1);
+            let use_ff = args.iter().any(|a| a == "--ff");
+            run_train_predictor(epochs, chunk_size, use_ff);
+        }
+        "evaluate" | "eval" => {
+            run_evaluate();
+        }
+        "export-gguf" | "gguf" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga.gguf");
+            match fuga::gguf::export_gguf(path) {
+                Ok(_) => {
+                    let ggen = fuga::gguf::read_gguf_version(path).unwrap_or(0);
+                    println!("  GGUF exported to {} (generation {})", path, ggen);
+                    if ggen > 0 && ggen % 5 == 0 {
+                        let tag = format!("{}", ggen);
+                        let _ = fuga::gguf::snapshot(path, &tag);
+                        println!("  Snapshot: fuga_{}.gguf", tag);
+                    }
+                }
+                Err(e) => eprintln!("  GGUF export failed: {}", e),
+            }
+        }
+        "snapshot-gguf" | "ggufs" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga.gguf");
+            let tag = args.get(3).map(|s| s.as_str()).unwrap_or("snap");
+            match fuga::gguf::snapshot(path, tag) {
+                Ok(_) => println!("  Snapshot: fuga_{}.gguf <- {}", tag, path),
+                Err(e) => eprintln!("  Snapshot failed: {}", e),
+            }
+        }
+        "inspect-gguf" | "ggufi" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga.gguf");
+            println!("═══ GGUF Inspect ═══\n");
+            let _ = fuga::gguf::inspect_gguf(path);
+        }
+        "self-mirror" | "sm" => {
+            if args.get(2).map(|s| s.as_str()) == Some("query") {
+                let text = args[3..].join(" ");
+                run_self_query(&text);
+            } else {
+                run_self_mirror();
+            }
+        }
+        "self-query" | "sq" => {
+            let text = args[2..].join(" ");
+            run_self_query(&text);
+        }
+        "htm-jepa" | "tm-jepa" => {
+            run_tm_jepa_repl();
+        }
+        "reflect" | "reflect-repl" => {
+            run_reflect_repl();
+        }
+        "inspect" | "recon" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if path.is_empty() {
+                let text = args[2..].join(" ");
+                if text.is_empty() { eprintln!("Usage: fuga inspect <file|text>"); return; }
+                run_inspect_text(&text);
+            } else if std::path::Path::new(path).is_file() {
+                run_inspect_file(path);
+            } else {
+                run_inspect_text(path);
+            }
+        }
+        "baby" => {
+            let dim = parse_dim(&args, 2).unwrap_or(8192);
+            run_baby_repl(dim);
+        }
         "prompts" => {
             let dim = parse_dim(&args, 2).unwrap_or(8192);
             let pv = fuga::PromptVectors::new(dim);
@@ -483,6 +641,24 @@ fn parse_window(args: &[String], start: usize) -> Option<usize> {
             if i + 1 < args.len() {
                 return args[i + 1].parse().ok();
             }
+        }
+    }
+    None
+}
+
+fn parse_int(args: &[String], flag: &str) -> Option<usize> {
+    for i in 0..args.len() {
+        if args[i] == flag && i + 1 < args.len() {
+            return args[i + 1].parse().ok();
+        }
+    }
+    None
+}
+
+fn parse_float(args: &[String], flag: &str) -> Option<f64> {
+    for i in 0..args.len() {
+        if args[i] == flag && i + 1 < args.len() {
+            return args[i + 1].parse().ok();
         }
     }
     None
@@ -2436,7 +2612,7 @@ fn run_absorb_agent() {
     // We'll rebuild MoE at the end from the updated memory file
 
     let dir = "agent_results";
-    let entries = match std::fs::read_dir(dir) {
+    let _entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => { println!("No agent_results directory found."); return; }
     };
@@ -2602,7 +2778,7 @@ fn run_stream_train<const N: usize, const S: usize>(dirs: &[&str], save_path: &s
     let mut entries_flushed = 0usize;
     const FLUSH_THRESHOLD: usize = 200_000;
 
-    for (dir, results) in &all_results {
+    for (_dir, results) in &all_results {
         for (path, score) in results {
             if score.weight <= 0.0 { continue; }
 
@@ -2767,7 +2943,7 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-fn run_agent(task: &str, dim: usize, force: bool) {
+fn run_agent(task: &str, _dim: usize, force: bool) {
     println!("╔══════════════════════════════════════════════╗");
     println!("║  Fuga Agent — Autonomous zx Cycle          ║");
     println!("╚══════════════════════════════════════════════╝");
@@ -3065,7 +3241,7 @@ fn run_merge<const N: usize, const S: usize>(args: &[String]) {
     println!("Entropy: {:.4}, Coherence: {:.4}", ai.cube.global_entropy(), ai.cube.coherence());
 }
 
-fn run_train_text<const N: usize, const S: usize>(dir: &str, dim: usize, save_path: &str, _args: &[String]) {
+fn run_train_text<const N: usize, const S: usize>(dir: &str, _dim: usize, save_path: &str, _args: &[String]) {
     println!("Fuga Conversational-Literary Training Pipeline ({}^{}={} cells)", S, N, S.pow(N as u32));
     println!("  Text corpus: {}", dir);
     let mem_path = save_path.replace(".bin", "_mem.bin");
@@ -3405,7 +3581,7 @@ fn run_train_code<const N: usize, const S: usize>(dir: &str, dim: usize, save_pa
     println!("  Cube coherence: {:.4}", ai.cube.coherence());
 }
 
-fn run_train_autofix<const N: usize, const S: usize>(dir: &str, dim: usize, save_path: &str, mw_path: &str, _args: &[String]) {
+fn run_train_autofix<const N: usize, const S: usize>(dir: &str, _dim: usize, save_path: &str, mw_path: &str, _args: &[String]) {
     println!("Fuga Autofix Training — error correction via microwave validation");
     println!("  Source: {}", dir);
     let mem_path = save_path.replace(".bin", "_mem.bin");
@@ -3702,12 +3878,864 @@ fn run_hierarchical_jepa_train(dir: &str, dim: usize, epochs: usize) {
     println!("  Epochs:  {}", epochs);
     println!("  Levels:  L0(ctx=4,stride=1) L1(ctx=3,stride=3) L2(ctx=2,stride=5)\n");
 
-    let mut hjepa = fuga::HierarchicalJEPA::new(dim);
+    let model_path = "fuga_hjepa.bin";
+    let mut hjepa = if std::path::Path::new(model_path).exists() {
+        match fuga::HierarchicalJEPA::load(model_path) {
+            Ok(h) => { println!("  Loaded existing {} (continuing training)\n", model_path); h }
+            Err(e) => { println!("  Load failed ({}), creating fresh model\n", e); fuga::HierarchicalJEPA::new(dim) }
+        }
+    } else {
+        fuga::HierarchicalJEPA::new(dim)
+    };
     let loss = hjepa.train_on_directory(dir, epochs);
     println!("\n  Training complete. Avg loss: {:.4}", loss);
 
-    match hjepa.save("fuga_hjepa.bin") {
-        Ok(()) => println!("  Saved fuga_hjepa.bin"),
+    match hjepa.save(model_path) {
+        Ok(()) => println!("  Saved {}", model_path),
+        Err(e) => eprintln!("  Save failed: {}", e),
+    }
+}
+
+fn run_baby_repl(dim: usize) {
+    let mut hjepa = match fuga::HierarchicalJEPA::load("fuga_hjepa.bin") {
+        Ok(h) => h,
+        Err(e) => { eprintln!("No trained H-JEPA model: {}. Train with 'h-jepa-train' first.", e); return; }
+    };
+
+    let mut mem: Option<fuga::MemoryStore> = None;
+    for mp in &["fuga_code_cube_code_mem.bin", "fuga_moe_code.bin"] {
+        if std::path::Path::new(mp).exists() {
+            if let Ok(m) = fuga::MemoryStore::load_bin(mp) {
+                mem = Some(m);
+                break;
+            }
+        }
+    }
+
+    let mut weaver = fuga::WeaverEngine::new(dim, 3);
+    let mut context: Vec<fuga::Hypervector> = Vec::new();
+    let stdin = std::io::stdin();
+
+    let sdr_store: Option<fuga::SdrStore> = load_sdr_store("fuga_sdr_index.bin");
+    if sdr_store.is_some() {
+        println!("  SDR index loaded (Fuga 1.4 Cross-SDR Bridge available: /sdr)");
+    }
+
+    println!("╔══════════════════════════════════════════╗");
+    println!("║  Fuga Baby — Interactive H-JEPA REPL    ║");
+    println!("╚══════════════════════════════════════════╝");
+    println!("  Commands: /reset  /quit  /stats  /help  /train <dir> [epochs]  /sdr <query>");
+    println!("  Dim: {}  H-JEPA: fuga_hjepa.bin", dim);
+    println!();
+
+    loop {
+        print!("👶 ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        if stdin.read_line(&mut line).ok() != Some(0) && line.trim().is_empty() {
+            continue;
+        }
+        let line = line.trim();
+
+        if line.eq_ignore_ascii_case("/quit") || line.eq_ignore_ascii_case("/exit") {
+            println!("👋");
+            break;
+        }
+        if line.eq_ignore_ascii_case("/help") {
+            println!("  /reset           Clear context window");
+            println!("  /stats           Show context and model state");
+            println!("  /train <dir> [n] Retrain on directory (n epochs, default 10)");
+            println!("  /quit            Exit");
+            println!("  /help            This message");
+            println!("  <any text>       Predict next state via H-JEPA");
+            continue;
+        }
+        if line.eq_ignore_ascii_case("/reset") {
+            context.clear();
+            println!("  Context reset.");
+            continue;
+        }
+        if line.starts_with("/train") {
+            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+            let train_arg = if parts.len() > 1 { parts[1] } else { "temp_repos" };
+            let train_epochs = parts.get(2).and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+            let dirs: Vec<&str> = train_arg.split(',').collect();
+            let mut total_loss = 0.0;
+            for d in &dirs {
+                let d = d.trim();
+                if !std::path::Path::new(d).is_dir() {
+                    println!("  Skipping '{}' (not a directory)", d);
+                    continue;
+                }
+                println!("  Training on '{}' for {} epochs...", d, train_epochs);
+                total_loss += hjepa.train_on_directory(d, train_epochs);
+            }
+            let avg_loss = total_loss / dirs.len() as f64;
+            match hjepa.save("fuga_hjepa.bin") {
+                Ok(()) => println!("  Saved fuga_hjepa.bin (avg_loss={:.4})", avg_loss),
+                Err(e) => eprintln!("  Save failed: {}", e),
+            }
+            println!("  Model updated in-place.");
+            continue;
+        }
+        if line.eq_ignore_ascii_case("/stats") {
+            println!("  Context length: {}", context.len());
+            println!("  H-JEPA levels: L0 L1 L2");
+            if let Some(ref sdr) = sdr_store {
+                println!("  SDR index: {} nodes (Fuga 1.4 Cross-SDR Bridge)", sdr.index.nodes.len());
+            }
+            continue;
+        }
+        if line.starts_with("/sdr") {
+            let sdr_query = line[4..].trim();
+            if sdr_query.is_empty() {
+                println!("  Usage: /sdr <query>");
+                continue;
+            }
+            match sdr_store {
+                Some(ref store) => {
+                    let results = store.query(sdr_query, 3);
+                    println!("  SDR (Fuga 1.3 popcount):");
+                    for (_i, score, snippet) in &results {
+                        println!("    [{:.2}] {}", score, snippet);
+                    }
+                    let cross = store.query_cross(sdr_query, "doc", 3);
+                    println!("  Cross-SDR (Fuga 1.4 doc→code):");
+                    for (_i, score, snippet) in &cross {
+                        println!("    [{:.2}] {}", score, snippet);
+                    }
+                }
+                None => println!("  SDR index not loaded. Run 'fuga sdr-build' first.")
+            }
+            continue;
+        }
+
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let mut chunk_hvs = Vec::new();
+        for chunk in tokens.chunks(3) {
+            let t = chunk.join(" ");
+            chunk_hvs.push(encode_chunk(&mut weaver, &t));
+        }
+
+        for hv in &chunk_hvs {
+            context.push(hv.clone());
+        }
+
+        if context.len() < 2 {
+            println!("  Need more context...");
+            continue;
+        }
+
+        let ctx_len = hjepa.levels[0].context_len;
+        while context.len() > 20 {
+            context.remove(0);
+        }
+
+        if context.len() < ctx_len {
+            println!("  Context too short (need {}), building...", ctx_len);
+            continue;
+        }
+
+        let window: Vec<&fuga::Hypervector> = context[context.len().saturating_sub(ctx_len)..].iter().collect();
+        let predictions = hjepa.predict(&window);
+
+        let input_hvs: Vec<fuga::Hypervector> = chunk_hvs.clone();
+        let input_refs: Vec<&fuga::Hypervector> = input_hvs.iter().collect();
+        let errors = hjepa.learn(&window, &input_refs);
+
+        println!();
+        for (li, pred) in predictions.iter().enumerate() {
+            let level_name = match li { 0 => "L0", 1 => "L1", 2 => "L2", _ => "?" };
+            let role = match li { 0 => "primitive", 1 => "functional", 2 => "concept", _ => "" };
+            let entropy = pred.entropy();
+            let emoji = if entropy > 0.98 { "🌀" } else if entropy > 0.90 { "🌊" } else { "⚡" };
+            let err_str = if li < errors.len() { format!(" err={:.3}", errors[li]) } else { String::new() };
+            println!("  {} {} {}: entropy={:.4}{}", emoji, level_name, role, entropy, err_str);
+        }
+
+        if let Some(ref mem) = mem {
+            if predictions.len() >= 2 {
+                let results_l0 = mem.search(&predictions[0], 1);
+                let results_l1 = mem.search(&predictions[1], 2);
+                if !results_l0.is_empty() {
+                    let (_, sim, entry) = &results_l0[0];
+                    let snippet: String = entry.text.chars().take(80).collect();
+                    println!("  📖 L0 → [{:.2}] {}", sim, snippet);
+                }
+                if !results_l1.is_empty() {
+                    println!("  🔗 L1 (cross-domain):");
+                    for (_, sim, entry) in &results_l1 {
+                        let snippet: String = entry.text.chars().take(80).collect();
+                        println!("     [{:.2}] {} — {}", sim, snippet, entry.source_doc);
+                    }
+                }
+            }
+        }
+        println!();
+    }
+}
+
+fn run_sdr_query(text: &str) {
+    let sdr_path = "fuga_sdr_index.bin";
+    if !std::path::Path::new(sdr_path).exists() {
+        eprintln!("SDR index not found. Run 'fuga sdr-build' first.");
+        return;
+    }
+    let store = match load_sdr_store(sdr_path) {
+        Some(s) => s,
+        None => { eprintln!("Failed to load SDR index"); return; }
+    };
+    let results = store.query(text, 5);
+    println!("SDR query: \"{}\"", text);
+    for (_i, score, snippet) in &results {
+        println!("  [{:.2}] {}", score, snippet);
+    }
+}
+
+fn run_sdr_query_cross(text: &str) {
+    let sdr_path = "fuga_sdr_index.bin";
+    if !std::path::Path::new(sdr_path).exists() {
+        eprintln!("SDR index not found. Run 'fuga sdr-build' first.");
+        return;
+    }
+    let store = match load_sdr_store(sdr_path) {
+        Some(s) => s,
+        None => { eprintln!("Failed to load SDR index"); return; }
+    };
+    let results = store.query_cross(text, "doc", 5);
+    println!("SDR cross-domain (doc→code): \"{}\"", text);
+    for (_i, score, snippet) in &results {
+        println!("  [{:.2}] {}", score, snippet);
+    }
+}
+
+fn load_sdr_store(path: &str) -> Option<fuga::SdrStore> {
+    let mut f = std::fs::File::open(path).ok()?;
+    use std::io::Read;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let mut pos = 0usize;
+    let count = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap()) as usize;
+    pos += 4;
+    let mut nodes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut bits = [0u64; 128];
+        for w in bits.iter_mut() {
+            *w = u64::from_le_bytes(buf[pos..pos+8].try_into().unwrap());
+            pos += 8;
+        }
+        nodes.push(fuga::SdrVector { bits });
+    }
+    let tcount = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap()) as usize;
+    pos += 4;
+    let mut texts = Vec::with_capacity(tcount);
+    for _ in 0..tcount {
+        let tlen = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap()) as usize;
+        pos += 4;
+        let t = String::from_utf8(buf[pos..pos+tlen].to_vec()).unwrap_or_default();
+        pos += tlen;
+        texts.push(t);
+    }
+    let mut store = fuga::SdrStore::new();
+    store.index.nodes = nodes;
+    store.index.texts = texts;
+    Some(store)
+}
+
+fn run_htm_train(_path: &str, steps: usize) {
+    let sdr_path = "fuga_sdr_index.bin";
+    let sdr = load_sdr_store(sdr_path);
+    let mut tm = fuga::TemporalMemory::new(512, 4);
+
+    if let Some(ref store) = sdr {
+        println!("  HTM: loading SDR index ({} nodes)...", store.index.nodes.len());
+        let n = store.index.nodes.len().min(steps);
+        for i in 1..n {
+            let prev = &store.index.nodes[i - 1];
+            let next = &store.index.nodes[i];
+            tm.learn_sequence(prev, next);
+            if (i + 1) % 1000 == 0 {
+                print!("\r  HTM: {}/{} sequences learned", i, n);
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+            }
+        }
+        println!("\n  HTM training complete on {} transitions.", n);
+    } else {
+        println!("  HTM: no SDR index, training on random sequences...");
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        for _ in 0..steps {
+            let mut a = fuga::SdrVector::zero();
+            let mut b = fuga::SdrVector::zero();
+            for _ in 0..((fuga::SDR_DIM as f64 * fuga::SDR_DENSITY) as usize) {
+                let ba = rng.gen_range(0..fuga::SDR_DIM);
+                let bb = rng.gen_range(0..fuga::SDR_DIM);
+                a.bits[ba / 64] |= 1u64 << (ba % 64);
+                b.bits[bb / 64] |= 1u64 << (bb % 64);
+            }
+            tm.learn_sequence(&a, &b);
+        }
+        println!("  HTM trained on {} random transitions.", steps);
+    }
+    println!("  HTM stats: {}", tm.stats());
+
+    {
+        use std::io::Write;
+        let mut f = match std::fs::File::create("fuga_htm.bin") {
+            Ok(f) => f,
+            Err(e) => { eprintln!("  Save failed: {}", e); return; }
+        };
+        let n = tm.cells.len() as u32;
+        f.write_all(&n.to_le_bytes()).ok();
+        for c in &tm.cells {
+            let id = c.id as u32;
+            f.write_all(&id.to_le_bytes()).ok();
+            for w in &c.pattern.bits {
+                f.write_all(&w.to_le_bytes()).ok();
+            }
+            let seg_n = c.segments.len() as u32;
+            f.write_all(&seg_n.to_le_bytes()).ok();
+            for seg in &c.segments {
+                let syn_n = seg.synapses.len() as u32;
+                f.write_all(&syn_n.to_le_bytes()).ok();
+                for s in &seg.synapses {
+                    let bi = s.bit_index as u32;
+                    f.write_all(&bi.to_le_bytes()).ok();
+                    f.write_all(&s.permanence.to_le_bytes()).ok();
+                }
+            }
+        }
+        let wl = tm.window.len() as u32;
+        f.write_all(&wl.to_le_bytes()).ok();
+        for sdr in &tm.window {
+            for w in &sdr.bits {
+                f.write_all(&w.to_le_bytes()).ok();
+            }
+        }
+        println!("  Saved fuga_htm.bin");
+    }
+}
+
+fn load_tm() -> Option<fuga::TemporalMemory> {
+    let data = std::fs::read("fuga_htm.bin").ok()?;
+    let mut pos = 0usize;
+    let n = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+    pos += 4;
+    let mut cells = Vec::with_capacity(n);
+    for _ in 0..n {
+        let id = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+        pos += 4;
+        let mut bits = [0u64; 128];
+        for w in bits.iter_mut() {
+            *w = u64::from_le_bytes(data[pos..pos+8].try_into().ok()?);
+            pos += 8;
+        }
+        let pattern = fuga::SdrVector { bits };
+        let seg_n = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+        pos += 4;
+        let mut segments = Vec::with_capacity(seg_n);
+        for _ in 0..seg_n {
+            let syn_n = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+            pos += 4;
+            let mut synapses = Vec::with_capacity(syn_n);
+            for _ in 0..syn_n {
+                let bi = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+                pos += 4;
+                let perm = f64::from_le_bytes(data[pos..pos+8].try_into().ok()?);
+                pos += 8;
+                synapses.push(fuga::Synapse::new(bi, perm));
+            }
+            segments.push(fuga::DendriteSegment { synapses });
+        }
+        cells.push(fuga::TemporalCell { id, segments, pattern });
+    }
+    let wl = u32::from_le_bytes(data[pos..pos+4].try_into().ok()?) as usize;
+    pos += 4;
+    let mut window = Vec::with_capacity(wl);
+    for _ in 0..wl {
+        let mut bits = [0u64; 128];
+        for w in bits.iter_mut() {
+            *w = u64::from_le_bytes(data[pos..pos+8].try_into().ok()?);
+            pos += 8;
+        }
+        window.push(fuga::SdrVector { bits });
+    }
+    Some(fuga::TemporalMemory { cells, window, context_len: 4, step: 0 })
+}
+
+fn run_htm_feed(text: &str) {
+    let tm_path = "fuga_htm.bin";
+    let mut tm = match load_tm() {
+        Some(t) => t,
+        None => fuga::TemporalMemory::new(1024, 4),
+    };
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    println!("  HTM feed: {} tokens", tokens.len());
+    for (ti, token) in tokens.iter().enumerate() {
+        let sdr = fuga::encode_text(token);
+        let (pred, match_score) = tm.feed(&sdr);
+        if match_score > 0.0 {
+            println!("  t={} \"{}\" pred_match={:.2}", ti, token, match_score);
+        } else if pred.popcount() > 0 {
+            println!("  t={} \"{}\" pred_miss ({} bits)", ti, token, pred.popcount());
+        }
+    }
+    println!("  HTM stats: {}", tm.stats());
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(tm_path).expect("create htm");
+        let n = tm.cells.len() as u32;
+        f.write_all(&n.to_le_bytes()).ok();
+        for c in &tm.cells {
+            let id = c.id as u32;
+            f.write_all(&id.to_le_bytes()).ok();
+            for w in &c.pattern.bits { f.write_all(&w.to_le_bytes()).ok(); }
+            let seg_n = c.segments.len() as u32;
+            f.write_all(&seg_n.to_le_bytes()).ok();
+            for seg in &c.segments {
+                let syn_n = seg.synapses.len() as u32;
+                f.write_all(&syn_n.to_le_bytes()).ok();
+                for s in &seg.synapses {
+                    f.write_all(&(s.bit_index as u32).to_le_bytes()).ok();
+                    f.write_all(&s.permanence.to_le_bytes()).ok();
+                }
+            }
+        }
+        let wl = tm.window.len() as u32;
+        f.write_all(&wl.to_le_bytes()).ok();
+        for sdr in &tm.window {
+            for w in &sdr.bits { f.write_all(&w.to_le_bytes()).ok(); }
+        }
+        println!("  Saved {}", tm_path);
+    }
+}
+
+fn run_inspect_text(text: &str) {
+    println!("═══ Fuga Inspect ═══\n");
+    let profile = fuga::StyloProfile::compute(text);
+    println!("  Unique ratio:    {:.2}%", profile.unique_ratio * 100.0);
+    println!("  Token entropy:   {:.4} bits", profile.token_entropy);
+    println!("  Struct entropy:  {:.4} bits", profile.structural_entropy);
+    println!("  Avg line len:    {:.1} chars", profile.avg_line_len);
+    println!();
+
+    let sdr = fuga::encode_text(text);
+    let pop = sdr.popcount();
+    let overlap = if pop > 0 { sdr.overlap(&sdr) as f64 / SDR_DIM as f64 } else { 0.0 };
+    println!("  SDR popcount:    {}", pop);
+    println!("  Density:         {:.2}% (target 2%)", pop as f64 / SDR_DIM as f64 * 100.0);
+    println!("  Self-overlap:    {:.4}", overlap);
+
+    let mem = load_sdr_store("fuga_sdr_index.bin");
+    if let Some(ref store) = mem {
+        let results = store.index.search(&sdr, 5);
+        if results.is_empty() {
+            println!("\n  Top-0 matches — context is novel");
+        } else {
+            println!("\n  Top-{} SDR matches:", results.len());
+            for (_i, score, snippet) in &results {
+                println!("    [{:.4}] {}", score, snippet);
+            }
+        }
+    }
+
+    let tm = load_tm();
+    if let Some(mut tm) = tm {
+        let (_pred, match_score) = tm.feed(&sdr);
+        println!("\n  TM match_score:  {:.4}", match_score);
+        println!("  TM resonance:    {:.1}%", match_score * 100.0);
+    }
+
+    println!("\n═══ end inspect ═══");
+}
+
+fn run_inspect_file(path: &str) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  Can't read {}: {}", path, e); return; }
+    };
+    println!("═══ Fuga Inspect: {} ═══\n", path);
+    let lines = content.lines().count();
+    let bytes = content.len();
+    let profile = fuga::StyloProfile::compute(&content);
+    println!("  Lines:           {}", lines);
+    println!("  Bytes:           {}", bytes);
+    println!("  Unique ratio:    {:.2}%", profile.unique_ratio * 100.0);
+    println!("  Token entropy:   {:.4} bits", profile.token_entropy);
+    println!("  Struct entropy:  {:.4} bits", profile.structural_entropy);
+    println!("  Avg line len:    {:.1} chars", profile.avg_line_len);
+    println!();
+
+    let sdr = fuga::encode_text(&content);
+    let mem = load_sdr_store("fuga_sdr_index.bin");
+    if let Some(ref store) = mem {
+        let results = store.index.search(&sdr, 5);
+        if results.is_empty() {
+            println!("  No matching nodes in SDR index");
+        } else {
+            println!("  Top-{} SDR matches:", results.len());
+            for (_i, score, snippet) in &results {
+                println!("    [{:.4}] {}", score, snippet);
+            }
+        }
+    }
+
+    println!("\n═══ end inspect ═══");
+}
+
+fn load_hjepa() -> Option<fuga::HierarchicalJEPA> {
+    let model_path = "fuga_hjepa.bin";
+    if std::path::Path::new(model_path).exists() {
+        match fuga::HierarchicalJEPA::load(model_path) {
+            Ok(h) => Some(h),
+            Err(e) => { eprintln!("  H-JEPA load failed: {}", e); None }
+        }
+    } else {
+        let hjepa = fuga::HierarchicalJEPA::new(8192);
+        println!("  Created fresh H-JEPA (dim=8192)");
+        Some(hjepa)
+    }
+}
+
+fn run_tm_jepa_repl() {
+    let tm = match load_tm() {
+        Some(t) => t,
+        None => { eprintln!("No fuga_htm.bin. Run 'fuga htm-train' first."); return; }
+    };
+    let hjepa = match load_hjepa() {
+        Some(h) => h,
+        None => return,
+    };
+    let mut tp = fuga::TemporalPredictor::new(tm, hjepa);
+
+    println!("═══ Fuga TM→JEPA Bridge ═══");
+    println!("  Enter text lines (one = one step). Empty line to quit.");
+    println!("  Each line → TM feed + H-JEPA learn\n");
+
+    loop {
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() || line.trim().is_empty() {
+            break;
+        }
+        let (tm_match, errors) = tp.feed_learn(line.trim());
+        print!("  tm={:.4}  err=[", tm_match);
+        for (i, e) in errors.iter().enumerate() {
+            if i > 0 { print!(","); }
+            print!("{:.4}", e);
+        }
+        println!("]  {}", tp.stats());
+    }
+    println!("\n  Session done. {}", tp.stats());
+}
+
+fn run_self_mirror() {
+    let tm = match load_tm() {
+        Some(t) => t,
+        None => { eprintln!("No fuga_htm.bin. Run 'fuga htm-train' first."); return; }
+    };
+    let hjepa = match load_hjepa() {
+        Some(h) => h,
+        None => return,
+    };
+    let mut mirror = fuga::SelfMirror::new(tm, hjepa);
+    println!("═══ Fuga Self-Mirror ═══");
+    println!("  Indexing src/ai/ ...\n");
+    let total = mirror.index_dir("src/ai");
+    println!("\n  Indexed {} phase nodes", total);
+    mirror.save();
+}
+
+fn run_mirror_index(dir: &str) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => {
+            println!("  Loaded existing mirror ({} nodes)", m.nodes.len());
+            m
+        }
+        None => {
+            let tm = load_tm().unwrap_or_else(|| {
+                println!("  Creating fresh TemporalMemory");
+                fuga::TemporalMemory::new(2000, 4)
+            });
+            let hjepa = load_hjepa().unwrap_or_else(|| {
+                println!("  Creating fresh H-JEPA (dim=8192)");
+                fuga::HierarchicalJEPA::new(8192)
+            });
+            fuga::SelfMirror::new(tm, hjepa)
+        }
+    };
+    println!("═══ Fuga Mirror-Index: {} ═══\n", dir);
+    let total = mirror.index_dir_fast(dir);
+    println!("\n  Indexed {} phase nodes from {} (total: {})", total, dir, mirror.nodes.len());
+    mirror.save();
+}
+
+fn run_inspect_dir(dir: &str) {
+    let mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => {
+            eprintln!("No mirror data. Run 'fuga mirror-index' first.");
+            return;
+        }
+    };
+    println!("═══ Fuga Inspect-Dir: {} ═══\n", dir);
+    let reports = mirror.inspect_dir(dir);
+    println!("\n  Total files: {}", reports.len());
+    let anomalies: Vec<_> = reports.iter().filter(|r| r.anomaly_score > 0.5).collect();
+    if anomalies.is_empty() {
+        println!("  No anomalous files found.");
+    } else {
+        println!("\n  ⚠ Anomalous files (score > 0.5):");
+        for r in &anomalies {
+            println!("    {:.3}  {}  (entropy={:.2} density={:.3})",
+                r.anomaly_score, r.path, r.entropy, r.sdr_density);
+        }
+    }
+}
+
+fn run_auto_correct(path: &str) {
+    let mut engine = match fuga::AutoCorrectEngine::load() {
+        Some(e) => e,
+        None => { eprintln!("No mirror data. Run 'fuga mirror-index' first."); return; }
+    };
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("Can't read {}: {}", path, e); return; }
+    };
+    println!("═══ Fuga Auto-Correct: {} ═══\n", path);
+    let report = engine.mirror.inspect_file(path);
+    println!("  Lines: {}  Entropy: {:.2}  Density: {:.3}  Anomaly: {:.3}",
+        report.lines, report.entropy, report.sdr_density, report.anomaly_score);
+    if report.anomaly_score > 0.5 {
+        println!("\n  ⚠ High anomaly score, scanning blocks for corrections...\n");
+        let mut total_patches = 0;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.len() > 10 {
+                let (_text, patches) = engine.apply_correction(trimmed);
+                if !patches.is_empty() {
+                    println!("  {}", patches.join("\n  "));
+                    total_patches += 1;
+                }
+            }
+        }
+        if total_patches == 0 {
+            println!("  No L2 divergences detected in {} blocks.", content.lines().count());
+        } else {
+            println!("\n  {} corrections generated", total_patches);
+        }
+    } else {
+        println!("  No anomalies detected.");
+    }
+    println!("\n  {}", engine.stats());
+}
+
+fn run_train_predictor(epochs: usize, chunk_size: usize, use_ff: bool) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data. Run 'fuga mirror-index' first."); return; }
+    };
+    println!("═══ Fuga Train Predictor ═══\n");
+    if use_ff {
+        mirror.train_predictor_ff(epochs, chunk_size);
+    } else {
+        mirror.train_predictor_chunked(epochs, chunk_size);
+    }
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_generate_code(text: &str, beam_width: usize, temperature: f64, gen_mode: bool, token_mode: bool) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data. Run 'fuga mirror-index' first."); return; }
+    };
+    mirror.predictor.load_buffer();
+    let steps = 5;
+    println!("═══ Fuga Generate ═══\n");
+    println!("  Input: {}\n", text);
+    if beam_width > 1 { println!("  Beam: {}  Temp: {}\n", beam_width, temperature); }
+    let node_count = mirror.nodes.len();
+    let total_cells = mirror.predictor.tm.cells.len();
+    let total_seg: usize = mirror.predictor.tm.cells.iter().map(|c| c.segments.len()).sum();
+    let raw_preds = mirror.generate_code_beam(text, steps, beam_width, temperature);
+    if raw_preds.is_empty() || raw_preds.iter().all(|s| s.is_empty()) {
+        println!("  Not enough context to predict. Provide more text.");
+        return;
+    }
+    let preds: Vec<(String, String, String, usize, u32)> = raw_preds.iter().filter_map(|step| {
+        step.first().map(|(node, overlap)| {
+            (node.path.clone(), node.kind.clone(), node.name.clone(), node.line, *overlap)
+        })
+    }).collect();
+    mirror.predictor.save_buffer();
+
+    if token_mode {
+        let vocab_count = mirror.build_token_vocab_from_files();
+        println!("  Token vocab: {} entries", vocab_count);
+        let trained = mirror.train_token_sequences(2000, 10);
+        println!("  TM trained: {} token steps", trained);
+        mirror.save();
+        println!("  VSA token-level generation...\n");
+        let tokens = mirror.generate_tokens(text, 100);
+        if tokens.is_empty() {
+            eprintln!("  Generation failed (no tokens produced)");
+            return;
+        }
+        for chunk in tokens.chunks(12) {
+            println!("{}", chunk.join(" "));
+        }
+    } else if gen_mode {
+        println!("  VSA autoregressive PhaseNode generation...\n");
+        let snippets = mirror.generate_code_autoregressive(text, 20, temperature);
+        if snippets.is_empty() {
+            eprintln!("  Generation failed (no snippets produced)");
+            return;
+        }
+        for (si, snippet) in snippets.iter().enumerate() {
+            println!("  // Step {}:\n{}\n", si + 1, snippet);
+        }
+        let indexed = mirror.index_generated_snippets(&snippets);
+        if indexed > 0 {
+            mirror.save();
+            println!("  Self-indexed {} new phase nodes", indexed);
+        }
+    } else {
+        println!("  Generated code:\n");
+        for (si, (path, kind, name, line, overlap)) in preds.iter().enumerate() {
+            let code = mirror.source_snippet_for_path(path, *line, 5);
+            let snippet_str = if code.is_empty() {
+                "// <source not available>".to_string()
+            } else {
+                code
+            };
+            println!("  // Step {} — matched {}::{} ({})\n{}\n",
+                si + 1, kind, name, overlap, snippet_str);
+        }
+    }
+    println!("  Mirror: {} phase nodes, TM: {} cells, {} segments",
+        node_count, total_cells, total_seg);
+}
+
+fn run_evaluate() {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data. Run 'fuga mirror-index' first."); return; }
+    };
+    println!("═══ Fuga Evaluate ═══\n");
+    let result = mirror.evaluate();
+    println!("  {}", result);
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_self_query(text: &str) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => {
+            eprintln!("No mirror data. Run 'fuga self-mirror' first.");
+            return;
+        }
+    };
+    println!("═══ Self-Query ═══");
+    println!("  Query: {}\n", text);
+    let (tm_match, errors, top) = mirror.query(text);
+    println!("  TM match:  {:.4}", tm_match);
+    println!("  Errors:    L0={:.4} L1={:.4} L2={:.4}",
+        errors.first().unwrap_or(&1.0),
+        errors.get(1).unwrap_or(&1.0),
+        errors.get(2).unwrap_or(&1.0));
+    println!("\n  Top-5 mirror nodes:");
+    for (i, node) in top.iter().enumerate() {
+        println!("  {}. {} {} ({})  l0={:.3} l1={:.3}",
+            i + 1, node.kind, node.name, node.path, node.l0_err, node.l1_err);
+    }
+    println!("\n  {}", mirror.reflect());
+}
+
+fn run_reflect_repl() {
+    let tm = match load_tm() {
+        Some(t) => t,
+        None => { eprintln!("No fuga_htm.bin. Run 'fuga htm-train' first."); return; }
+    };
+    let mut reflector = fuga::AnomalyReflector::new(tm);
+    let mut buf: Vec<String> = Vec::new();
+
+    println!("═══ Fuga Reflect REPL ═══");
+    println!("  Enter text lines. Empty line to quit.");
+    println!("  Every 3 lines triggers anomaly check.\n");
+
+    loop {
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() || line.trim().is_empty() {
+            break;
+        }
+        buf.push(line.trim().to_string());
+        if buf.len() >= 3 {
+            let block = buf.join(" ");
+            let events = reflector.feed_text(&block);
+            let stats = reflector.detector.stats();
+            let rstats = reflector.reflect_summary();
+
+            if events.is_empty() {
+                println!("  ✓ {}  {}", stats, rstats);
+            } else {
+                for ev in &events {
+                    println!("  ⚠ anomaly  z={:.2}  Δentropy={:.4}  match={:.2}",
+                        ev.z_score, ev.entropy_shift, ev.match_score);
+                    println!("      ctx: {}", ev.token);
+                }
+                let corrections = reflector.drain_corrections();
+                for c in &corrections {
+                    println!("  ➜ correction: z={:.2} Δentropy={:.4}", c.z_score, c.entropy_shift);
+                }
+                println!("  ⚠ {}  {}", stats, rstats);
+            }
+            buf.clear();
+        }
+    }
+    println!("\n  Session: {}", reflector.reflect_summary());
+}
+
+fn run_htm_predict(text: &str) {
+    let tm = match load_tm() {
+        Some(t) => t,
+        None => { eprintln!("No fuga_htm.bin. Run 'fuga htm-train' first."); return; }
+    };
+
+    let query = fuga::encode_text(text);
+    let pred = tm.predict_next(&query);
+    if pred.popcount() == 0 {
+        println!("  No prediction (no depolarized cells for this context)");
+        return;
+    }
+    println!("  HTM predicted {} active bits from context", pred.popcount());
+
+    let mem_sdr = load_sdr_store("fuga_sdr_index.bin");
+    if let Some(ref store) = mem_sdr {
+        let results = store.index.search(&pred, 3);
+        for (_i, score, snippet) in &results {
+            println!("    [{:.2}] {}", score, snippet);
+        }
+    }
+}
+
+fn run_cross_domain(_dim: usize, epochs: usize) {
+    let model_path = "fuga_hjepa.bin";
+    let mut hjepa = if std::path::Path::new(model_path).exists() {
+        match fuga::HierarchicalJEPA::load(model_path) {
+            Ok(h) => { println!("  Loaded {}\n", model_path); h }
+            Err(e) => { eprintln!("  Load failed: {}", e); return; }
+        }
+    } else {
+        eprintln!("  No model found at {}", model_path);
+        return;
+    };
+    let sim = hjepa.train_cross_domain("corpus_doc_code_pairs.jsonl", epochs);
+    match hjepa.save(model_path) {
+        Ok(()) => println!("  Saved {} (cosine={:.4})", model_path, sim),
         Err(e) => eprintln!("  Save failed: {}", e),
     }
 }
@@ -3935,10 +4963,10 @@ fn run_refactor(file: &str, desc: &str, max_iter: usize) {
 fn run_docs_entry(args: &[String]) {
     let cube_path = parse_flag_value(args, 2, "--cube").unwrap_or("fuga_code_cube.bin");
     let out_path = parse_flag_value(args, 2, "--output").unwrap_or("docs/FUGA_DOCS.md");
-    let side = args.iter().position(|a| a == "--side")
+    let _side = args.iter().position(|a| a == "--side")
         .and_then(|i| args.get(i+1))
         .and_then(|s| s.parse::<usize>().ok()).unwrap_or(8);
-    let ndim = args.iter().position(|a| a == "--ndim")
+    let _ndim = args.iter().position(|a| a == "--ndim")
         .and_then(|i| args.get(i+1))
         .and_then(|s| s.parse::<usize>().ok()).unwrap_or(3);
 
@@ -3986,7 +5014,7 @@ fn run_docs<const N: usize, const S: usize>(cube_path: &str, out_path: &str) {
     };
 
     // Helper: write text search results for a query
-    let mut write_moe = |query: &str, domain: &str, label: &str, f: &mut std::fs::File| {
+    let write_moe = |query: &str, domain: &str, label: &str, f: &mut std::fs::File| {
         let hits = moe.search_by_text(domain, query, 4);
         if !hits.is_empty() {
             writeln!(f, "**{}:**", label).ok();
@@ -4478,6 +5506,10 @@ fn print_usage(program: &str) {
     println!("  jepa-predict <text> [dim] [ctx]  Predict next state via JEPA");
     println!("  h-jepa-train <dir> [dim] [epochs]  Train hierarchical JEPA (3-level) on code repos");
     println!("  h-jepa-predict <text> [dim]       Predict at all 3 hierarchical levels");
+    println!("  sdr-build [path] [max]  Build SDR index from .mem.bin (path: fuga_code_cube_mem.bin)");
+    println!("  sdr-query <text>        SDR popcount search (Fuga 1.3)");
+    println!("  sdr-query-cross <text>  Cross-SDR bridge doc→code (Fuga 1.4)");
+    println!("  baby                    Interactive H-JEPA REPL (embryo)");
     println!("  prompts               List available VSA prompt modes (SAFETY, EFFICIENT, ...)");
     println!("  train | train-code <dir>  Train on source code (new cube: --side N --ndim N --dim N)");
     println!("  train-text <dir>          Train text corpus into existing cube");

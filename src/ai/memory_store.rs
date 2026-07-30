@@ -227,7 +227,7 @@ impl MemoryStore {
                 .collect();
         }
 
-        let query_lower = query_text.to_lowercase();
+        let _query_lower = query_text.to_lowercase();
         let mut scores: Vec<(usize, f64)> = self.entries.iter().enumerate()
             .map(|(i, e)| {
                 let lower = e.text.to_lowercase();
@@ -503,7 +503,7 @@ impl MemoryStore {
         let mut f = std::fs::File::open(path)
             .map_err(|e| format!("Failed to open attractor index {}: {}", path, e))?;
         let dim = if self.entries.is_empty() { 8192 } else { self.entries[0].vector.dim };
-        let wc = (dim + 63) / 64;
+        let _wc = (dim + 63) / 64;
         let mut attractors = Vec::with_capacity(NUM_ATTRACTORS);
         for _ in 0..NUM_ATTRACTORS {
             let mut dim_buf = [0u8; 4];

@@ -1,4 +1,6 @@
 use crate::core::hypervector::Hypervector;
+use crate::safety::circuit_breaker::{FugaCircuitBreaker, SystemState};
+use crate::vsa::topology::{ls_bind, phase_smooth};
 use crate::weaver::token_id;
 use rand::{Rng, RngCore, SeedableRng};
 use std::hash::{Hash, Hasher};
@@ -39,48 +41,6 @@ fn dot_bipolar(a: &Hypervector, b: &Hypervector) -> f64 {
             ai * bi
         })
     }).sum()
-}
-
-fn ls_bind(a: &Hypervector, b: &Hypervector, block_bits: usize) -> Hypervector {
-    let dim = a.dim;
-    let n_words = (dim + 63) / 64;
-    let n_blocks = dim / block_bits;
-    let phase_bits = (block_bits as f64).log2() as usize;
-    let mask = block_bits - 1;
-
-    let mut words = vec![0u64; n_words];
-
-    for blk in 0..n_blocks {
-        let base = blk * block_bits;
-
-        let mut phase = 0usize;
-        let step = block_bits / phase_bits;
-        for pi in 0..phase_bits {
-            let src = base + pi * step;
-            if src < dim && ((b.words[src / 64] >> (src % 64)) & 1) == 1 {
-                phase |= 1 << pi;
-            }
-        }
-        phase &= mask;
-
-        for bi in 0..block_bits {
-            let src_bit = base + bi;
-            if src_bit >= dim { break; }
-            if ((a.words[src_bit / 64] >> (src_bit % 64)) & 1) == 1 {
-                let dst_bit = base + (bi + phase) % block_bits;
-                words[dst_bit / 64] |= 1 << (dst_bit % 64);
-            }
-        }
-    }
-
-    Hypervector { dim, words }
-}
-
-fn phase_smooth(hv: &Hypervector, radius: usize) -> Hypervector {
-    if radius == 0 { return hv.clone(); }
-    let perms: Vec<Hypervector> = (1..=radius).map(|k| hv.permute(k)).collect();
-    let refs: Vec<&Hypervector> = perms.iter().collect();
-    hv.bundle(&refs).balance_density()
 }
 
 #[derive(Clone, Debug)]
@@ -124,11 +84,21 @@ impl JepaLevel {
     }
 
     pub fn predict(&self, context: &[&Hypervector]) -> Hypervector {
+        self.predict_with_temp(context, 1.0)
+    }
+
+    pub fn predict_with_temp(&self, context: &[&Hypervector], temperature: f64) -> Hypervector {
         if context.is_empty() {
             return Hypervector::random(self.dim);
         }
         let baseline = context[context.len() - 1];
-        let cont = self.predict_continuous(context);
+        let mut cont = self.predict_continuous(context);
+        if temperature > 0.0 && (temperature - 1.0).abs() > 1e-6 {
+            let inv_t = 1.0 / temperature;
+            for v in &mut cont {
+                *v *= inv_t;
+            }
+        }
         let pred_bits = hv_to_threshold_bits(&cont);
         let pred_delta = Hypervector::from_i8_bits(self.dim, &pred_bits);
         baseline.bind(&pred_delta)
@@ -180,6 +150,49 @@ impl JepaLevel {
             }
         }
         1.0 - (dot / (raw_norm * (dim as f64).sqrt())).clamp(-1.0, 1.0)
+    }
+
+    pub fn train_step_ff(&mut self, context: &[&Hypervector], actual: &Hypervector, negative: &Hypervector, _margin: f64) -> f64 {
+        let dim = self.dim;
+        let n_ctx = context.len().min(self.context_len);
+
+        let mut raw = vec![0.0f64; dim];
+        for (i, hv) in context.iter().take(n_ctx).enumerate() {
+            let base = i * dim;
+            for bit in active_bits(&hv.words, dim) {
+                raw[bit] += self.weights[base + bit];
+            }
+        }
+
+        let baseline = context[context.len() - 1];
+        let lr = 0.01;
+        let decay = 0.0005;
+        let mut pos_goodness = 0.0f64;
+        let mut neg_goodness = 0.0f64;
+        let mut cnt = 0usize;
+
+        for (i, hv) in context.iter().take(n_ctx).enumerate() {
+            let base = i * dim;
+            for bit in active_bits(&hv.words, dim) {
+                let idx = base + bit;
+                let a_bit = (actual.words[bit / 64] >> (bit % 64)) & 1;
+                let b_bit = (baseline.words[bit / 64] >> (bit % 64)) & 1;
+                let t_pos: f64 = if a_bit == b_bit { -1.0 } else { 1.0 };
+
+                let n_bit = (negative.words[bit / 64] >> (bit % 64)) & 1;
+                let t_neg: f64 = if n_bit == b_bit { -1.0 } else { 1.0 };
+
+                pos_goodness += raw[bit] * t_pos;
+                neg_goodness += raw[bit] * t_neg;
+                cnt += 1;
+
+                self.weights[idx] = self.weights[idx] * (1.0 - decay) + lr * (t_pos - t_neg);
+            }
+        }
+
+        if cnt == 0 { return 1.0; }
+        let contrast = (pos_goodness - neg_goodness) / cnt as f64;
+        (1.0 - contrast).clamp(0.0, 2.0)
     }
 
     fn save(&self, buf: &mut Vec<u8>) {
@@ -242,6 +255,54 @@ impl HierarchicalJEPA {
         }
     }
 
+    pub fn predict_sequence(&self, context: &[&Hypervector], steps: usize) -> Vec<Hypervector> {
+        self.predict_sequence_beam(context, steps, 1, 1.0)
+            .first().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    pub fn predict_sequence_beam(&self, context: &[&Hypervector], steps: usize, beam_width: usize, temperature: f64) -> Vec<Vec<Hypervector>> {
+        if context.is_empty() || beam_width == 0 {
+            return Vec::new();
+        }
+        let ctx0 = self.levels[0].context_len;
+        let mut beams: Vec<(Vec<Hypervector>, f64)> = vec![(
+            context.iter().map(|h| (*h).clone()).collect(),
+            0.0,
+        )];
+        for _ in 0..steps {
+            let mut candidates: Vec<(Vec<Hypervector>, f64)> = Vec::new();
+            for (seq, score) in &beams {
+                for _ in 0..beam_width {
+                    let start = seq.len().saturating_sub(ctx0);
+                    let win: Vec<&Hypervector> = seq[start..].iter().collect();
+                    let use_temp = if beam_width > 1 { temperature } else { 1.0 };
+                    let l0_pred = self.levels[0].predict_with_temp(&win, use_temp);
+                    let l1_win: Vec<&Hypervector> = seq[seq.len().saturating_sub(self.levels[1].context_len)..].iter().collect();
+                    let l1_pred = if l1_win.len() >= self.levels[1].context_len {
+                        self.levels[1].predict_with_temp(&l1_win, use_temp)
+                    } else {
+                        l0_pred.clone()
+                    };
+                    let corrected = dampen_correction(&l1_pred, &l0_pred);
+                    let mut new_seq = seq.clone();
+                    new_seq.push(corrected.clone());
+                    let entropy = corrected.entropy();
+                    let novelty = if entropy > 0.0 && entropy < 1.0 {
+                        -(entropy * (entropy + 0.01).ln() + (1.0 - entropy) * (1.0 - entropy + 0.01).ln())
+                    } else {
+                        0.0
+                    };
+                    let new_score = score - novelty * 0.1;
+                    candidates.push((new_seq, new_score));
+                }
+            }
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            candidates.truncate(beam_width);
+            beams = candidates;
+        }
+        beams.into_iter().map(|(seq, _)| seq[seq.len() - steps..].to_vec()).collect()
+    }
+
     pub fn predict(&self, context: &[&Hypervector]) -> Vec<Hypervector> {
         if context.len() < self.levels[0].context_len {
             return vec![Hypervector::random(self.dim); 3];
@@ -278,13 +339,223 @@ impl HierarchicalJEPA {
 
         let l2_win: Vec<&Hypervector> = err_traj[err_traj.len()-ctx2..].iter().collect();
         let l2_correction = self.levels[2].predict(&l2_win);
-        let corrected_l1 = l1_pred.bind(&l2_correction);
+        let corrected_l1 = dampen_correction(&l1_pred, &l2_correction);
 
         vec![l0_pred, l1_pred, corrected_l1]
     }
 
+    pub fn predict_refined(&self, context: &[&Hypervector], temps: &[f64]) -> (Vec<Hypervector>, f64) {
+        if context.len() < self.levels[0].context_len {
+            let fallback = vec![Hypervector::random(self.dim); 3];
+            return (fallback, 0.0);
+        }
+        let ctx0 = self.levels[0].context_len;
+        let ctx1 = self.levels[1].context_len;
+        let ctx2 = self.levels[2].context_len;
+
+        let l0_pred = self.levels[0].predict(context);
+
+        let mut l0_traj: Vec<Hypervector> = context.iter().map(|h| (*h).clone()).collect();
+        l0_traj.push(l0_pred.clone());
+        let l0_needed = ctx0 + ctx1;
+        while l0_traj.len() < l0_needed {
+            let w: Vec<&Hypervector> = l0_traj[l0_traj.len()-ctx0..].iter().collect();
+            l0_traj.push(self.levels[0].predict(&w));
+        }
+
+        let l1_win: Vec<&Hypervector> = l0_traj[l0_traj.len()-ctx1..].iter().collect();
+        let l1_pred = self.levels[1].predict(&l1_win);
+
+        let mut err_traj: Vec<Hypervector> = Vec::new();
+        for i in 0..l0_traj.len() - ctx1 {
+            let w: Vec<&Hypervector> = l0_traj[i..i+ctx1].iter().collect();
+            let p = self.levels[1].predict(&w);
+            err_traj.push(phase_smooth(&ls_bind(&p, &l0_traj[i + ctx1], 32), 2));
+        }
+        err_traj.push(phase_smooth(&ls_bind(&l1_pred, &l0_pred, 32), 2));
+
+        while err_traj.len() < ctx2 {
+            let fake = Hypervector::random(self.dim);
+            err_traj.push(fake);
+        }
+
+        let l2_win: Vec<&Hypervector> = err_traj[err_traj.len()-ctx2..].iter().collect();
+
+        let mut corrected_list: Vec<Hypervector> = Vec::new();
+        for &t in temps {
+            let l2_correction = self.levels[2].predict_with_temp(&l2_win, t);
+            corrected_list.push(dampen_correction(&l1_pred, &l2_correction));
+        }
+
+        let mut converge = 0.0;
+        let mut pairs = 0usize;
+        for i in 0..corrected_list.len() {
+            for j in i+1..corrected_list.len() {
+                let si = crate::ai::sdr::sparsify(&corrected_list[i]);
+                let sj = crate::ai::sdr::sparsify(&corrected_list[j]);
+                converge += si.soft_overlap(&sj);
+                pairs += 1;
+            }
+        }
+        converge /= if pairs > 0 { pairs as f64 } else { 1.0 };
+
+        let chosen = if converge > 0.7 {
+            let sdr_refs: Vec<_> = corrected_list.iter().map(|h| crate::ai::sdr::sparsify(h)).collect();
+            let bundled = crate::ai::sdr::SdrVector::bundle_multi(&sdr_refs);
+            bundled.to_hypervector(self.dim)
+        } else {
+            l0_pred.clone()
+        };
+
+        (vec![l0_pred, l1_pred, chosen], converge)
+    }
+
+    pub fn learn(&mut self, context: &[&Hypervector], actual: &[&Hypervector]) -> Vec<f64> {
+        let mut errors = Vec::new();
+        let cb = FugaCircuitBreaker::new(0.5700);
+
+        for li in 0..self.levels.len() {
+            let level = &mut self.levels[li];
+            let ctx_len = level.context_len;
+            let margin = 1.0;
+
+            if context.len() < ctx_len {
+                errors.push(1.0);
+                continue;
+            }
+            let win_slice = &context[context.len()-ctx_len..];
+            let win: Vec<&Hypervector> = win_slice.iter().copied().collect();
+
+            if li == 0 {
+                let loss = level.train_step(&win, actual[0], margin);
+                errors.push(loss);
+            } else if li == 1 && actual.len() > 1 {
+                let loss = level.train_step(&win, actual[1], margin);
+                errors.push(loss);
+            } else if li == 2 && actual.len() > 2 {
+                let loss = level.train_step(&win, actual[2], margin);
+                let state = cb.inspect(loss as f32);
+                match state {
+                    SystemState::DivergingWarning(_l) => {
+                        level.lr *= 0.5;
+                        errors.push(loss);
+                    }
+                    SystemState::CriticalResetRequired => {
+                        let mut rng = rand::thread_rng();
+                        for w in &mut level.weights {
+                            *w = rng.gen_range(-0.005..0.005);
+                        }
+                        level.velocity.fill(0.0);
+                        errors.push(1.0);
+                    }
+                    _ => errors.push(loss),
+                }
+            }
+        }
+        errors
+    }
+
+    pub fn learn_ff(&mut self, context: &[&Hypervector], actual: &[&Hypervector], negative_pool: &[Hypervector]) -> Vec<f64> {
+        let mut errors = Vec::new();
+        for li in 0..self.levels.len() {
+            let level = &mut self.levels[li];
+            let ctx_len = level.context_len;
+            if context.len() < ctx_len {
+                errors.push(1.0);
+                continue;
+            }
+            let win_slice = &context[context.len()-ctx_len..];
+            let win: Vec<&Hypervector> = win_slice.iter().copied().collect();
+
+            let neg = if !negative_pool.is_empty() {
+                let ri = (context.len().wrapping_mul(li.wrapping_add(1))) % negative_pool.len();
+                &negative_pool[ri]
+            } else {
+                actual[li.min(actual.len()-1)]
+            };
+
+            if li == 0 {
+                let loss = level.train_step_ff(&win, actual[0], neg, 1.0);
+                errors.push(loss);
+            } else if li == 1 && actual.len() > 1 {
+                let loss = level.train_step_ff(&win, actual[1], neg, 1.0);
+                errors.push(loss);
+            } else if li == 2 && actual.len() > 2 {
+                let loss = level.train_step_ff(&win, actual[2], neg, 1.0);
+                errors.push(loss);
+            }
+        }
+        errors
+    }
+
+    pub fn train_cross_domain(&mut self, pairs_path: &str, epochs: usize) -> f64 {
+        let data = std::fs::read_to_string(pairs_path).unwrap_or_default();
+        let pairs: Vec<serde_json::Value> = data.lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        println!("  Loaded {} doc→code pairs from {}\n", pairs.len(), pairs_path);
+        if pairs.is_empty() { return 1.0; }
+
+        let mut rng = rand::thread_rng();
+        let _ctx1 = self.levels[1].context_len;
+
+        for epoch in 0..epochs {
+            let mut loss_sum = 0.0f64;
+            let mut cnt = 0usize;
+            let n_sample = pairs.len().min(3000);
+            for _ in 0..n_sample {
+                let p = &pairs[rng.gen_range(0..pairs.len())];
+                let doc = p["doc"].as_str().unwrap_or("");
+                let code = p["code"].as_str().unwrap_or("");
+                if doc.len() < 10 || code.len() < 10 { continue; }
+
+                let doc_hv = doc_str_to_hv(doc, self.dim);
+                let code_hv = code_str_to_hv(code, self.dim);
+
+                let doc_pred = self.levels[0].predict(&[&doc_hv]);
+                let code_pred = self.levels[0].predict(&[&code_hv]);
+
+                let l1_pred = self.levels[1].predict(&[&doc_pred]);
+                let margin = 1.0;
+                let loss = self.levels[1].train_step(&[&doc_pred], &code_pred, margin);
+                loss_sum += loss;
+                cnt += 1;
+
+                let neg = Hypervector::random(self.dim);
+                let neg_pred = self.levels[0].predict(&[&neg]);
+                let sim_pos = dot_bipolar(&l1_pred, &code_pred) / self.dim as f64;
+                let sim_neg = dot_bipolar(&l1_pred, &neg_pred) / self.dim as f64;
+                let contrastive = (1.0 - sim_pos).max(0.0) + sim_neg.max(0.0).max(0.0);
+                loss_sum += 0.1 * contrastive;
+                cnt += 1;
+            }
+            print!("\r    CD epoch {:3}/{}  loss={:.4}", epoch + 1, epochs, loss_sum / cnt as f64);
+            use std::io::{Write, stdout};
+            stdout().flush().ok();
+        }
+        println!();
+
+        let mut final_sim = 0.0f64;
+        let mut final_cnt = 0usize;
+        for p in &pairs[..pairs.len().min(500)] {
+            let doc = p["doc"].as_str().unwrap_or("");
+            let code = p["code"].as_str().unwrap_or("");
+            if doc.len() < 10 || code.len() < 10 { continue; }
+            let doc_hv = doc_str_to_hv(doc, self.dim);
+            let code_hv = code_str_to_hv(code, self.dim);
+            let doc_pred = self.levels[0].predict(&[&doc_hv]);
+            let code_pred = self.levels[0].predict(&[&code_hv]);
+            let l1_pred = self.levels[1].predict(&[&doc_pred]);
+            final_sim += dot_bipolar(&l1_pred, &code_pred) / self.dim as f64;
+            final_cnt += 1;
+        }
+        let avg_sim = if final_cnt > 0 { final_sim / final_cnt as f64 } else { 0.0 };
+        println!("  Cross-domain L1 similarity: {:.4} (1.0 = perfect alignment)\n", avg_sim);
+        avg_sim
+    }
+
     pub fn train_on_directory(&mut self, dir: &str, epochs: usize) -> f64 {
-        let exts = &[".rs", ".py", ".js", ".ts", ".c", ".cpp", ".h", ".go", ".java", ".toml", ".json", ".yaml"];
+        let exts = &[".rs", ".py", ".js", ".ts", ".c", ".cpp", ".h", ".go", ".java", ".toml", ".json", ".yaml", ".txt", ".md"];
         let mut files = Vec::new();
         collect_files(dir, exts, &mut files);
         files.truncate(1000);
@@ -357,23 +628,28 @@ impl HierarchicalJEPA {
         println!("  Generating L1 sequences (L0 predictions)...");
         let ctx0 = self.levels[0].context_len;
         let ctx1 = self.levels[1].context_len;
+        const MAX_PREDS: usize = 50000;
         let mut l1_seqs: Vec<Vec<Hypervector>> = Vec::new();
+        let mut pred_count = 0usize;
         for (fi, seq) in raw_seqs.iter().enumerate() {
-            let mut preds = Vec::with_capacity(seq.len() - ctx0);
-            for i in 0..seq.len() - ctx0 {
+            if pred_count >= MAX_PREDS { break; }
+            let limit = (seq.len() - ctx0).min(MAX_PREDS.saturating_sub(pred_count));
+            let mut preds = Vec::with_capacity(limit);
+            for i in 0..limit {
                 let win: Vec<&Hypervector> = seq[i..i+ctx0].iter().collect();
                 preds.push(self.levels[0].predict(&win));
             }
+            pred_count += preds.len();
             if preds.len() > ctx1 + 1 {
                 l1_seqs.push(preds);
             }
             if (fi + 1) % 200 == 0 {
-                print!("\r    {} / {} sequences", fi + 1, raw_seqs.len());
+                print!("\r    {} / {} sequences ({} predictions)", fi + 1, raw_seqs.len(), pred_count);
                 use std::io::{Write, stdout};
                 stdout().flush().ok();
             }
         }
-        println!("\n    Generated {} L1 sequences", l1_seqs.len());
+        println!("\n    Generated {} L1 sequences ({} predictions)", l1_seqs.len(), pred_count);
 
         // --- Train L1 on L0 prediction sequences ---
         println!("  Training L1 (L0 predictions → next L0 prediction)...");
@@ -400,27 +676,34 @@ impl HierarchicalJEPA {
         // --- Build L2 sequences: L1 error deltas (l1_pred XOR actual_l0_pred) ---
         println!("  Generating L2 sequences (L1 error deltas)...");
         let ctx2 = self.levels[2].context_len;
+        const MAX_ERRORS: usize = 50000;
         let mut l2_seqs: Vec<Vec<Hypervector>> = Vec::new();
+        let mut err_count = 0usize;
         for (fi, seq) in l1_seqs.iter().enumerate() {
-            let mut errors = Vec::with_capacity(seq.len() - ctx1);
-            for i in 0..seq.len() - ctx1 {
+            if err_count >= MAX_ERRORS { break; }
+            let limit = (seq.len() - ctx1).min(MAX_ERRORS.saturating_sub(err_count));
+            let mut errors = Vec::with_capacity(limit);
+            for i in 0..limit {
                 let win: Vec<&Hypervector> = seq[i..i+ctx1].iter().collect();
                 let l1_pred = self.levels[1].predict(&win);
                 let actual = &seq[i + ctx1];
-                errors.push(phase_smooth(&ls_bind(&l1_pred, actual, 32), 2));
+                let delta = phase_smooth(&ls_bind(&l1_pred, actual, 32), 2);
+                errors.push(dampen_correction(&l1_pred, &delta));
             }
+            err_count += errors.len();
             if errors.len() > ctx2 + 1 {
                 l2_seqs.push(errors);
             }
             if (fi + 1) % 200 == 0 {
-                print!("\r    {} / {} sequences", fi + 1, l1_seqs.len());
+                print!("\r    {} / {} sequences ({} errors)", fi + 1, l1_seqs.len(), err_count);
                 use std::io::{Write, stdout};
                 stdout().flush().ok();
             }
         }
-        println!("\n    Generated {} L2 sequences (L1 error deltas)", l2_seqs.len());
+        println!("\n    Generated {} L2 sequences ({} error deltas)", l2_seqs.len(), err_count);
 
         // --- Train L2 on L1 error deltas ---
+        let cb = FugaCircuitBreaker::new(0.5700);
         println!("  Training L2 (error deltas → next error delta)...");
         for epoch in 0..epochs {
             let margin = 1.0;
@@ -436,7 +719,24 @@ impl HierarchicalJEPA {
                 loss_sum += self.levels[2].train_step(&window, &seq[wi + ctx2], margin);
                 cnt += 1;
             }
-            print!("\r    L2 epoch {:3}/{}  loss={:.4}", epoch + 1, epochs, loss_sum / cnt as f64);
+            let avg_loss = loss_sum / cnt as f64;
+            let state = cb.inspect(avg_loss as f32);
+            match state {
+                SystemState::Nominal => {},
+                SystemState::DivergingWarning(l) => {
+                    print!(" ⚠ cb={:.4}", l);
+                    self.levels[2].lr *= 0.5;
+                },
+                SystemState::CriticalResetRequired => {
+                    println!("\n    🔴 CB critical at epoch {} (loss={:.4}) — resetting L2 weights", epoch + 1, avg_loss);
+                    let mut rng = rand::thread_rng();
+                    for w in &mut self.levels[2].weights {
+                        *w = rng.gen_range(-0.005..0.005);
+                    }
+                    self.levels[2].velocity.fill(0.0);
+                },
+            }
+            print!("\r    L2 epoch {:3}/{}  loss={:.4}", epoch + 1, epochs, avg_loss);
             use std::io::{Write, stdout};
             stdout().flush().ok();
         }
@@ -472,11 +772,12 @@ impl HierarchicalJEPA {
                 for j in i + 1 - ctx2..=i {
                     let sub_win: Vec<&Hypervector> = seq[j..j+ctx].iter().collect();
                     let sub_pred = self.levels[1].predict(&sub_win);
-                    err_win.push(phase_smooth(&ls_bind(&sub_pred, &seq[j + ctx], 32), 2));
+                    let sub_delta = phase_smooth(&ls_bind(&sub_pred, &seq[j + ctx], 32), 2);
+                    err_win.push(dampen_correction(&sub_pred, &sub_delta));
                 }
                 let err_refs: Vec<&Hypervector> = err_win.iter().collect();
                 let l2_correction = self.levels[2].predict(&err_refs);
-                let corrected = l1_pred.bind(&l2_correction);
+                let corrected = dampen_correction(&l1_pred, &l2_correction);
                 let actual = &seq[i + ctx];
                 let loss = 1.0 - (dot_bipolar(&corrected, actual) / self.dim as f64);
                 final_loss[2] += loss;
@@ -531,6 +832,32 @@ fn collect_files(dir: &str, exts: &[&str], out: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn dampen_correction(base: &Hypervector, correction: &Hypervector) -> Hypervector {
+    let xored = base.bind(correction);
+    base.bundle(&[&base, &base, &xored])
+}
+
+fn str_chunk_hv(text: &str, dim: usize) -> Hypervector {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let token_hvs: Vec<Hypervector> = words.iter().map(|w| {
+        let id = token_id(w);
+        deterministic_hv(dim, &format!("token_{}", id))
+    }).collect();
+    if token_hvs.is_empty() {
+        return Hypervector::random(dim);
+    }
+    let refs: Vec<&Hypervector> = token_hvs.iter().collect();
+    refs[0].bundle(&refs[1..]).balance_density()
+}
+
+fn doc_str_to_hv(text: &str, dim: usize) -> Hypervector {
+    str_chunk_hv(text, dim)
+}
+
+fn code_str_to_hv(text: &str, dim: usize) -> Hypervector {
+    str_chunk_hv(text, dim)
 }
 
 fn deterministic_hv(dim: usize, seed: &str) -> Hypervector {

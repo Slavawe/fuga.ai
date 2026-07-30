@@ -1,5 +1,3 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use syn;
@@ -107,7 +105,7 @@ impl SandboxHarness {
     }
 
     fn compile_cpp(&self, file_path: &std::path::Path) -> CppCompileResult {
-        let out = self.temp_dir.join(format!("{}.exe", file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("a")));
+        let _out = self.temp_dir.join(format!("{}.exe", file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("a")));
         let mut cmd = Command::new("g++");
         cmd.arg("-std=c++17")
             .arg("-Wall")
@@ -356,7 +354,7 @@ impl CompileResult {
 }
 
 impl SandboxResult {
-    fn failed(msg: String) -> Self {
+    fn failed(_msg: String) -> Self {
         Self {
             compiles: false,
             error_count: 1,
@@ -400,7 +398,7 @@ impl CppCompileResult {
 }
 
 impl CppSandboxResult {
-    fn failed(msg: String) -> Self {
+    fn failed(_msg: String) -> Self {
         Self {
             compiles: false,
             error_count: 1,

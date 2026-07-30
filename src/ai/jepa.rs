@@ -44,7 +44,7 @@ impl JepaPredictor {
         let mut best_perm = self.perm_offsets.clone();
         let mut best_weights = self.weights.clone();
 
-        for epoch in 0..epochs {
+        for _epoch in 0..epochs {
             let mut total_loss = 0.0;
             let mut count = 0;
 
@@ -117,7 +117,7 @@ impl JepaPredictor {
     }
 
     pub fn load(path: &str) -> Result<Self, String> {
-        use std::io::Read;
+        
         let file = std::fs::File::open(path)
             .map_err(|e| format!("Failed to open {}: {}", path, e))?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }

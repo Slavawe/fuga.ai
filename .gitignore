@@ -8,6 +8,14 @@
 /datasets
 *.bin
 *.gguf
+*.idx
+*.mmap
+
+# Mirror data (regenerated on each run)
+fuga_mirror_tm*.bin
+fuga_mirror_jepa*.bin
+fuga_mirror_nodes*.bin
+fuga_buffer.bin
 
 # Logs, dumps, configs
 *.log
@@ -18,6 +26,28 @@
 
 # JSON corpora (large generated data, not source)
 *.jsonl
+
+# Generated / downloaded data
+/corpus_combined/
+/corpus_ext/
+/corpus_flat/
+/corpus_paired/
+/corpus_sources/
+/corpus_src/
+/temp_repos/
+/datasets/
+
+# Agent outputs / ephemeral
+/agent_results/
+/agent/
+/native/
+
+# Go agent binary
+fuga-agent
+
+# Generated HTML / site files
+fuga_site.html
+cube-3d.html
 
 # Editor / OS files
 .idea/

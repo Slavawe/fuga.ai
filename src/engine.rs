@@ -5,7 +5,6 @@ use crate::core::wave_cube::WaveCube;
 use crate::layers::{SyntaxInvariantLayer, SemanticLayer, ChaosMutationLayer, SyntaxAnalysisResult, SemanticAnalysis, ChaosAnalysis};
 use crate::multi_engine::MultiEngineResult;
 use crate::autofix::{FixGenerator, FixProposal};
-use crate::layers::syntax_layer::SyntaxViolation;
 use syn::File;
 
 #[derive(Debug, Clone)]

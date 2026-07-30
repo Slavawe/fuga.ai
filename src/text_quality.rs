@@ -46,13 +46,13 @@ impl TextQualityFilter {
     pub fn analyze(&self, text: &str, source_type: TextSourceType, path: &str) -> TextQualityScore {
         let sentences = split_sentences(text);
         let words: Vec<&str> = text.split_whitespace().collect();
-        let total_chars = text.len();
+        let _total_chars = text.len();
 
         let sentence_count = sentences.len();
         let empty_sentences = sentences.iter().filter(|s| s.trim().is_empty()).count();
         let short_sentences = sentences.iter().filter(|s| s.trim().len() < 2).count();
 
-        let (pair_issues, pair_ok) = check_punctuation_pairs(text);
+        let (pair_issues, _pair_ok) = check_punctuation_pairs(text);
         let violations = empty_sentences + short_sentences + pair_issues;
         let good_sentences = sentence_count.saturating_sub(empty_sentences + short_sentences);
 
@@ -65,7 +65,7 @@ impl TextQualityFilter {
             unique.len() as f64 / words.len() as f64
         };
 
-        let avg_word_len: f64 = if words.is_empty() {
+        let _avg_word_len: f64 = if words.is_empty() {
             0.0
         } else {
             words.iter().map(|w| w.len() as f64).sum::<f64>() / words.len() as f64
@@ -374,7 +374,7 @@ fn detect_source_type(path: &str, content: &str) -> TextSourceType {
     let quote_lines = content.lines()
         .filter(|l| l.trim().starts_with('"') || l.trim().starts_with('—') || l.trim().starts_with('-'))
         .count();
-    let colons = content.matches(':').count();
+    let _colons = content.matches(':').count();
 
     if (dialogue_markers > 5 || quote_lines > 3) && (dialogue_markers + quote_lines) as f64 > content.lines().count() as f64 * 0.3 {
         return TextSourceType::Dialogue;

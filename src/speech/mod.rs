@@ -126,7 +126,7 @@ impl FugaText {
                             0.3
                         };
                         let pitch_mod = (2.0 * PI * 4.0 * t).sin() * 0.02;
-                        let pitch = self.prosody_pitch * (1.0 + pitch_mod);
+                        let _pitch = self.prosody_pitch * (1.0 + pitch_mod);
                         let formant = (2.0 * PI * p.f1 * t).sin()
                             + 0.5 * (2.0 * PI * p.f2 * t).sin()
                             + 0.25 * (2.0 * PI * p.f3 * t).sin();

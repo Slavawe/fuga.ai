@@ -162,7 +162,7 @@ impl VsaIndex {
             }
         }
 
-        let n_buckets = 1 << HASH_BITS;
+        let _n_buckets = 1 << HASH_BITS;
         for table in &self.tables {
             for bucket in table {
                 f.write_all(&(bucket.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;

@@ -1,6 +1,6 @@
 use fuga::{
     FugaAI, WaveCube, MemoryStore, PromptVectors, Hypervector,
-    JepaPredictor,
+    JepaPredictor, HierarchicalJEPA,
     speech::FugaText,
     core::wave_cube::peek_cube_header,
     MoEStore, TokenInfo,
@@ -9,11 +9,13 @@ use fuga::{
 use ureq;
 use rand;
 use std::env;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 const TELEGRAM_API: &str = "https://api.telegram.org/bot";
 const JEPA_PATH: &str = "fuga_jepa.bin";
+const HJEPA_PATH: &str = "fuga_hjepa.bin";
 
 fn is_training_artifact(text: &str) -> bool {
     text.contains("[dialogue-pair]")
@@ -109,6 +111,11 @@ fn matches_language(query: &str, entry_text: &str) -> bool {
     false
 }
 
+struct BabyContext {
+    text: String,
+    vecs: Vec<Hypervector>,
+}
+
 struct TgBot<const N: usize, const S: usize> {
     token: String,
     offset: i64,
@@ -119,7 +126,9 @@ struct TgBot<const N: usize, const S: usize> {
     moe: MoEStore,
     prompts: PromptVectors,
     jepa: Option<JepaPredictor>,
+    hjepa: Option<HierarchicalJEPA>,
     last_query: String,
+    contexts: HashMap<i64, BabyContext>,
 }
 
 impl<const N: usize, const S: usize> TgBot<N, S> {
@@ -165,9 +174,25 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
             None
         };
 
+        let hjepa = if std::path::Path::new(HJEPA_PATH).exists() {
+            match HierarchicalJEPA::load(HJEPA_PATH) {
+                Ok(h) => {
+                    println!("H-JEPA loaded: dim={}, levels={}", h.dim, h.levels.len());
+                    Some(h)
+                }
+                Err(e) => {
+                    println!("H-JEPA load failed: {} (baby mode unavailable)", e);
+                    None
+                }
+            }
+        } else {
+            println!("H-JEPA: no model ({}), baby mode unavailable", HJEPA_PATH);
+            None
+        };
+
         Ok(Self {
-            token, offset: 0, ai, speech, cube_path, mem_path, moe, prompts, jepa,
-            last_query: String::new(),
+            token, offset: 0, ai, speech, cube_path, mem_path, moe, prompts, jepa, hjepa,
+            last_query: String::new(), contexts: HashMap::new(),
         })
     }
 
@@ -370,6 +395,81 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
         "Я тебя слушаю. Расскажи подробнее.".to_string()
     }
 
+    fn respond_baby(&mut self, chat_id: i64, text: &str) -> String {
+        let hjepa = match self.hjepa {
+            Some(ref mut h) => h,
+            None => return "H-JEPA не загружен".to_string(),
+        };
+        let ctx_len = hjepa.levels[0].context_len;
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        if tokens.is_empty() {
+            return "Напиши что-нибудь".to_string();
+        }
+
+        let ctx = self.contexts.entry(chat_id).or_insert(BabyContext {
+            text: String::new(), vecs: Vec::new(),
+        });
+
+        for chunk in tokens.chunks(3) {
+            let token_infos: Vec<TokenInfo> = chunk.iter()
+                .map(|w| TokenInfo { id: token_id(w), text: w.to_string() })
+                .collect();
+            let token_hvs: Vec<Hypervector> = token_infos.iter()
+                .map(|ti| {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    format!("token_{}", ti.id).hash(&mut h);
+                    Hypervector::random(hjepa.dim)
+                })
+                .collect();
+            let hv = if token_hvs.is_empty() {
+                Hypervector::random(hjepa.dim)
+            } else {
+                let refs: Vec<&Hypervector> = token_hvs.iter().collect();
+                refs[0].bundle(&refs[1..]).balance_density()
+            };
+            ctx.vecs.push(hv);
+        }
+        ctx.text.push_str(text);
+        ctx.text.push(' ');
+
+        while ctx.vecs.len() > 20 {
+            ctx.vecs.remove(0);
+        }
+
+        if ctx.vecs.len() < ctx_len {
+            return format!("Строю контекст... ({}/{})", ctx.vecs.len(), ctx_len);
+        }
+
+        let window: Vec<&Hypervector> = ctx.vecs[ctx.vecs.len().saturating_sub(ctx_len)..].iter().collect();
+        let predictions = hjepa.predict(&window);
+
+        let input_hvs: Vec<Hypervector> = ctx.vecs[ctx.vecs.len().saturating_sub(ctx_len)..].to_vec();
+        let input_refs: Vec<&Hypervector> = input_hvs.iter().collect();
+        let errors = hjepa.learn(&window, &input_refs);
+
+        let mut response = String::new();
+
+        for (li, pred) in predictions.iter().enumerate() {
+            let name = match li { 0 => "L0", 1 => "L1", 2 => "L2", _ => "" };
+            let entropy = pred.entropy();
+            let emoji = if entropy > 0.98 { "\u{1F300}" } else if entropy > 0.90 { "\u{1F30A}" } else { "\u{26A1}" };
+            let err_str = if li < errors.len() { format!(" err={:.3}", errors[li]) } else { String::new() };
+            response.push_str(&format!("{} {}: entropy={:.4}{}\n", emoji, name, entropy, err_str));
+        }
+
+        if !predictions.is_empty() {
+            let results = self.ai.memory.search(&predictions[0], 1);
+            if !results.is_empty() {
+                let (_, sim, entry) = &results[0];
+                let snippet: String = entry.text.chars().take(100).collect();
+                response.push_str(&format!("\u{1F4D6} L0 \u{2192} [{:.2}] {}\n", sim, snippet));
+            }
+        }
+        response.push_str(&format!("\u{1F916} ctx_len={}", ctx.vecs.len()));
+        response
+    }
+
     fn handle_message(&mut self, chat_id: i64, text: &str) -> Result<(), String> {
         let parts: Vec<&str> = text.split_whitespace().collect();
         if parts.is_empty() { return Ok(()); }
@@ -522,6 +622,38 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
                 }
                 self.send_voice(chat_id, &args)
             }
+            "/baby" => {
+                let hjepa = match self.hjepa {
+                    Some(ref h) => h,
+                    None => return self.send_message(chat_id, "H-JEPA не загружен (нет fuga_hjepa.bin). Сначала обучи: h-jepa-train"),
+                };
+                let sub = args.trim().to_lowercase();
+                match sub.as_str() {
+                    "" | "status" => {
+                        let msg = format!("\u{1F476} H-JEPA Baby: dim={}, L0(ctx={}) L1(ctx={}) L2(ctx={})",
+                            hjepa.dim, hjepa.levels[0].context_len, hjepa.levels[1].context_len, hjepa.levels[2].context_len);
+                        self.send_message(chat_id, &msg)
+                    }
+                    "on" => {
+                        self.contexts.entry(chat_id).or_insert(BabyContext { text: String::new(), vecs: Vec::new() });
+                        self.send_message(chat_id, "\u{1F476} Baby mode ON. Теперь каждое сообщение проходит через H-JEPA.")
+                    }
+                    "off" => {
+                        self.contexts.remove(&chat_id);
+                        self.send_message(chat_id, "\u{1F476} Baby mode OFF.")
+                    }
+                    "reset" => {
+                        if let Some(ctx) = self.contexts.get_mut(&chat_id) {
+                            ctx.text.clear();
+                            ctx.vecs.clear();
+                            self.send_message(chat_id, "\u{1F476} Context reset.")
+                        } else {
+                            self.send_message(chat_id, "Baby mode not active.")
+                        }
+                    }
+                    _ => self.send_message(chat_id, "/baby [status|on|off|reset]")
+                }
+            }
             "/stats" => {
                 let entropy = self.ai.cube.global_entropy();
                 let mem = self.ai.memory.size();
@@ -536,6 +668,9 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
             _ => {
                 if cmd.starts_with('/') {
                     self.send_message(chat_id, &format!("Неизвестная команда: {}", cmd))
+                } else if self.contexts.contains_key(&chat_id) {
+                    let answer = self.respond_baby(chat_id, text);
+                    self.send_message(chat_id, &answer)
                 } else {
                     let answer = self.respond(text);
                     self.send_message(chat_id, &answer)

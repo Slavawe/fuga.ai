@@ -292,7 +292,7 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         let role_hint = output.route.name();
         let absorb_count = ((output.super_tokens.len() as f64) * quality.weight).ceil() as usize;
         let sigs = extract_code_signatures(tokens);
-        let fname = Path::new(source_doc).file_name()
+        let _fname = Path::new(source_doc).file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
         let code_text = if source_text.len() > 1600 {

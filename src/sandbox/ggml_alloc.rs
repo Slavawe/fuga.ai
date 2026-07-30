@@ -1,6 +1,3 @@
-use std::cmp::Ordering;
-use std::mem;
-use std::ptr::NonNull;
 
 const MAX_FREE_BLOCKS: usize = 256;
 const MAX_CHUNKS: usize = 16;

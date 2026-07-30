@@ -432,7 +432,7 @@ pub fn render_fisig_answer(answer: &FisigAnswer) -> String {
 
     out.push_str("│ 2. DERIVATION & PROOF\n");
     out.push_str("│\n");
-    for (i, step) in answer.derivation.iter().enumerate() {
+    for (_i, step) in answer.derivation.iter().enumerate() {
         if step.is_empty() {
             out.push('\n');
         } else {
