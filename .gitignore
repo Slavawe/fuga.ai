@@ -6,16 +6,16 @@
 /temp_repos
 /data
 /datasets
-*.bin
+#*.bin
 *.gguf
 *.idx
 *.mmap
 
 # Mirror data (regenerated on each run)
-fuga_mirror_tm*.bin
-fuga_mirror_jepa*.bin
-fuga_mirror_nodes*.bin
-fuga_buffer.bin
+#fuga_mirror_tm*.bin
+#fuga_mirror_jepa*.bin
+#fuga_mirror_nodes*.bin
+#fuga_buffer.bin
 
 # Logs, dumps, configs
 *.log
