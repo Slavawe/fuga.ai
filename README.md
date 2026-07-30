@@ -2,45 +2,106 @@
 
 **Non-transformer AGI core** built on Vector Symbolic Architectures (VSA), Hierarchical JEPA, Temporal Memory, and locality-sensitive binding. Replaces backpropagation with local Delta Rule updates and generates Rust code via pure VSA/TM autoregression — no LLM dependency.
 
-## Current Capabilities
+---
 
-### 1. VSA Token-Level Code Generation
+## Training Pipeline
+
+### 1. Index source files into phase graph
+
+```bash
+# Index a directory — reads .rs files, creates PhaseNodes with SDR encoding
+cargo run --release -- mirror-index src/ai
+
+# Load existing mirror and index another directory
+cargo run --release -- mirror-index src/core
 ```
+
+Creates `fuga_mirror_nodes.bin` (phase nodes), `fuga_mirror_tm.bin` (TM), `fuga_mirror_jepa.bin` (HJEPA).
+
+### 2. Train the predictor (HJEPA + TM)
+
+```bash
+# Train on existing mirror nodes (5 epochs, chunk=1)
+cargo run --release -- train-predictor 5
+
+# With larger chunks for sequence patterns
+cargo run --release -- train-predictor 10 --chunk 3
+```
+
+### 3. Train token vocabulary (embedded in generation)
+
+```bash
+# Builds top-4000 char-level token vocab from indexed .rs files
+# then trains TM on 20000+ token bigram steps
+# then generates tokens
 cargo run --release -- generate-code "fn new" --tokens
 ```
-- Char-level tokenizer splits on non-alphanumeric chars, recognizes multi-char operators (`->`, `::`, `=>`, `!=`, `==`, `>=`, `<=`, `+=`, `-=`, `&&`, `||`)
-- Vocabulary: top-4000 frequent Rust tokens from corpus
-- TM-based prediction with **Winner-Take-All (WTA)** — finds best-matching cell instead of bundling all predictions
-- **Inhibition of Return (Phase Fatigue)** — penalizes repeatedly-won cells, forces exploration
-- **reinforce_match_only** — cross-cell reinforcement doesn't decrement synapses, preserving learned transitions
-- Anti-repetition window (16 tokens exact match)
-- Output: real Rust syntax — `pub struct AnomalyEvent { #[derive(Clone, Debug)] ... }`
 
-### 2. PhaseNode Autoregressive Generation
-```
-cargo run --release -- generate-code "fn new"
-```
-- 27,206 PhaseNodes indexed from Rust stdlib, tokio, smoltcp, fuga source
-- `ls_bind` (phase-shift binding) replaces scalar goal_bonus for semantic conditioning
-- Language filter: excludes C/C++ nodes when seed contains Rust patterns
-- System 2 multi-step reflection: 4 temperatures + convergence check + bundled consensus
+The token trainer:
+- Char-level tokenizer: splits identifiers from operators, recognizes `->` `::` `=>` `!=` `==` `>=` `<=` `+=` `-=` `&&` `||`
+- Syntactic pattern injection: 14 hardcoded Rust patterns × 5 repeats
+- WTA (Winner-Take-All) prediction with Inhibition of Return
+- Anti-repetition window (16 tokens)
 
-### 3. Self-Mirror & Autonomous Indexing
-- Indexes source files into PhaseNodes with hierarchical JEPA encoding
-- TM trained on token-level bigrams (20,820+ steps) + synthetic Rust patterns
-- `index_generated_snippets()` — trains TM+HJEPA on generated output, saves back to mirror
+---
 
-### 4. Anomaly Detection Module
-```
-cargo test --test test_anomaly_detection
-```
-- `AnomalyEvent` — detects phase overload (pred_count > 100, power_mw > 500)
-- `is_critical()` — triggers when overshoot + power_mw > 1000 (e.g., Morris Worm replication loop)
+## Generation
 
-### 5. MoE Memory & Answer Engine
-- 683,972 memory entries across 5 domains (code, narrative, dialogue, forum, general)
-- Multi-expert search by text or VSA vector
-- Answer engine with resonance attention
+### Token-level (syntactic)
+
+```bash
+cargo run --release -- generate-code "fn new" --tokens
+```
+
+Outputs real Rust tokens: `( ) { } [ ] , :: . ' -> \` + identifiers, numbers
+
+### PhaseNode-level (semantic)
+
+```bash
+# Beam search over PhaseNode graph
+cargo run --release -- generate-code "struct Foo"
+
+# Autoregressive mode (generates full snippets)
+cargo run --release -- generate-code "fn new" --gen
+
+# With beam width and temperature
+cargo run --release -- generate-code "async fn" --beam 3 --temp 1.2
+```
+
+---
+
+## Query & Evaluation
+
+```bash
+# Self-query — find matching phase nodes
+cargo run --release -- self-query "async fn handle"
+
+# Evaluate mirror quality
+cargo run --release -- eval
+
+# Inspect text or file
+cargo run --release -- inspect "fn new() -> Self"
+cargo run --release -- inspect src/main.rs
+```
+
+---
+
+## Tests
+
+```bash
+# All library tests
+cargo test --lib
+
+# Anomaly detection (Inhibition of Return, overshoot)
+cargo test --test test_anomaly_detection -- --nocapture
+
+# JEPA / TM / MoE tests
+cargo test --test jepa_test
+cargo test --test hierarchical_jepa_test
+cargo test --test moe_routing_test
+```
+
+---
 
 ## Architecture
 
@@ -48,35 +109,11 @@ cargo test --test test_anomaly_detection
 |---|---|
 | Hypervector | 8192-bit, ~2% density (~164 active bits), XOR bind / sum bundle / permute |
 | Hierarchical JEPA | L0 (static), L1 (macro), L2 (metacognition) with ls_bind phase-shift |
-| Temporal Memory | Cells with DendriteSegments, learn_segment/reinforce, prune, predict_next |
-| SDR | encode_text() → deterministic hash-based sparse binary vector |
+| Temporal Memory | Cells with DendriteSegments, learn_segment / reinforce / prune / predict_next |
+| SDR (Sparse Distributed Representation) | `encode_text()` → deterministic hash-based sparse binary vector |
 | Tokenizer | Char-level: splits identifiers from operators, multi-char operator recognition |
-
-## Usage
-
-```bash
-# Build
-cargo build --release
-
-# Index source files into mirror
-cargo run --release -- mirror-index
-
-# Token-level generation
-cargo run --release -- generate-code "fn new" --tokens
-
-# PhaseNode generation
-cargo run --release -- generate-code "struct Foo"
-
-# Train predictor
-cargo run --release -- train-predictor 5 100
-
-# Self-query
-cargo run --release -- self-query "async fn handle"
-
-# Run tests
-cargo test
-cargo test --test test_anomaly_detection
-```
+| WTA | Winner-Take-All with Inhibition of Return (fatigue = wins × 10, decay every 10 steps) |
+| AnomalyEvent | Detects phase overload — `pred_count > 100` or `power_mw > 500` triggers overshoot |
 
 ## License
 
