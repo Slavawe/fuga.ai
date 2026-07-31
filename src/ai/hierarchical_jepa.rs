@@ -14,7 +14,8 @@ pub const DEFAULT_L1_STRIDE: usize = 3;
 pub const DEFAULT_L2_STRIDE: usize = 5;
 pub const DEFAULT_DIM: usize = 8192;
 pub const TRAIN_EPOCHS: usize = 100;
-const LR: f64 = 0.01;
+const LR: f64 = 0.05;
+pub const PERM_EXPANSION: usize = 4; // multiple VSA projections per position
 fn active_bits(words: &[u64], dim: usize) -> Vec<usize> {
     let mut bits = Vec::with_capacity(dim / 2);
     for (wi, &w) in words.iter().enumerate() {
@@ -31,6 +32,17 @@ fn active_bits(words: &[u64], dim: usize) -> Vec<usize> {
 
 fn hv_to_threshold_bits(cont: &[f64]) -> Vec<i8> {
     cont.iter().map(|&v| if v >= 0.0 { 1 } else { 0 }).collect()
+}
+
+fn hv_to_topk_bits(cont: &[f64], k: usize) -> Vec<i8> {
+    if cont.is_empty() { return Vec::new(); }
+    let mut idx: Vec<usize> = (0..cont.len()).collect();
+    idx.sort_by(|&a, &b| cont[b].partial_cmp(&cont[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut bits = vec![0i8; cont.len()];
+    for &i in idx.iter().take(k.min(cont.len())) {
+        bits[i] = 1;
+    }
+    bits
 }
 
 fn dot_bipolar(a: &Hypervector, b: &Hypervector) -> f64 {
@@ -51,33 +63,134 @@ pub struct JepaLevel {
     pub stride: usize,
     pub perm_offsets: Vec<usize>,
     pub weights: Vec<f64>,
+    pub bundling_weights: Vec<f64>,
     pub velocity: Vec<f64>,
     pub lr: f64,
+    pub mode: u8,  // 0 = linear per-dim, 1 = VSA bundling (scalar per projection), 2 = phase (resonance)
+    pub top_k: usize,  // sparse phase router: keep only top-k projections by resonance (0 = all)
+    pub delta_ones: usize,  // EMA of active bits in observed delta hypervectors (~1% of dim)
+    pub num_expert_group: usize,  // grouped top-k router: how many projection groups (0/1 = ungrouped)
+    pub topk_group: usize,        // Kimi/DeepSeek-style: keep only these top groups before per-group top_k
 }
 
 impl JepaLevel {
     pub fn new(name: &str, dim: usize, context_len: usize, stride: usize) -> Self {
         let mut rng = rand::thread_rng();
-        let perm_offsets: Vec<usize> = (0..context_len)
+        let perm_offsets: Vec<usize> = (0..context_len * PERM_EXPANSION)
             .map(|_| rng.gen_range(1..dim))
             .collect();
-        let wlen = context_len * dim;
+        let wlen = context_len * PERM_EXPANSION * dim;
         let mut weights = Vec::with_capacity(wlen);
         for _ in 0..wlen {
             weights.push(rng.gen_range(-0.005..0.005));
         }
+        let bcount = context_len * PERM_EXPANSION;
+        let bundling_weights = vec![1.0 / bcount as f64; bcount];
         let velocity = vec![0.0; wlen];
         let lr = LR;
-        JepaLevel { name: name.to_string(), dim, context_len, stride, perm_offsets, weights, velocity, lr }
+        JepaLevel { name: name.to_string(), dim, context_len, stride, perm_offsets, weights, bundling_weights, velocity, lr, mode: 2, top_k: 0, delta_ones: 0, num_expert_group: 1, topk_group: 0 }
+    }
+
+    // Kimi/DeepSeek grouped top-k: scores[0..bcount] are the resonance magnitudes.
+    // Projections are split into num_expert_group groups; each group scores as the sum
+    // of its top-2 members; only topk_group groups survive, then top_k within them.
+    pub fn grouped_topk_mask(&self, bcount: usize, scores: &[f64]) -> Vec<bool> {
+        let mut keep = vec![false; bcount];
+        if self.top_k == 0 || bcount == 0 { return vec![true; bcount]; }
+        let ng = if self.num_expert_group > 1 && self.topk_group > 0
+            && self.topk_group < self.num_expert_group && self.num_expert_group <= bcount {
+            self.num_expert_group
+        } else { 1 };
+        if ng == 1 {
+            let mut idx: Vec<usize> = (0..bcount).collect();
+            idx.sort_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal));
+            for &i in idx.iter().take(self.top_k.min(bcount)) { keep[i] = true; }
+            return keep;
+        }
+        let gsize = bcount / ng;
+        let mut group_score = vec![0.0f64; ng];
+        for g in 0..ng {
+            let base = g * gsize;
+            let end = if g == ng - 1 { bcount } else { base + gsize };
+            let mut top2 = [0.0f64; 2];
+            for i in base..end {
+                let v = scores[i];
+                if v > top2[0] { top2[1] = top2[0]; top2[0] = v; }
+                else if v > top2[1] { top2[1] = v; }
+            }
+            group_score[g] = top2[0] + top2[1];
+        }
+        let mut gidx: Vec<usize> = (0..ng).collect();
+        gidx.sort_by(|&a, &b| group_score[b].partial_cmp(&group_score[a]).unwrap_or(std::cmp::Ordering::Equal));
+        let mut gkeep = vec![false; ng];
+        for &g in gidx.iter().take(self.topk_group.min(ng)) { gkeep[g] = true; }
+        // top_k within surviving groups
+        let mut cand: Vec<usize> = Vec::new();
+        for g in 0..ng {
+            if !gkeep[g] { continue; }
+            let base = g * gsize;
+            let end = if g == ng - 1 { bcount } else { base + gsize };
+            for i in base..end { cand.push(i); }
+        }
+        cand.sort_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap_or(std::cmp::Ordering::Equal));
+        for &i in cand.iter().take(self.top_k.min(cand.len())) { keep[i] = true; }
+        keep
     }
 
     pub fn predict_continuous(&self, context: &[&Hypervector]) -> Vec<f64> {
+        if self.mode >= 1 {
+            return self.predict_continuous_bundled(context);
+        }
         let mut raw = vec![0.0f64; self.dim];
         let n = context.len().min(self.context_len);
         for (i, hv) in context.iter().take(n).enumerate() {
-            let base = i * self.dim;
-            for bit in active_bits(&hv.words, self.dim) {
-                raw[bit] += self.weights[base + bit];
+            for k in 0..PERM_EXPANSION {
+                let base = (i * PERM_EXPANSION + k) * self.dim;
+                let idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                for bit in active_bits(&permuted.words, self.dim) {
+                    raw[bit] += self.weights[base + bit];
+                }
+            }
+        }
+        raw
+    }
+
+    pub fn predict_continuous_bundled(&self, context: &[&Hypervector]) -> Vec<f64> {
+        let mut raw = vec![0.0f64; self.dim];
+        let n = context.len().min(self.context_len);
+        let bcount = n * PERM_EXPANSION;
+        let _total = self.context_len * PERM_EXPANSION;
+        if self.top_k > 0 && self.top_k < bcount {
+            // Sparse Phase Router: score every projection in the window by |resonance weight|,
+            // keep only the top_k most salient (optionally grouped Kimi/DeepSeek-style), drop the rest.
+            let scores: Vec<f64> = self.bundling_weights.iter()
+                .take(bcount).map(|w| w.abs()).collect();
+            let keep = self.grouped_topk_mask(bcount, &scores);
+            for (i, hv) in context.iter().take(n).enumerate() {
+                for k in 0..PERM_EXPANSION {
+                    let idx = i * PERM_EXPANSION + k;
+                    if !keep[idx] { continue; }
+                    let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                    let permuted = hv.permute(offset);
+                    let w = self.bundling_weights[idx];
+                    for bit in active_bits(&permuted.words, self.dim) {
+                        raw[bit] += w;
+                    }
+                }
+            }
+            return raw;
+        }
+        for (i, hv) in context.iter().take(n).enumerate() {
+            for k in 0..PERM_EXPANSION {
+                let idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                let w = self.bundling_weights[idx];
+                for bit in active_bits(&permuted.words, self.dim) {
+                    raw[bit] += w;
+                }
             }
         }
         raw
@@ -99,7 +212,12 @@ impl JepaLevel {
                 *v *= inv_t;
             }
         }
-        let pred_bits = hv_to_threshold_bits(&cont);
+        let pred_bits = if self.mode == 2 && self.delta_ones > 0 && self.delta_ones < self.dim {
+            // Sparse Phase Router threshold: emit exactly the observed delta density (top-k raw bits)
+            hv_to_topk_bits(&cont, self.delta_ones)
+        } else {
+            hv_to_threshold_bits(&cont)
+        };
         let pred_delta = Hypervector::from_i8_bits(self.dim, &pred_bits);
         baseline.bind(&pred_delta)
     }
@@ -110,43 +228,143 @@ impl JepaLevel {
     }
 
     pub fn train_step(&mut self, context: &[&Hypervector], actual: &Hypervector, margin: f64) -> f64 {
+        if self.mode >= 1 {
+            return self.train_step_bundled(context, actual, margin);
+        }
         let dim = self.dim;
         let n_ctx = context.len().min(self.context_len);
 
+        let baseline = context[context.len() - 1];
+        let delta = baseline.bind(actual);
+
         let mut raw = vec![0.0f64; dim];
         for (i, hv) in context.iter().take(n_ctx).enumerate() {
-            let base = i * dim;
-            for bit in active_bits(&hv.words, dim) {
-                raw[bit] += self.weights[base + bit];
+            for k in 0..PERM_EXPANSION {
+                let base = (i * PERM_EXPANSION + k) * dim;
+                let idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                for bit in active_bits(&permuted.words, dim) {
+                    raw[bit] += self.weights[base + bit];
+                }
             }
         }
 
-        let baseline = context[context.len() - 1];
-        let lr = 0.01;
-        let decay = 0.001;
+        let lr = self.lr;
+        let n = (n_ctx * PERM_EXPANSION) as f64;
+        let decay = self.lr * 0.01 / n;
         for (i, hv) in context.iter().take(n_ctx).enumerate() {
-            let base = i * dim;
-            for bit in active_bits(&hv.words, dim) {
-                let idx = base + bit;
-                let a_bit = (actual.words[bit / 64] >> (bit % 64)) & 1;
-                let b_bit = (baseline.words[bit / 64] >> (bit % 64)) & 1;
-                let residual_target = if a_bit == b_bit { -1.0 } else { 1.0 };
-                let error = margin * residual_target - raw[bit];
-                self.weights[idx] = self.weights[idx] * (1.0 - decay) + lr * error;
+            for k in 0..PERM_EXPANSION {
+                let base = (i * PERM_EXPANSION + k) * dim;
+                let p_idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(p_idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                for bit in active_bits(&permuted.words, dim) {
+                    let w_idx = base + bit;
+                    let d_bit = (delta.words[bit / 64] >> (bit % 64)) & 1;
+                    let target = if d_bit == 1 { 1.0 } else { -1.0 };
+                    let error = target - raw[bit] / n;
+                    self.weights[w_idx] = self.weights[w_idx] * (1.0 - decay) + lr * error;
+                }
             }
         }
 
         let raw_norm = raw.iter().map(|r| r * r).sum::<f64>().sqrt();
         if raw_norm < 1e-9 { return 1.0; }
         let mut dot = 0.0f64;
-        for (wi, (&aw, &bw)) in actual.words.iter().zip(baseline.words.iter()).enumerate() {
+        for (wi, &aw) in actual.words.iter().enumerate() {
             for bi in 0..64 {
                 let bit = wi * 64 + bi;
                 if bit >= dim { break; }
-                let a_bit = (aw >> bi) & 1;
-                let b_bit = (bw >> bi) & 1;
-                let res = if a_bit == b_bit { -1.0 } else { 1.0 };
-                dot += raw[bit] * res;
+                let target = if (aw >> bi) & 1 == 1 { 1.0 } else { -1.0 };
+                dot += raw[bit] * target;
+            }
+        }
+        1.0 - (dot / (raw_norm * (dim as f64).sqrt())).clamp(-1.0, 1.0)
+    }
+
+    pub fn train_step_bundled(&mut self, context: &[&Hypervector], actual: &Hypervector, _margin: f64) -> f64 {
+        let dim = self.dim;
+        let n_ctx = context.len().min(self.context_len);
+
+        // VSA target: model predicts the transition baseline -> actual, so weights are fit
+        // to the delta hypervector; predict_with_temp then recovers actual via baseline.bind(delta).
+        let baseline = context[context.len() - 1];
+        let delta = baseline.bind(actual);
+
+        if self.mode == 2 {
+            // Phase Overlap: weights = resonance scores against the delta, set in one shot
+            let ones = delta.to_i8_bits().iter().filter(|&&b| b == 1).count();
+            if self.delta_ones == 0 {
+                self.delta_ones = ones;
+            } else {
+                self.delta_ones = (self.delta_ones * 99 + ones) / 100;
+            }
+            for (i, hv) in context.iter().take(n_ctx).enumerate() {
+                for k in 0..PERM_EXPANSION {
+                    let idx = i * PERM_EXPANSION + k;
+                    let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                    let permuted = hv.permute(offset);
+                    let sim = dot_bipolar(&permuted, &delta) / dim as f64;
+                    self.bundling_weights[idx] = sim;
+                }
+            }
+            // Sparse Phase Router: keep only top_k projections by |resonance| (optionally
+            // grouped Kimi/DeepSeek-style), zero the rest
+            if self.top_k > 0 && self.top_k < n_ctx * PERM_EXPANSION {
+                let bcount = n_ctx * PERM_EXPANSION;
+                let scores: Vec<f64> = self.bundling_weights.iter()
+                    .take(bcount).map(|w| w.abs()).collect();
+                let keep = self.grouped_topk_mask(bcount, &scores);
+                for (i, w) in self.bundling_weights.iter_mut().enumerate() {
+                    if i < bcount && !keep[i] { *w = 0.0; }
+                }
+            }
+        }
+
+        let mut raw = vec![0.0f64; dim];
+        for (i, hv) in context.iter().take(n_ctx).enumerate() {
+            for k in 0..PERM_EXPANSION {
+                let idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                let w = self.bundling_weights[idx];
+                for bit in active_bits(&permuted.words, dim) {
+                    raw[bit] += w;
+                }
+            }
+        }
+
+        if self.mode != 2 {
+            // SGD update for mode 0/1 — target is the delta bits (transition), not actual
+            let bcount = n_ctx * PERM_EXPANSION;
+            let nf = bcount as f64;
+            let lr = self.lr * 10.0;
+            for (i, hv) in context.iter().take(n_ctx).enumerate() {
+                for k in 0..PERM_EXPANSION {
+                    let idx = i * PERM_EXPANSION + k;
+                    let offset = self.perm_offsets.get(idx).copied().unwrap_or(0);
+                    let permuted = hv.permute(offset);
+                    let mut grad = 0.0f64;
+                    for bit in active_bits(&permuted.words, dim) {
+                        let d_bit = (delta.words[bit / 64] >> (bit % 64)) & 1;
+                        let target = if d_bit == 1 { 1.0 } else { -1.0 };
+                        grad += target - raw[bit] / nf;
+                    }
+                    self.bundling_weights[idx] += lr * grad / dim as f64;
+                }
+            }
+        }
+
+        let raw_norm = raw.iter().map(|r| r * r).sum::<f64>().sqrt();
+        if raw_norm < 1e-9 { return 1.0; }
+        let mut dot = 0.0f64;
+        for (wi, &aw) in actual.words.iter().enumerate() {
+            for bi in 0..64 {
+                let bit = wi * 64 + bi;
+                if bit >= dim { break; }
+                let target = if (aw >> bi) & 1 == 1 { 1.0 } else { -1.0 };
+                dot += raw[bit] * target;
             }
         }
         1.0 - (dot / (raw_norm * (dim as f64).sqrt())).clamp(-1.0, 1.0)
@@ -158,35 +376,44 @@ impl JepaLevel {
 
         let mut raw = vec![0.0f64; dim];
         for (i, hv) in context.iter().take(n_ctx).enumerate() {
-            let base = i * dim;
-            for bit in active_bits(&hv.words, dim) {
-                raw[bit] += self.weights[base + bit];
+            for k in 0..PERM_EXPANSION {
+                let base = (i * PERM_EXPANSION + k) * dim;
+                let p_idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(p_idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                for bit in active_bits(&permuted.words, dim) {
+                    raw[bit] += self.weights[base + bit];
+                }
             }
         }
 
-        let baseline = context[context.len() - 1];
-        let lr = 0.01;
-        let decay = 0.0005;
+        let lr = self.lr;
+        let n = (n_ctx * PERM_EXPANSION) as f64;
+        let decay = self.lr * 0.005 / n;
         let mut pos_goodness = 0.0f64;
         let mut neg_goodness = 0.0f64;
         let mut cnt = 0usize;
 
         for (i, hv) in context.iter().take(n_ctx).enumerate() {
-            let base = i * dim;
-            for bit in active_bits(&hv.words, dim) {
-                let idx = base + bit;
-                let a_bit = (actual.words[bit / 64] >> (bit % 64)) & 1;
-                let b_bit = (baseline.words[bit / 64] >> (bit % 64)) & 1;
-                let t_pos: f64 = if a_bit == b_bit { -1.0 } else { 1.0 };
+            for k in 0..PERM_EXPANSION {
+                let base = (i * PERM_EXPANSION + k) * dim;
+                let p_idx = i * PERM_EXPANSION + k;
+                let offset = self.perm_offsets.get(p_idx).copied().unwrap_or(0);
+                let permuted = hv.permute(offset);
+                for bit in active_bits(&permuted.words, dim) {
+                    let w_idx = base + bit;
+                    let a_bit = (actual.words[bit / 64] >> (bit % 64)) & 1;
+                    let t_pos: f64 = if a_bit == 1 { 1.0 } else { -1.0 };
 
-                let n_bit = (negative.words[bit / 64] >> (bit % 64)) & 1;
-                let t_neg: f64 = if n_bit == b_bit { -1.0 } else { 1.0 };
+                    let n_bit = (negative.words[bit / 64] >> (bit % 64)) & 1;
+                    let t_neg: f64 = if n_bit == 1 { 1.0 } else { -1.0 };
 
-                pos_goodness += raw[bit] * t_pos;
-                neg_goodness += raw[bit] * t_neg;
-                cnt += 1;
+                    pos_goodness += raw[bit] * t_pos;
+                    neg_goodness += raw[bit] * t_neg;
+                    cnt += 1;
 
-                self.weights[idx] = self.weights[idx] * (1.0 - decay) + lr * (t_pos - t_neg);
+                    self.weights[w_idx] = self.weights[w_idx] * (1.0 - decay) + lr * (t_pos - t_neg);
+                }
             }
         }
 
@@ -201,12 +428,23 @@ impl JepaLevel {
         buf.extend_from_slice(nb);
         buf.extend_from_slice(&(self.context_len as u32).to_le_bytes());
         buf.extend_from_slice(&(self.stride as u32).to_le_bytes());
+        buf.push(6u8);  // level version 6 = perm_count + mode + bundling_weights + top_k + delta_ones + grouped_topk
+        let perm_count = self.perm_offsets.len() as u32;
+        buf.extend_from_slice(&perm_count.to_le_bytes());
         for &off in &self.perm_offsets {
             buf.extend_from_slice(&(off as u32).to_le_bytes());
         }
         for &w in &self.weights {
             buf.extend_from_slice(&w.to_le_bytes());
         }
+        buf.push(self.mode);
+        for &w in &self.bundling_weights {
+            buf.extend_from_slice(&w.to_le_bytes());
+        }
+        buf.extend_from_slice(&(self.top_k as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.delta_ones as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.num_expert_group as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.topk_group as u32).to_le_bytes());
     }
 
     fn load(data: &[u8], offset: &mut usize) -> Result<Self, String> {
@@ -221,20 +459,66 @@ impl JepaLevel {
         *offset += 4;
         let stride = u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize;
         *offset += 4;
-        let mut offsets = Vec::with_capacity(ctx);
-        for _ in 0..ctx {
+        // Check level version byte
+        let lv = data.get(*offset).copied().unwrap_or(0);
+        let is_new = lv >= 2;
+        let is_bundled = lv >= 3;
+        let has_topk = lv >= 4;
+        let has_delta_ones = lv >= 5;
+        let has_grouped_topk = lv >= 6;
+        if is_new { *offset += 1; }
+        let perm_count = if is_new {
+            let pc = u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize;
+            *offset += 4;
+            pc
+        } else {
+            ctx
+        };
+        let mut offsets = Vec::with_capacity(perm_count);
+        for _ in 0..perm_count {
             offsets.push(u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize);
             *offset += 4;
         }
         let dim = 8192usize;
-        let wlen = ctx * dim;
+        let wlen = perm_count * dim;
         let mut weights = Vec::with_capacity(wlen);
         for _ in 0..wlen {
             weights.push(f64::from_le_bytes(data[*offset..*offset+8].try_into().unwrap()));
             *offset += 8;
         }
+        let (mode, bundling_weights) = if is_bundled {
+            let m = data.get(*offset).copied().unwrap_or(0);
+            *offset += 1;
+            let mut bw = Vec::with_capacity(perm_count);
+            for _ in 0..perm_count {
+                bw.push(f64::from_le_bytes(data[*offset..*offset+8].try_into().unwrap()));
+                *offset += 8;
+            }
+            (m, bw)
+        } else {
+            (0u8, vec![1.0 / perm_count as f64; perm_count])
+        };
         let velocity = vec![0.0; wlen];
-        Ok(JepaLevel { name, dim, context_len: ctx, stride, perm_offsets: offsets, weights, velocity, lr: LR })
+        let top_k = if has_topk {
+            if *offset + 4 > data.len() { return Err("short top_k".into()); }
+            let t = u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize;
+            *offset += 4;
+            t
+        } else { 0 };
+        let delta_ones = if has_delta_ones {
+            if *offset + 4 > data.len() { return Err("short delta_ones".into()); }
+            let d = u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize;
+            *offset += 4;
+            d
+        } else { 0 };
+        let (num_expert_group, topk_group) = if has_grouped_topk {
+            if *offset + 8 > data.len() { return Err("short grouped_topk".into()); }
+            let g = u32::from_le_bytes(data[*offset..*offset+4].try_into().unwrap()) as usize;
+            let tg = u32::from_le_bytes(data[*offset+4..*offset+8].try_into().unwrap()) as usize;
+            *offset += 8;
+            (g, tg)
+        } else { (1, 0) };
+        Ok(JepaLevel { name, dim, context_len: ctx, stride, perm_offsets: offsets, weights, bundling_weights, velocity, lr: LR, mode, top_k, delta_ones, num_expert_group, topk_group })
     }
 }
 
