@@ -13,6 +13,7 @@ pub mod multi_engine;
 pub mod weaver;
 pub mod ai;
 pub mod anomaly;
+pub mod assembly;
 
 pub mod quality_filter;
 pub mod text_quality;
@@ -94,6 +95,8 @@ pub use ai::{
     AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
     self_mirror::{SelfMirror, PhaseNode, AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, RawChunk},
+    crystal::{PhaseCrystal, CrystalHit, CrystalEntry, fnv1a, KIND_L0, KIND_L1, KIND_L2, DEFAULT_RESONANCE_THRESHOLD, DEFAULT_DIM},
+    transpile::{TranspileAccumulator, TranspileConfig, ShardSource, StTensor, Dtype, WeightSketch, parse_safetensors_header, binarize_tensor, kind_for_name, transpile_shard, list_hf_shards, hf_resolve_url, is_repo_id, ROUTE_CAP},
 };
 
 pub use quality_filter::{

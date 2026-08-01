@@ -518,6 +518,109 @@ fn main() {
         "evaluate" | "eval" => {
             run_evaluate();
         }
+        "eval-debug" => {
+            let mut mirror = match fuga::SelfMirror::load() {
+                Some(m) => m,
+                None => { eprintln!("No mirror data."); return; }
+            };
+            println!("{}", mirror.evaluate_debug());
+        }
+        "reinit-jepa" => {
+            run_reinit_jepa();
+        }
+        "set-mode" => {
+            let mode = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            run_set_mode(mode);
+        }
+        "set-topk" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            run_set_topk(n);
+        }
+        "set-router" => {
+            let topk: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let groups: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let topk_groups: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            run_set_router(topk, groups, topk_groups);
+        }
+        "crystal-build" | "crystalb" => {
+            let out = args.get(2).map(|s| s.as_str()).unwrap_or("fuga_crystal.bin");
+            let max: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1000);
+            run_crystal_build(out, max);
+        }
+        "crystal-query" | "crystalq" => {
+            let raw: Vec<&String> = args[2..].iter().collect();
+            let mut text_parts = Vec::new();
+            let mut skip = false;
+            for s in &raw {
+                if skip { skip = false; continue; }
+                if *s == "--from" { skip = true; continue; }
+                if s.starts_with("--from=") { continue; }
+                text_parts.push(s.as_str());
+            }
+            let text = text_parts.join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga crystal-query \"<query>\" [--from crystal.bin]"); return; }
+            run_crystal_query(&text, &args);
+        }
+        "crystal-reencode" => {
+            let path = parse_flag_value(&args, 1, "--from")
+                .map(|s| s.to_string()).unwrap_or_else(|| "fuga_crystal.bin".to_string());
+            run_crystal_reencode(&path);
+        }
+        "phase-trajectory" | "phase" | "trajectory" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga phase-trajectory \"<query>\""); return; }
+            run_phase_trajectory(&text);
+        }
+        "decode" => {
+            let text = args[2..].iter().filter(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga decode \"<text>\" [--vocab tokenizer.json] [--k N]"); return; }
+            run_decode(&text, &args);
+        }
+        "phase-codegen" | "pgen" => {
+            let text = args[2..].iter().filter(|a| !a.starts_with("--")).cloned().collect::<Vec<_>>().join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga phase-codegen \"<prompt>\" [--lang rust|cpp] [--vocab tokenizer.json] [--k N]"); return; }
+            run_phase_codegen(&text, &args);
+        }
+        "crystal-test" | "crystalt" => {
+            run_crystal_test();
+        }
+        "crystal-stats" | "crystals" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga_crystal.bin");
+            run_crystal_stats(path);
+        }
+        "crystal-learn" | "learn" => {
+            let key = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let text = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            if key.is_empty() || text.is_empty() {
+                eprintln!("Usage: fuga crystal-learn \"<key>\" \"<text>\" [--alpha 0.2] [--out crystal.bin]");
+                return;
+            }
+            run_crystal_learn(key, text, &args);
+        }
+        "crystal-learn-dir" | "learndir" => {
+            let dir = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if dir.is_empty() {
+                eprintln!("Usage: fuga crystal-learn-dir \"<dir>\" [--alpha 0.2] [--chunk 512] [--max-chunks 32] [--out crystal.bin]");
+                return;
+            }
+            run_crystal_learn_dir(dir, &args);
+        }
+        "crystal-forget" | "forget" => {
+            let key = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            if key.is_empty() {
+                eprintln!("Usage: fuga crystal-forget \"<key>\"");
+                return;
+            }
+            run_crystal_forget(key, &args);
+        }
+        "crystal-popcount" | "crystalp" => {
+            let text = args[2..].join(" ");
+            if text.is_empty() { eprintln!("Usage: fuga crystal-popcount \"<query>\""); return; }
+            run_crystal_popcount(&text);
+        }
+        "transpile" | "xpl" => {
+            run_transpile(&args);
+        }
         "export-gguf" | "gguf" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("fuga.gguf");
             match fuga::gguf::export_gguf(path) {
@@ -701,8 +804,8 @@ fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
 
-fn parse_flag_value<'a>(args: &'a [String], start: usize, flag: &str) -> Option<&'a str> {
-    for i in start..args.len().saturating_sub(1) {
+fn parse_flag_value<'a>(args: &'a [String], _start: usize, flag: &str) -> Option<&'a str> {
+    for i in 1..args.len().saturating_sub(1) {
         if args[i] == flag {
             return Some(&args[i + 1]);
         }
@@ -4629,6 +4732,928 @@ fn run_evaluate() {
     println!("  {}", result);
     mirror.save();
     println!("  Mirror saved.");
+}
+
+fn run_reinit_jepa() {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => {
+            println!("  No mirror data — creating fresh TM + HJEPA");
+            let tm = fuga::TemporalMemory::new(2000, 4);
+            let hjepa = fuga::HierarchicalJEPA::new(8192);
+            fuga::SelfMirror::new(tm, hjepa)
+        }
+    };
+    println!("═══ Reinit HJEPA ═══\n");
+    let dim = mirror.predictor.hjepa.dim;
+    mirror.predictor.hjepa = fuga::HierarchicalJEPA::new(dim);
+    println!("  Created fresh HJEPA (dim={}) with PERM_EXPANSION={}", dim,
+        mirror.predictor.hjepa.levels[0].perm_offsets.len() / mirror.predictor.hjepa.levels[0].context_len);
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_set_mode(mode: &str) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data."); return; }
+    };
+    let parse_code = |s: &str| -> Option<u8> {
+        match s {
+            "linear" | "lin" | "0" => Some(0u8),
+            "bundled" | "bundle" | "bund" | "1" => Some(1u8),
+            "phase" | "2" => Some(2u8),
+            _ => None,
+        }
+    };
+    // Per-level syntax: "l0:phase,l1:linear,l2:bundled" or "phase" (all)
+    let parts: Vec<&str> = mode.split(',').collect();
+    let mut applied = false;
+    if parts.len() >= 3 && parts.iter().all(|p| p.contains(':')) {
+        for p in parts {
+            let kv: Vec<&str> = p.split(':').collect();
+            if kv.len() != 2 { continue; }
+            let level = match kv[0].trim().to_lowercase().as_str() {
+                "l0" | "0" => 0usize,
+                "l1" | "1" => 1usize,
+                "l2" | "2" => 2usize,
+                _ => continue,
+            };
+            let code = match parse_code(kv[1].trim()) {
+                Some(c) => c,
+                None => { eprintln!("  Bad mode '{}' (linear|bundled|phase)", kv[1]); continue; }
+            };
+            if let Some(lvl) = mirror.predictor.hjepa.levels.get_mut(level) {
+                lvl.mode = code;
+                applied = true;
+            }
+        }
+    } else if parts.len() == 3 && parts.iter().all(|p| parse_code(p).is_some()) {
+        // positional syntax: set-mode phase,linear,phase  (L0,L1,L2)
+        for (i, p) in parts.iter().enumerate() {
+            if let (Some(code), Some(lvl)) = (parse_code(p), mirror.predictor.hjepa.levels.get_mut(i)) {
+                lvl.mode = code;
+                applied = true;
+            }
+        }
+    } else if let Some(code) = parse_code(mode) {
+        for lvl in &mut mirror.predictor.hjepa.levels {
+            lvl.mode = code;
+        }
+        applied = true;
+    }
+    if !applied {
+        eprintln!("  Usage: set-mode linear|bundled|phase | <l0>:<m>,<l1>:<m>,<l2>:<m> | <m>,<m>,<m>");
+        return;
+    }
+    let codes: Vec<u8> = mirror.predictor.hjepa.levels.iter().map(|l| l.mode).collect();
+    println!("  Set HJEPA modes to {:?} (L0,L1,L2)", codes);
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_set_topk(n: usize) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data."); return; }
+    };
+    for lvl in &mut mirror.predictor.hjepa.levels {
+        lvl.top_k = n;
+    }
+    println!("  Set HJEPA sparse phase router top_k = {} (0 = dense, all projections)", n);
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_set_router(topk: usize, num_expert_group: usize, topk_group: usize) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data."); return; }
+    };
+    for lvl in &mut mirror.predictor.hjepa.levels {
+        lvl.top_k = topk;
+        lvl.num_expert_group = num_expert_group;
+        lvl.topk_group = topk_group;
+    }
+    println!("  Set grouped phase router: top_k={} num_expert_group={} topk_group={}",
+        topk, num_expert_group, topk_group);
+    mirror.save();
+    println!("  Mirror saved.");
+}
+
+fn run_crystal_build(out: &str, max_entries: usize) {
+    let mut mirror = match fuga::SelfMirror::load() {
+        Some(m) => m,
+        None => { eprintln!("No mirror data. Run 'fuga self-mirror' first."); return; }
+    };
+    println!("═══ Crystal Compilation ═══\n");
+    println!("  Nodes in mirror: {}", mirror.nodes.len());
+    let threshold = fuga::DEFAULT_RESONANCE_THRESHOLD;
+    let mut crystal = fuga::PhaseCrystal::build_from_mirror(&mut mirror, max_entries, threshold);
+    println!("  {}", crystal.stats());
+    match crystal.save(out) {
+        Ok(_) => println!("  ✓ Crystal saved to {}", out),
+        Err(e) => eprintln!("  ✗ {}", e),
+    }
+}
+
+fn run_crystal_query(text: &str, args: &[String]) {
+    let path = parse_flag_value(args, 4, "--from")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "fuga_crystal.bin".to_string());
+    let crystal = match fuga::PhaseCrystal::load(&path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    println!("═══ Crystal Query ═══\n");
+    println!("  Crystal: {}\n  Query: {}\n", path, text);
+    match crystal.query(text) {
+        Some(hit) => {
+            println!("  ✓ RESONANCE = {:.3} (exact key: {})", hit.resonance, hit.exact);
+            println!("  Route: L1 route #{}", hit.entry.route);
+            println!("  Kind:  {}", match hit.entry.kind {
+                fuga::KIND_L0 => "L0 syntax",
+                fuga::KIND_L1 => "L1 phase profile",
+                fuga::KIND_L2 => "L2 concept",
+                _ => "?",
+            });
+            println!("  ————————————————————————————————");
+            println!("  {}", hit.entry.text);
+        }
+        None => {
+            println!("  ✗ NO RESONANCE — phase response suppressed (deterministic silence)");
+        }
+    }
+}
+
+fn run_crystal_reencode(path: &str) {
+    let mut crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    println!("═══ Crystal Re-encode ═══\n");
+    println!("  {} ({} entries)", path, crystal.entries.len());
+    let touched = crystal.reencode_nopos();
+    println!("  ✓ re-encoded {} phases with position-invariant n-gram encoder", touched);
+    match crystal.save(path) {
+        Ok(_) => println!("  ✓ saved to {}", path),
+        Err(e) => eprintln!("  ✗ {}", e),
+    }
+}
+
+fn run_phase_trajectory(text: &str) {
+    let path = "fuga_crystal.bin";
+    let crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let qhv = fuga::sdr_to_hypervector(&fuga::encode_text(text), crystal.dim);
+    println!("═══ Phase State Monitor ═══\n");
+    println!("  Signal: {}\n", text);
+
+    let qw = qhv.words.len();
+    let qones = qhv.words.iter().map(|w| w.count_ones()).sum::<u32>() as f64;
+
+    struct ExpertHit { idx: usize, layer: usize, expert: usize, res: f64 }
+    let mut experts: Vec<ExpertHit> = Vec::new();
+    for (i, e) in crystal.entries.iter().enumerate() {
+        if e.kind != fuga::KIND_L1 { continue; }
+        let Some(colon) = e.key_text.rfind(":expert_") else { continue };
+        let prefix = &e.key_text[..colon];
+        let Ok(expert) = e.key_text[colon + 8..].parse::<usize>() else { continue };
+        let Some(lpos) = prefix.find("layers.") else { continue };
+        let num = prefix[lpos + 7..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>();
+        let Ok(layer) = num.parse::<usize>() else { continue };
+        let overlap: u32 = (0..qw).map(|w| (qhv.words[w] & e.hv.words[w]).count_ones()).sum();
+        let res = if qones <= 0.0 { 0.0 } else { overlap as f64 / qones };
+        experts.push(ExpertHit { idx: i, layer, expert, res });
+    }
+    if experts.is_empty() {
+        println!("  ✗ No expert phase profiles in crystal — nothing to monitor");
+        return;
+    }
+    experts.sort_by(|a, b| b.res.partial_cmp(&a.res).unwrap_or(std::cmp::Ordering::Equal));
+
+    use std::collections::BTreeMap;
+    let mut by_layer: BTreeMap<usize, Vec<&ExpertHit>> = BTreeMap::new();
+    for x in &experts { by_layer.entry(x.layer).or_default().push(x); }
+
+    println!("  MoE routing trace (top-3 experts per layer, by resonance):");
+    for (layer, hits) in &by_layer {
+        let mut top = hits.clone();
+        top.sort_by(|a, b| b.res.partial_cmp(&a.res).unwrap_or(std::cmp::Ordering::Equal));
+        let s = top.iter().take(3)
+            .map(|h| format!("expert_{:<4} {:.3}", h.expert, h.res))
+            .collect::<Vec<_>>().join("  ");
+        println!("    layers.{:<3} → {}", layer, s);
+    }
+
+    println!("\n  Layer activation profile (oscillogram):");
+    let mut layers_sorted: Vec<(usize, f64, f64)> = by_layer.iter()
+        .map(|(l, hits)| {
+            let mut hs = hits.iter().map(|h| h.res).collect::<Vec<_>>();
+            hs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+            (*l, hs[0], hs.iter().sum::<f64>() / hs.len() as f64)
+        })
+        .collect();
+    layers_sorted.sort_by_key(|(l, _, _)| *l);
+    let maxv = layers_sorted.iter().map(|(_, m, _)| *m).fold(0.0f64, f64::max).max(1e-9);
+    let bars_n = 20usize;
+    for (l, mx, mean) in &layers_sorted {
+        let bars = ((mx / maxv) * bars_n as f64).round() as usize;
+        println!("    L{:03} |{}{} max {:.3} / mean {:.3}",
+            l, "█".repeat(bars), "░".repeat(bars_n - bars), mx, mean);
+    }
+
+    // Phase centroid: OR-accumulation of the top-K activated experts (union
+    // of their bits). Majority vote degenerates to all-zeros on the sparse
+    // binarized HVs; union is the natural phase accumulation operator.
+    let k = 9.min(experts.len());
+    let qwc = qhv.words.len();
+    let mut centroid = vec![0u64; qwc];
+    for h in experts[..k].iter() {
+        let words = &crystal.entries[h.idx].hv.words;
+        for (w, bit) in words.iter().enumerate().take(qwc) {
+            centroid[w] |= *bit;
+        }
+    }
+    let centroid_hv = fuga::Hypervector::from_raw(crystal.dim, centroid);
+    let c_entropy = centroid_hv.entropy();
+    let mut nearest: Vec<(usize, f64)> = crystal.entries.iter().enumerate()
+        .map(|(i, e)| {
+            let overlap: u32 = (0..qwc).map(|w| (centroid_hv.words[w] & e.hv.words[w]).count_ones()).sum();
+            (i, if qones <= 0.0 { 0.0 } else { overlap as f64 / qones })
+        })
+        .collect();
+    nearest.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("\n  Phase centroid (bundle of top-{} activated experts): entropy={:.3}", k, c_entropy);
+    println!("    Collapses to (nearest stored phase labels):");
+    for (i, sim) in nearest.iter().take(5) {
+        if *sim > 0.30 {
+            let e = &crystal.entries[*i];
+            println!("      {:.3}  {}", sim, e.key_text);
+        }
+    }
+    println!();
+}
+
+fn run_decode(text: &str, args: &[String]) {
+    let path = "fuga_crystal.bin";
+    let crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let k: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(12);
+    let dim = crystal.dim;
+
+    // Vocab source: --vocab, else tokenizer.json in CWD, else bundled DeepSeek.
+    let vocab_path = match parse_flag_value(args, 3, "--vocab") {
+        Some(p) => p.to_string(),
+        None => {
+            if std::path::Path::new("tokenizer.json").exists() {
+                "tokenizer.json".to_string()
+            } else {
+                "/tmp/opencode/ds_tokenizer.json".to_string()
+            }
+        }
+    };
+    let tokens = if vocab_path.ends_with(".json") {
+        match fuga::core::tokenizer_bridge::load_vocab_from_tokenizer_json(&vocab_path) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("  ✗ {}", e); return; }
+        }
+    } else {
+        match fuga::core::tokenizer_bridge::load_vocab_from_txt(&vocab_path) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("  ✗ {}", e); return; }
+        }
+    };
+
+    println!("═══ Semantic Decoder (VSA → Token) ═══\n");
+    println!("  Signal: {}\n  Vocab:  {} ({} tokens, dim {})\n", text, vocab_path, tokens.len(), dim);
+
+    let t0 = std::time::Instant::now();
+    let bridge = fuga::core::tokenizer_bridge::TokenBridge::new(tokens, dim);
+    println!("  Phase dictionary materialized in {:.2?}", t0.elapsed());
+
+    // --- 1) Token-space round-trip: decode the raw signal into subwords ---
+    let q = fuga::core::tokenizer_bridge::encode_str(text, dim);
+    println!("\n  1) TOKEN-SPACE ROUND-TRIP (nearest tokens to signal):");
+    for (tok, res) in bridge.nearest(&q, k) {
+        if res > 0.02 {
+            println!("      {:.3}  {:?}", res, tok);
+        }
+    }
+
+    // --- 2) Cross-domain bridge: each resonant crystal label is real text;
+    //      encode it with the same VSA encoder and decode its own subwords.
+    //      (Aggregating labels into one OR-HV drowns the signal in density.)
+    let qones = q.words.iter().map(|w| w.count_ones()).sum::<u32>() as f64;
+    let mut label_scores: Vec<(usize, f64)> = crystal.entries.iter().enumerate()
+        .map(|(i, e)| {
+            let overlap: u32 = (0..q.words.len()).map(|w| (q.words[w] & e.hv.words[w]).count_ones()).sum();
+            (i, if qones <= 0.0 { 0.0 } else { overlap as f64 / qones })
+        })
+        .collect();
+    label_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("\n  2) CROSS-DOMAIN BRIDGE (crystal resonance → tokens):");
+    for (i, _) in label_scores.iter().take(4) {
+        let label = &crystal.entries[*i].key_text;
+        let lhv = fuga::core::tokenizer_bridge::encode_str(label, dim);
+        let toks: Vec<String> = bridge.nearest(&lhv, 3)
+            .into_iter().map(|(t, _)| t).collect();
+        println!("      {:?} → {}", label, toks.join(" · "));
+    }
+    println!();
+}
+
+fn run_phase_codegen(text: &str, args: &[String]) {
+    let path = "fuga_crystal.bin";
+    let crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let lang = parse_flag_value(args, 3, "--lang").unwrap_or("rust").to_string();
+    let k: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(6);
+    let dim = crystal.dim;
+
+    let vocab_path = match parse_flag_value(args, 3, "--vocab") {
+        Some(p) => p.to_string(),
+        None => {
+            if std::path::Path::new("tokenizer.json").exists() {
+                "tokenizer.json".to_string()
+            } else {
+                "/tmp/opencode/ds_tokenizer.json".to_string()
+            }
+        }
+    };
+    let tokens = if vocab_path.ends_with(".json") {
+        match fuga::core::tokenizer_bridge::load_vocab_from_tokenizer_json(&vocab_path) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("  ✗ {}", e); return; }
+        }
+    } else {
+        match fuga::core::tokenizer_bridge::load_vocab_from_txt(&vocab_path) {
+            Ok(t) => t,
+            Err(e) => { eprintln!("  ✗ {}", e); return; }
+        }
+    };
+
+    let t0 = std::time::Instant::now();
+    let bridge = fuga::core::tokenizer_bridge::TokenBridge::new(tokens, dim);
+
+    // --- 1) Resonance: which stored phases answer the prompt ---
+    let q = fuga::core::tokenizer_bridge::encode_str(text, dim);
+    let qones = q.words.iter().map(|w| w.count_ones()).sum::<u32>() as f64;
+    let mut label_scores: Vec<(usize, f64)> = crystal.entries.iter().enumerate()
+        .map(|(i, e)| {
+            let overlap: u32 = (0..q.words.len()).map(|w| (q.words[w] & e.hv.words[w]).count_ones()).sum();
+            (i, if qones <= 0.0 { 0.0 } else { overlap as f64 / qones })
+        })
+        .collect();
+    label_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let top: Vec<(usize, f64)> = label_scores.iter().take(k).cloned().collect();
+
+    // --- 2) Decode each resonant label into seed words (naming material) ---
+    let mut seeds: Vec<String> = Vec::new();
+    let mut expert_ids: Vec<u32> = Vec::new();
+    let mut layer_ids: Vec<u32> = Vec::new();
+    for (i, _) in &top {
+        let label = &crystal.entries[*i].key_text;
+        let lhv = fuga::core::tokenizer_bridge::encode_str(label, dim);
+        for (tok, _) in bridge.nearest(&lhv, 4) {
+            if is_name_token(&tok) && !seeds.contains(&tok) {
+                seeds.push(tok);
+            }
+        }
+        // Named parts of the label (gate/weight/ffn/expert/…) are seed material too.
+        for part in label.split(['.', ':', '_']) {
+            if is_name_token(part) && !seeds.iter().any(|s| s == part) {
+                seeds.push(part.to_string());
+            }
+        }
+        if let Some(pos) = label.find("layers.") {
+            let num = label[pos + 7..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>();
+            if let Ok(n) = num.parse::<u32>() { layer_ids.push(n); }
+        }
+        if let Some(epos) = label.find("expert_") {
+            let num = label[epos + 7..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>();
+            if let Ok(n) = num.parse::<u32>() { expert_ids.push(n); }
+        }
+    }
+    if seeds.is_empty() { seeds.push("phase".to_string()); }
+    let name = capitalize(&seeds[0]);
+
+    // --- 3) Emit resonance-driven scaffolding ---
+    println!("═══ Phase Code Generator (resonance → code) ═══\n");
+    println!("  Prompt: {}\n  Lang:   {}\n  Vocab:  {} ({} tokens, dim {})\n", text, lang, vocab_path, bridge.tokens.len(), dim);
+    println!("  Resonance materialized in {:.2?}\n", t0.elapsed());
+
+    println!("  Phase provenance (top-{} resonant stored phases):", k);
+    for (i, res) in &top {
+        let e = &crystal.entries[*i];
+        println!("    {:>6.3}  {:?}  {}", res, e.key_text, e.text.lines().next().unwrap_or(""));
+    }
+    println!();
+
+    let has = |w: &str| seeds.iter().any(|s| s.contains(w));
+    let features: Vec<&str> = ["attention", "gate", "up", "down", "norm", "router", "token", "embed", "weight", "bias"]
+        .iter().filter(|f| has(f)).copied().collect();
+
+    if lang == "cpp" {
+        print_cpp_code(name, dim, k, &features, &expert_ids, &layer_ids);
+    } else {
+        print_rust_code(name, dim, k, &features, &expert_ids, &layer_ids);
+    }
+}
+
+fn is_name_token(tok: &str) -> bool {
+    let t = tok.trim_matches('▁');
+    t.len() >= 3 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !t.chars().all(|c| c.is_ascii_digit())
+}
+
+fn capitalize(s: &str) -> String {
+    let t = s.trim_start_matches('▁');
+    let mut c = t.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => "Phase".to_string(),
+    }
+}
+
+fn print_rust_code(name: String, dim: usize, k: usize, features: &[&str], experts: &[u32], layers: &[u32]) {
+    let mut fields = String::new();
+    let mut methods = String::new();
+    for f in features {
+        match *f {
+            "attention" => {
+                fields.push_str("    /// Resonance-driven: scaled dot-product attention.\n    pub attention_scale: f32,\n");
+                methods.push_str("    pub fn attention(&self, q: &[f32], k: &[f32]) -> f32 {\n        let s: f32 = q.iter().zip(k.iter()).map(|(a, b)| a * b).sum();\n        s * self.attention_scale\n    }\n\n");
+            }
+            "gate" => {
+                fields.push_str("    /// Resonance-driven: gated activation weight.\n    pub gate_weight: f32,\n");
+                methods.push_str("    pub fn gate(&self, x: f32) -> f32 { x * self.gate_weight }\n\n");
+            }
+            "norm" => {
+                fields.push_str("    /// Resonance-driven: layer-normalization epsilon.\n    pub norm_eps: f32,\n");
+                methods.push_str("    pub fn normalize(&self, x: &[f32]) -> f32 {\n        let mean = x.iter().sum::<f32>() / x.len() as f32;\n        let var = x.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / x.len() as f32;\n        (x[0] - mean) / (var + self.norm_eps).sqrt()\n    }\n\n");
+            }
+            "router" => {
+                fields.push_str("    /// Resonance-driven: top-k MoE router threshold.\n    pub route_cap: u16,\n");
+                methods.push_str("    pub fn route(&self, score: f32) -> bool { score > 0.35 }\n\n");
+            }
+            "embed" | "token" => {
+                fields.push_str("    /// Resonance-driven: embedding dimension.\n    pub embed_dim: usize,\n");
+                methods.push_str("    pub fn embed(&self, token: u32) -> u32 { token % self.embed_dim as u32 }\n\n");
+            }
+            _ => {
+                fields.push_str(&format!("    /// Resonance-driven field: {}.\n    pub {}_gain: f32,\n", f, f));
+                methods.push_str(&format!("    pub fn {}_step(&self, x: f32) -> f32 {{ x * self.{}_gain }}\n\n", f, f));
+            }
+        }
+    }
+    if fields.is_empty() {
+        fields.push_str("    /// Resonance-driven: model dimension.\n    pub dim: usize,\n");
+        methods.push_str("    pub fn forward(&self, x: &[f32]) -> f32 { x.iter().sum::<f32>() / x.len() as f32 }\n\n");
+    }
+
+    println!("// Generated by `fuga codegen` — resonance-driven scaffolding.\n");
+    println!("pub const MODEL_DIM: usize = {};", dim);
+    println!("pub const TOP_K: usize = {};", k.max(1));
+    if !experts.is_empty() {
+        println!("pub const EXPERT_IDS: [u32; {}] = {:?};", experts.len(), experts);
+    }
+    if !layers.is_empty() {
+        println!("pub const LAYER_IDS: [u32; {}] = {:?};", layers.len(), layers);
+    }
+    println!();
+    println!("pub struct {} {{", name);
+    println!("{}", fields.trim_end_matches('\n'));
+    println!("}}\n");
+    println!("impl {} {{", name);
+    println!("    pub fn new(dim: usize) -> Self {{");
+    println!("        Self {{");
+    for f in features {
+        match *f {
+            "attention" => println!("            attention_scale: 0.7071,"),
+            "gate" => println!("            gate_weight: 1.0,"),
+            "norm" => println!("            norm_eps: 1e-5,"),
+            "router" => println!("            route_cap: 1024,"),
+            "embed" | "token" => println!("            embed_dim: dim,"),
+            _ => println!("            {}_gain: 1.0,", f),
+        }
+    }
+    if features.is_empty() { println!("            dim,"); }
+    println!("        }}");
+    println!("    }}\n");
+    println!("{}", methods.trim_end_matches('\n'));
+    println!("}}\n");
+}
+
+fn print_cpp_code(name: String, dim: usize, k: usize, features: &[&str], experts: &[u32], layers: &[u32]) {
+    println!("// Generated by `fuga codegen` — resonance-driven scaffolding.\n");
+    println!("#pragma once");
+    println!("#include <vector>\n");
+    println!("namespace phase {{");
+    println!("static constexpr std::size_t MODEL_DIM = {};", dim);
+    println!("static constexpr int TOP_K = {};", k.max(1));
+    if !experts.is_empty() {
+        println!("static constexpr int EXPERT_IDS[{}] = {{{}}};", experts.len(), experts.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
+    }
+    println!();
+    println!("struct {} {{", name);
+    for f in features {
+        match *f {
+            "attention" => println!("    float attention_scale{{0.7071f}}; // resonance-driven"),
+            "gate" => println!("    float gate_weight{{1.0f}};        // resonance-driven"),
+            "norm" => println!("    float norm_eps{{1e-5f}};         // resonance-driven"),
+            "router" => println!("    unsigned route_cap{{1024}};      // resonance-driven"),
+            "embed" | "token" => println!("    std::size_t embed_dim{{MODEL_DIM}};"),
+            _ => println!("    float {}_gain{{1.0f}};", f),
+        }
+    }
+    if features.is_empty() { println!("    std::size_t dim{{MODEL_DIM}};"); }
+    println!();
+    println!("    float forward(const std::vector<float>& x) const {{");
+    if features.contains(&"norm") {
+        println!("        float mean = 0.0f;");
+        println!("        for (float v : x) mean += v;");
+        println!("        mean /= static_cast<float>(x.size());");
+        println!("        float var = 0.0f;");
+        println!("        for (float v : x) var += (v - mean) * (v - mean);");
+        println!("        var /= static_cast<float>(x.size());");
+        println!("        return (x[0] - mean) / std::sqrt(var + norm_eps);");
+    } else {
+        println!("        float acc = 0.0f;");
+        println!("        for (float v : x) acc += v;");
+        println!("        return acc / static_cast<float>(x.size());");
+    }
+    println!("    }}");
+    println!("}};\n}} // namespace phase\n");
+}
+
+fn run_crystal_test() {
+    let path = "fuga_crystal.bin";
+    let crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    println!("═══ Crystal Test Suite ═══\n");
+    println!("  {}", crystal.stats());
+
+    // Test 1: O(1) exact-key retrieval speed (pure hashmap hit, no scan)
+    let mut probe = 0usize;
+    for (i, e) in crystal.entries.iter().enumerate() {
+        if e.kind == fuga::KIND_L1 && !e.key_text.is_empty() {
+            probe = i; break;
+        }
+    }
+    if crystal.entries.is_empty() {
+        eprintln!("  ✗ Empty crystal"); return;
+    }
+    let sample_key = crystal.entries[probe].key_text.clone();
+    let n_rep = 10000;
+    let start = std::time::Instant::now();
+    let mut hits = 0usize;
+    for _ in 0..n_rep {
+        if crystal.query(&sample_key).is_some() { hits += 1; }
+    }
+    let elapsed = start.elapsed();
+    println!("\n  1) O(1) KEY RETRIEVAL: {} exact-key queries in {:.2?} = {:.1} ns/query  ({} hits)",
+        n_rep, elapsed, elapsed.as_nanos() as f64 / n_rep as f64, hits);
+
+    // Test 1b: resonator matrix scan over the full dump
+    let sample_text = crystal.entries[probe].text.clone();
+    let n_scan = 1000;
+    let start = std::time::Instant::now();
+    let mut scan_hits = 0usize;
+    for _ in 0..n_scan {
+        if crystal.query(&sample_text).is_some() { scan_hits += 1; }
+    }
+    let el = start.elapsed();
+    println!("      MATRIX SCAN:   {} fuzzy queries over {} entries in {:.2?} = {:.1} µs/query ({} hits)",
+        n_scan, crystal.entries.len(), el, el.as_micros() as f64 / n_scan as f64, scan_hits);
+
+    // Test 2: no-match → silence (no hallucination)
+    let noise = "zzzqxwv asdfgh jklpoiu mnbvcx rtyuiop 1234567890 qwertyuiopasdfghjkl";
+    let r2 = crystal.query(noise);
+    println!("\n  2) NO-MATCH → SILENCE: query '{}…'", &noise[..20]);
+    match r2 {
+        Some(h) => println!("     ✗ FALSE POSITIVE (resonance {:.3})", h.resonance),
+        None => println!("     ✓ suppressed — no resonance, no generation"),
+    }
+
+    // Test 3: exact pattern match
+    let r3 = crystal.query(&sample_key);
+    println!("\n  3) EXACT MATCH:  '{}'", sample_key);
+    match r3 {
+        Some(h) => println!("     ✓ phase response fired (resonance {:.3})", h.resonance),
+        None => println!("     ✗ missed exact pattern"),
+    }
+
+    // Test 4: ambiguity probe
+    let ambiguous = "fn ambiguous_function_xyz { }";
+    let r4 = crystal.query(ambiguous);
+    println!("\n  4) AMBIGUITY PROBE: '{}'", ambiguous);
+    match r4 {
+        Some(h) => println!("     → matched {} (resonance {:.3})", h.entry.text.lines().next().unwrap_or(""), h.resonance),
+        None => println!("     → no strong resonance, clean reset"),
+    }
+    println!();
+}
+
+fn run_crystal_learn(key: &str, text: &str, args: &[String]) {
+    let path = "fuga_crystal.bin";
+    let mut crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let alpha: f64 = parse_flag_value(args, 4, "--alpha")
+        .and_then(|s| s.parse().ok()).unwrap_or(0.2);
+    let out = parse_flag_value(args, 4, "--out")
+        .map(|s| s.to_string()).unwrap_or_else(|| path.to_string());
+    let before = crystal.entries.len();
+    let (idx, updated) = crystal.learn(key, text, alpha);
+    let after = crystal.entries.len();
+    match crystal.save(&out) {
+        Ok(_) => {
+            println!("  {} '{}' (alpha={:.2}, {} → {} entries, idx {})",
+                if updated { "✓ HEBB-UPDATED" } else { "✓ LEARNED" }, key, alpha, before, after, idx);
+            println!("  text: {}", text);
+            println!("  saved to {}", out);
+        }
+        Err(e) => eprintln!("  ✗ {}", e),
+    }
+}
+
+/// Incrementally learn a corpus directory: chunk long files, learn each
+/// chunk as its own keyed phase. Keys are `relpath#chunk_idx` so repeated
+/// runs Hebb-update instead of duplicating.
+fn run_crystal_learn_dir(dir: &str, args: &[String]) {
+    let path = parse_flag_value(args, 4, "--from")
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "fuga_crystal.bin".to_string());
+    let mut crystal = match fuga::PhaseCrystal::load(&path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let alpha: f64 = parse_flag_value(args, 4, "--alpha")
+        .and_then(|s| s.parse().ok()).unwrap_or(0.2);
+    let chunk_words: usize = parse_flag_value(args, 4, "--chunk")
+        .and_then(|s| s.parse().ok()).unwrap_or(512);
+    let max_chunks: usize = parse_flag_value(args, 4, "--max-chunks")
+        .and_then(|s| s.parse().ok()).unwrap_or(32);
+    let out = parse_flag_value(args, 4, "--out")
+        .map(|s| s.to_string()).unwrap_or_else(|| path.to_string());
+    let threshold: Option<f64> = parse_flag_value(args, 4, "--threshold")
+        .and_then(|s| s.parse().ok());
+
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(d) {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                // Don't follow symlinks: corpus dirs mount full upstream
+                // repos via symlink and the target corpus is the real files.
+                let meta = match ent.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if meta.is_file() {
+                    out.push(p);
+                } else if meta.is_dir() {
+                    walk(&p, out);
+                }
+            }
+        }
+    }
+    walk(std::path::Path::new(dir), &mut files);
+    files.sort();
+    if files.is_empty() {
+        eprintln!("  ✗ no files in {}", dir);
+        return;
+    }
+
+    let before = crystal.entries.len();
+    let mut learned = 0usize;
+    let mut updated = 0usize;
+    let t0 = std::time::Instant::now();
+
+    for (fi, file) in files.iter().enumerate() {
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let words: Vec<&str> = content.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        let nchunks = words.len().div_ceil(chunk_words).min(max_chunks);
+        for ci in 0..nchunks {
+            let start = ci * chunk_words;
+            let end = (start + chunk_words).min(words.len());
+            if start >= words.len() {
+                continue;
+            }
+            let chunk = words[start..end].join(" ");
+            let key = format!("{}#{}", file.display(), ci);
+            let (_idx, upd) = crystal.learn(&key, &chunk, alpha);
+            if upd { updated += 1 } else { learned += 1 }
+        }
+        if (fi + 1) % 10 == 0 {
+            println!("  ... {} / {} files ({} chunks)", fi + 1, files.len(), learned + updated);
+        }
+    }
+
+    let after = crystal.entries.len();
+    if let Some(t) = threshold {
+        crystal.threshold = t;
+        println!("  threshold -> {:.2}", t);
+    }
+    match crystal.save(&out) {
+        Ok(_) => {
+            println!("  ✓ learned {} chunks from {} files ({} new, {} hebb-updated, {:.2}s)",
+                learned + updated, files.len(), learned, updated, t0.elapsed().as_secs_f64());
+            println!("  {} -> {}", before, after);
+            println!("  saved to {}", out);
+        }
+        Err(e) => eprintln!("  ✗ {}", e),
+    }
+}
+
+fn run_crystal_forget(key: &str, args: &[String]) {
+    let path = "fuga_crystal.bin";
+    let mut crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    let out = parse_flag_value(args, 4, "--out")
+        .map(|s| s.to_string()).unwrap_or_else(|| path.to_string());
+    if crystal.forget(key) {
+        match crystal.save(&out) {
+            Ok(_) => println!("  ✓ FORGOTTEN '{}' (now {} entries), saved to {}", key, crystal.entries.len(), out),
+            Err(e) => eprintln!("  ✗ {}", e),
+        }
+    } else {
+        println!("  ✗ '{}' not found — nothing to forget", key);
+    }
+}
+
+fn run_crystal_stats(path: &str) {
+    match fuga::PhaseCrystal::load(path) {
+        Ok(c) => println!("  {}", c.stats()),
+        Err(e) => eprintln!("  ✗ {}", e),
+    }
+}
+
+fn run_crystal_popcount(text: &str) {
+    let path = "fuga_crystal.bin";
+    let crystal = match fuga::PhaseCrystal::load(path) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("  ✗ {}", e); return; }
+    };
+    println!("═══ Popcount(Query XOR Dump) ═══\n");
+    println!("  Query: {}\n", text);
+    let (n, top5) = crystal.popcount_scan(text);
+    println!("  Scanned {} entries. Top-5 by minimum XOR popcount:", n);
+    for (i, pc) in top5 {
+        let e = &crystal.entries[i];
+        println!("    #{:4} popcount={} kind={} route={} :: {}",
+            i, pc, e.kind, e.route, e.text.lines().next().unwrap_or(""));
+    }
+}
+
+fn run_transpile(args: &[String]) {
+    let mut sources: Vec<String> = Vec::new();
+    let mut select: Vec<String> = Vec::new();
+    let mut keep: Vec<String> = vec!["embed".into(), "lm_head".into(), "gate".into(), "router".into()];
+    let mut finalize_out: Option<String> = None;
+    let mut dry_run = false;
+    let mut max_tensors: Option<usize> = None;
+    let mut max_shards: Option<usize> = None;
+    let mut revision = String::new();
+    let mut whole = false;
+    let mut state_file: Option<String> = None;
+    let mut concurrency = 8usize;
+    let mut raw = false;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--select" => { i += 1; if i < args.len() { select.push(args[i].clone()); } }
+            "--keep" => { i += 1; if i < args.len() { keep.push(args[i].clone()); } }
+            "--finalize" => { i += 1; if i < args.len() { finalize_out = Some(args[i].clone()); } }
+            "--max-tensors" => { i += 1; max_tensors = args.get(i).and_then(|s| s.parse().ok()); }
+            "--max-shards" => { i += 1; max_shards = args.get(i).and_then(|s| s.parse().ok()); }
+            "--revision" => { i += 1; if i < args.len() { revision = args[i].clone(); } }
+            "--state" => { i += 1; if i < args.len() { state_file = Some(args[i].clone()); } }
+            "--concurrency" => { i += 1; concurrency = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(8); }
+            "--whole" => whole = true,
+            "--raw" => raw = true,
+            "--dry-run" => dry_run = true,
+            s if s.starts_with("--") => { eprintln!("  ✗ unknown flag: {}", s); return; }
+            s => sources.push(s.to_string()),
+        }
+        i += 1;
+    }
+    if sources.is_empty() {
+        eprintln!("Usage: fuga transpile <safetensors file|dir|hf-repo-id|url>… [--select S] [--keep K] [--finalize out] [--dry-run] [--max-tensors N] [--max-shards N] [--revision R] [--whole] [--raw] [--state FILE] [--concurrency N]");
+        return;
+    }
+
+    println!("═══ Streaming Transpilation ═══\n");
+    let mut acc = match &state_file {
+        Some(path) if std::path::Path::new(path).exists() => {
+            match fuga::TranspileAccumulator::load_state(path) {
+                Ok(a) => {
+                    println!("  ✓ resumed from state {} ({} tensors, {} entries, {} shards done)", path, a.processed, a.entries.len(), a.done.len());
+                    a
+                }
+                Err(e) => { eprintln!("  ✗ load state {}: {}", path, e); return; }
+            }
+        }
+        _ => fuga::TranspileAccumulator::new(fuga::DEFAULT_DIM),
+    };
+    let cfg = fuga::TranspileConfig { select, keep, max_tensors, max_shards, dry_run, route_cap: if raw { 0 } else { fuga::ROUTE_CAP }, whole, concurrency, raw };
+
+    let mut shards: Vec<fuga::ShardSource> = Vec::new();
+    for s in &sources {
+        if fuga::is_repo_id(s) {
+            match fuga::list_hf_shards(s, &revision) {
+                Ok(list) => {
+                    let mut list = list;
+                    if let Some(n) = max_shards {
+                        list.truncate(n);
+                    }
+                    println!("  repo {}: {} safetensors shards", s, list.len());
+                    for (path, size) in list {
+                        println!("    {} ({:.1} GB)", path, size as f64 / 1_073_741_824.0);
+                        shards.push(fuga::ShardSource::Remote { base_url: fuga::hf_resolve_url(s, &path, &revision) });
+                    }
+                }
+                Err(e) => eprintln!("  ✗ list {}: {}", s, e),
+            }
+        } else if let Some(url) = s.strip_prefix("http://").or_else(|| s.strip_prefix("https://")) {
+            shards.push(fuga::ShardSource::Remote { base_url: s.clone() });
+            let _ = url;
+        } else if std::path::Path::new(s).is_dir() {
+            let mut found = 0usize;
+            for entry in std::fs::read_dir(s).map_err(|e| eprintln!("  ✗ read dir: {}", e)).ok().into_iter().flatten() {
+                if let Ok(e) = entry {
+                    let p = e.path();
+                    if p.extension().map(|x| x == "safetensors").unwrap_or(false) {
+                        shards.push(fuga::ShardSource::Local { path: p.to_string_lossy().into_owned() });
+                        found += 1;
+                    }
+                }
+            }
+            println!("  dir {}: {} safetensors shards", s, found);
+        } else {
+            shards.push(fuga::ShardSource::Local { path: s.clone() });
+        }
+    }
+
+    for shard in &shards {
+        let label = match shard {
+            fuga::ShardSource::Local { path } => path.clone(),
+            fuga::ShardSource::Remote { base_url } => base_url.clone(),
+        };
+        if acc.done.contains(&label) {
+            println!("  ✓ {} (already done, resumed)", label);
+            continue;
+        }
+        match fuga::transpile_shard(shard, &mut acc, &cfg) {
+            Ok(st) => {
+                acc.done.push(label.clone());
+                if let Some(path) = &state_file {
+                    match acc.save_state(path) {
+                        Ok(_) => println!("  ✓ state saved to {} ({} shards done)", path, acc.done.len()),
+                        Err(e) => eprintln!("  ✗ save state: {}", e),
+                    }
+                }
+                println!("  ✓ {}: {} tensors, {:.1} MB, {} entries, {:.1} MB/s, {:.2?}",
+                    st.shard, st.tensors, st.bytes as f64 / 1_048_576.0, st.entries_added, st.mbps, st.elapsed);
+            }
+            Err(e) => eprintln!("  ✗ {}: {}", label, e),
+        }
+    }
+
+    println!("\n  {}", acc.stats());
+    if !acc.skipped.is_empty() {
+        println!("  skipped:");
+        for s in acc.skipped.iter().take(20) { println!("    {}", s); }
+        if acc.skipped.len() > 20 { println!("    … {} more", acc.skipped.len() - 20); }
+    }
+
+    if let Some(out) = finalize_out {
+        let crystal = acc.finalize(fuga::DEFAULT_RESONANCE_THRESHOLD);
+        println!("\n  {}", crystal.stats());
+        match crystal.save(&out) {
+            Ok(_) => println!("  ✓ Crystal saved to {}", out),
+            Err(e) => eprintln!("  ✗ {}", e),
+        }
+    } else {
+        println!("  (use --finalize <out> to emit the crystal dump)");
+    }
 }
 
 fn run_self_query(text: &str) {

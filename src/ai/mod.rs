@@ -31,4 +31,12 @@ pub use sdr_store::SdrStore;
 pub use htm_temporal::{TemporalMemory, TemporalCell, DendriteSegment, Synapse};
 pub mod temporal_predictor;
 pub mod self_mirror;
+pub mod crystal;
+pub mod transpile;
 pub use anomaly::{AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile};
+pub use crystal::{PhaseCrystal, CrystalHit, CrystalEntry, CRYSTAL_MAGIC, CRYSTAL_VERSION, DEFAULT_DIM, DEFAULT_RESONANCE_THRESHOLD, KIND_L0, KIND_L1, KIND_L2, fnv1a};
+pub use transpile::{
+    TranspileAccumulator, TranspileConfig, TranspileStats, ShardSource, StTensor, Dtype,
+    WeightSketch, parse_safetensors_header, binarize_tensor, kind_for_name, transpile_shard,
+    list_hf_shards, hf_resolve_url, ROUTE_CAP, CONCEPT_L0, CONCEPT_L1, CONCEPT_L2,
+};

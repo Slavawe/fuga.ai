@@ -81,9 +81,9 @@ impl TemporalPredictor {
 
     pub fn feed(&mut self, text: &str) -> (f64, f64, f64) {
         let sdr = encode_text(text);
-        let (_tm_pred, tm_match) = self.tm.feed(&sdr);
+        let (tm_pred, tm_match) = self.tm.feed(&sdr);
 
-        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        let hv = sdr_to_hypervector(&tm_pred, self.hjepa.dim);
         self.buffer.push(hv);
         if self.buffer.len() > self.buf_capacity {
             self.buffer.remove(0);
@@ -112,9 +112,9 @@ impl TemporalPredictor {
 
     pub fn feed_learn(&mut self, text: &str) -> (f64, Vec<f64>) {
         let sdr = encode_text(text);
-        let (_tm_pred, tm_match) = self.tm.feed(&sdr);
+        let (tm_pred, tm_match) = self.tm.feed(&sdr);
 
-        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        let hv = sdr_to_hypervector(&tm_pred, self.hjepa.dim);
         self.buffer.push(hv);
         if self.buffer.len() > self.buf_capacity {
             self.buffer.remove(0);
@@ -158,9 +158,9 @@ impl TemporalPredictor {
 
     pub fn feed_learn_no_tm(&mut self, text: &str) -> Vec<f64> {
         let sdr = encode_text(text);
-        let (_tm_pred, _tm_match) = self.tm.feed_no_learn(&sdr);
+        let (tm_pred, _tm_match) = self.tm.feed_no_learn(&sdr);
 
-        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        let hv = sdr_to_hypervector(&tm_pred, self.hjepa.dim);
         self.buffer.push(hv);
         if self.buffer.len() > self.buf_capacity {
             self.buffer.remove(0);
@@ -203,9 +203,9 @@ impl TemporalPredictor {
 
     pub fn feed_learn_ff(&mut self, text: &str, neg_pool: &[Hypervector]) -> Vec<f64> {
         let sdr = encode_text(text);
-        let (_tm_pred, _tm_match) = self.tm.feed_no_learn(&sdr);
+        let (tm_pred, _tm_match) = self.tm.feed_no_learn(&sdr);
 
-        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        let hv = sdr_to_hypervector(&tm_pred, self.hjepa.dim);
         self.buffer.push(hv);
         if self.buffer.len() > self.buf_capacity {
             self.buffer.remove(0);
@@ -248,9 +248,9 @@ impl TemporalPredictor {
 
     pub fn generate(&mut self, text: &str, steps: usize) -> Vec<Hypervector> {
         let sdr = encode_text(text);
-        self.tm.feed(&sdr);
+        let (tm_pred, _) = self.tm.feed(&sdr);
 
-        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        let hv = sdr_to_hypervector(&tm_pred, self.hjepa.dim);
         self.buffer.push(hv);
         if self.buffer.len() > self.buf_capacity {
             self.buffer.remove(0);
@@ -262,6 +262,43 @@ impl TemporalPredictor {
 
         let ctx: Vec<&Hypervector> = self.buffer.iter().collect();
         self.hjepa.predict_sequence(&ctx, steps)
+    }
+
+    pub fn feed_learn_hv_only(&mut self, text: &str) -> Vec<f64> {
+        let sdr = encode_text(text);
+        let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+        self.buffer.push(hv);
+        if self.buffer.len() > self.buf_capacity {
+            self.buffer.remove(0);
+        }
+        if self.buffer.len() < self.hjepa.levels[0].context_len + 1 {
+            return vec![1.0; 3];
+        }
+        let buf_minus_1 = self.buffer.len() - 1;
+        let ctx: Vec<&Hypervector> = self.buffer[..buf_minus_1].iter().collect();
+        let actual = &self.buffer[buf_minus_1];
+        let l0_ctx_end = buf_minus_1;
+        let l0_start = l0_ctx_end.saturating_sub(self.hjepa.levels[0].context_len);
+        let l0_ctx: Vec<&Hypervector> = self.buffer[l0_start..l0_ctx_end].iter().collect();
+        let l0_pred = self.hjepa.levels[0].predict(&l0_ctx);
+        let l1_pred = if buf_minus_1 >= self.hjepa.levels[0].context_len + self.hjepa.levels[1].context_len {
+            let l1_ctx_end = buf_minus_1 - self.hjepa.levels[0].context_len;
+            let l1_start = l1_ctx_end.saturating_sub(self.hjepa.levels[1].context_len);
+            let l1_ctx: Vec<&Hypervector> = self.buffer[l1_start..l1_ctx_end].iter().collect();
+            Some(self.hjepa.levels[1].predict(&l1_ctx))
+        } else {
+            None
+        };
+        let mut actuals: Vec<Hypervector> = Vec::new();
+        actuals.push(actual.clone());
+        if let Some(ref l1) = l1_pred {
+            actuals.push(l1.clone());
+        } else {
+            actuals.push(l0_pred.clone());
+        }
+        actuals.push(l0_pred.clone());
+        let actual_refs: Vec<&Hypervector> = actuals.iter().collect();
+        self.hjepa.learn(&ctx, &actual_refs)
     }
 
     pub fn stats(&self) -> String {

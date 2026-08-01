@@ -124,6 +124,28 @@ impl SelfMirror {
                 }
             }
         }
+        if let Ok(data) = std::fs::read("fuga_token_vocab.bin") {
+            let mut pos = 0usize;
+            if pos + 4 <= data.len() {
+                let n = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap_or([0u8; 4])) as usize;
+                pos += 4;
+                for _ in 0..n {
+                    if pos + 4 > data.len() { break; }
+                    let tlen = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap_or([0u8; 4])) as usize;
+                    pos += 4;
+                    if pos + tlen > data.len() { break; }
+                    let tok = String::from_utf8(data[pos..pos+tlen].to_vec()).unwrap_or_default();
+                    pos += tlen;
+                    let mut bits = [0u64; 128];
+                    for i in 0..128 {
+                        if pos + 8 > data.len() { break; }
+                        bits[i] = u64::from_le_bytes(data[pos..pos+8].try_into().unwrap_or([0u8; 8]));
+                        pos += 8;
+                    }
+                    mirror.token_vocab.push((tok, SdrVector { bits }));
+                }
+            }
+        }
         Some(mirror)
     }
 
@@ -132,6 +154,18 @@ impl SelfMirror {
         let _ = self.predictor.hjepa.save(MIRROR_JEPA_PATH);
         self.predictor.save_buffer();
         use std::io::Write;
+        if let Ok(mut f) = std::fs::File::create("fuga_token_vocab.bin") {
+            let n = self.token_vocab.len() as u32;
+            f.write_all(&n.to_le_bytes()).ok();
+            for (tok, sdr) in &self.token_vocab {
+                let tb = tok.as_bytes();
+                f.write_all(&(tb.len() as u32).to_le_bytes()).ok();
+                f.write_all(tb).ok();
+                for word in &sdr.bits {
+                    f.write_all(&word.to_le_bytes()).ok();
+                }
+            }
+        }
         if let Ok(mut f) = std::fs::File::create("fuga_mirror_nodes.bin") {
             let n = self.nodes.len() as u32;
             f.write_all(&n.to_le_bytes()).ok();
@@ -209,6 +243,9 @@ impl SelfMirror {
         let mut total_l1 = 0.0f64;
         let mut total_l2 = 0.0f64;
         let mut total_cnt = 0usize;
+        let mut sim_l0 = 0.0f64;
+        let mut sim_l1 = 0.0f64;
+        let mut dbg_modes = self.predictor.hjepa.levels.iter().map(|l| l.mode).collect::<Vec<_>>();
 
         let paths: Vec<String> = self.nodes.iter().map(|n| n.path.clone()).collect::<BTreeSet<_>>().into_iter().collect();
         let max_chunks = 1000usize;
@@ -225,8 +262,8 @@ impl SelfMirror {
                 if processed >= max_chunks { break; }
                 let text = chunk.join(" ");
                 let sdr = encode_text(&text);
-                self.predictor.tm.feed(&sdr);
-                let hv = crate::ai::temporal_predictor::sdr_to_hypervector(&sdr, self.predictor.hjepa.dim);
+                let (tm_pred, _) = self.predictor.tm.feed(&sdr);
+                let hv = crate::ai::temporal_predictor::sdr_to_hypervector(&tm_pred, self.predictor.hjepa.dim);
                 self.predictor.buffer.push(hv);
                 if self.predictor.buffer.len() > self.predictor.buf_capacity {
                     self.predictor.buffer.remove(0);
@@ -239,12 +276,14 @@ impl SelfMirror {
 
                 let l0_sim = self.predictor.hjepa.levels[0].similarity_to_expected(&ctx, actual);
                 total_l0 += 1.0 - l0_sim;
+                sim_l0 += l0_sim;
                 let full_pred = self.predictor.hjepa.predict(&ctx);
                 if full_pred.len() > 2 {
                     let l1_ctx_len = self.predictor.hjepa.levels[1].context_len;
                     let l1_start = ctx.len().saturating_sub(l1_ctx_len);
                     let l1_sim = self.predictor.hjepa.levels[1].similarity_to_expected(&ctx[l1_start..], actual);
                     total_l1 += 1.0 - l1_sim;
+                    sim_l1 += l1_sim;
                     let corrected = &full_pred[2];
                     let c_sim = 1.0 - corrected.hamming_distance(actual);
                     total_l2 += 1.0 - c_sim;
@@ -261,6 +300,7 @@ impl SelfMirror {
 
         let a = |v: f64, c: usize| if c > 0 { v / c as f64 } else { 1.0 };
         println!("\r  Eval: {} chunks", processed);
+        println!("  modes={:?} avg_sim_L0={:.4} avg_sim_L1={:.4}", dbg_modes, a(sim_l0, total_cnt), a(sim_l1, total_cnt));
         format!("L0={:.4} L1={:.4} L2={:.4} samples={}", a(total_l0, total_cnt), a(total_l1, total_cnt), a(total_l2, total_cnt), total_cnt)
     }
 
@@ -624,12 +664,22 @@ impl SelfMirror {
             "Self", "as", "break", "continue", "const", "static", "ref", "where",
             "unsafe", "trait", "impl", "dyn", "move", "box", "await", "async",
         ].into_iter().collect();
-        let paths: Vec<String> = self.nodes.iter().map(|n| n.path.clone()).filter(|p| {
-            p.ends_with(".rs") && allowed_dirs.iter().any(|d| p.contains(d))
-        }).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let mut paths: std::collections::BTreeSet<String> = self.nodes.iter()
+            .map(|n| n.path.clone()).filter(|p| p.ends_with(".rs") && allowed_dirs.iter().any(|d| p.contains(d)))
+            .collect();
+        for corpus_dir in ["crosvm", "sled", "smoltcp"] {
+            let base = format!("/home/slava/fuga/corpus_combined/{}", corpus_dir);
+            for entry in walkdir::WalkDir::new(&base).into_iter().filter_map(|e| e.ok()) {
+                let fp = entry.path();
+                if fp.extension().map(|x| x == "rs").unwrap_or(false) {
+                    paths.insert(fp.to_string_lossy().to_string());
+                }
+            }
+        }
+        let paths_vec: Vec<String> = paths.into_iter().collect();
         let multi_ops: std::collections::HashSet<String> = ["->", "::", "=>", "!=", "==", ">=", "<=", "+=", "-=", "&&", "||"].into_iter().map(|s| s.to_string()).collect();
         let mut sequences: Vec<Vec<String>> = Vec::new();
-        for p in paths.iter().take(20) {
+        for p in paths_vec.iter().take(200) {
             if let Ok(text) = std::fs::read_to_string(p) {
                 let mut tokens: Vec<String> = Vec::new();
                 for word in text.split_whitespace() {
@@ -1233,17 +1283,21 @@ impl SelfMirror {
     }
 
     pub fn train_predictor_chunked(&mut self, epochs: usize, chunk_size: usize) -> f64 {
-        self.train_predictor_inner(epochs, chunk_size, false)
+        self.train_predictor_inner(epochs, chunk_size, false, false)
+    }
+
+    pub fn train_predictor_fast(&mut self, epochs: usize, chunk_size: usize) -> f64 {
+        self.train_predictor_inner(epochs, chunk_size, false, true)
     }
 
     pub fn train_predictor_ff(&mut self, epochs: usize, chunk_size: usize) -> f64 {
-        self.train_predictor_inner(epochs, chunk_size, true)
+        self.train_predictor_inner(epochs, chunk_size, true, false)
     }
 
-    fn train_predictor_inner(&mut self, epochs: usize, chunk_size: usize, use_ff: bool) -> f64 {
+    fn train_predictor_inner(&mut self, epochs: usize, chunk_size: usize, use_ff: bool, skip_tm: bool) -> f64 {
         let paths: BTreeSet<String> = self.nodes.iter().map(|n| n.path.clone()).collect();
         let count = paths.len();
-        let cs = if chunk_size < 1 { 1 } else { chunk_size };
+        let cs = chunk_size.max(1);
         println!("  Re-training HJEPA on {} files ({} epochs, chunk_size={}, ff={})...", count, epochs, cs, use_ff);
         let mut files: Vec<String> = paths.into_iter().collect();
         files.sort();
@@ -1262,33 +1316,68 @@ impl SelfMirror {
         for epoch in 0..epochs {
             let mut epoch_loss = 0.0f64;
             let mut epoch_cnt = 0usize;
-            for (fi, fp) in files.iter().enumerate() {
-                let content = match std::fs::read_to_string(fp) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let words: Vec<&str> = content.split_whitespace().collect();
-                for chunk in words.chunks(cs) {
-                    let errors = if use_ff {
-                        self.predictor.feed_learn_ff(&chunk.join(" "), &neg_pool)
-                    } else {
-                        self.predictor.feed_learn_no_tm(&chunk.join(" "))
+
+            if skip_tm {
+                let pre_w0: f64 = self.predictor.hjepa.levels[0].weights.iter().sum();
+                let pre_w1: f64 = self.predictor.hjepa.levels[1].weights.iter().sum();
+                let pre_w2: f64 = self.predictor.hjepa.levels[2].weights.iter().sum();
+                println!("  Pre-train weights: w0={:.2} w1={:.2} w2={:.2}", pre_w0, pre_w1, pre_w2);
+                for (fi, fp) in files.iter().enumerate() {
+                    let content = match std::fs::read_to_string(fp) {
+                        Ok(c) => c,
+                        Err(_) => continue,
                     };
-                    for &e in &errors {
-                        epoch_loss += e;
+                    let words: Vec<&str> = content.split_whitespace().collect();
+                    for chunk in words.chunks(cs) {
+                        let errors = self.predictor.feed_learn_hv_only(&chunk.join(" "));
+                        for &e in &errors {
+                            epoch_loss += e;
+                        }
+                        epoch_cnt += errors.len();
                     }
-                    epoch_cnt += errors.len();
-                    if use_ff && !self.predictor.buffer.is_empty() {
-                        neg_pool.push(self.predictor.buffer.last().unwrap().clone());
-                        if neg_pool.len() > 200 { neg_pool.remove(0); }
+                    if (fi + 1) % 20 == 0 {
+                        print!("\r  Fast: {}/{} files  chunks={}  loss={:.4}", fi + 1, 200, epoch_cnt, epoch_loss / epoch_cnt.max(1) as f64);
+                        use std::io::{Write, stdout};
+                        stdout().flush().ok();
                     }
                 }
-                if (fi + 1) % 50 == 0 {
-                    print!("\r  Epoch {:3}/{}  file {}/{}  chunks={}", epoch + 1, epochs, fi + 1, files.len(), epoch_cnt);
-                    use std::io::{Write, stdout};
-                    stdout().flush().ok();
+                let post_w0: f64 = self.predictor.hjepa.levels[0].weights.iter().sum();
+                let post_w1: f64 = self.predictor.hjepa.levels[1].weights.iter().sum();
+                let post_w2: f64 = self.predictor.hjepa.levels[2].weights.iter().sum();
+                println!("\r  Trained: {} files, {} chunks  loss={:.4}  w=[{:.2} {:.2} {:.2}] → [{:.2} {:.2} {:.2}] Δ0={:.4}",
+                    200, epoch_cnt, epoch_loss / epoch_cnt.max(1) as f64,
+                    pre_w0, pre_w1, pre_w2, post_w0, post_w1, post_w2, post_w0 - pre_w0);
+            } else {
+                // Original sequential loop (non-fast mode)
+                for (fi, fp) in files.iter().enumerate() {
+                    let content = match std::fs::read_to_string(fp) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let words: Vec<&str> = content.split_whitespace().collect();
+                    for chunk in words.chunks(cs) {
+                        let errors = if use_ff {
+                            self.predictor.feed_learn_ff(&chunk.join(" "), &neg_pool)
+                        } else {
+                            self.predictor.feed_learn_no_tm(&chunk.join(" "))
+                        };
+                        for &e in &errors {
+                            epoch_loss += e;
+                        }
+                        epoch_cnt += errors.len();
+                        if use_ff && !self.predictor.buffer.is_empty() {
+                            neg_pool.push(self.predictor.buffer.last().unwrap().clone());
+                            if neg_pool.len() > 200 { neg_pool.remove(0); }
+                        }
+                    }
+                    if (fi + 1) % 50 == 0 {
+                        print!("\r  Epoch {:3}/{}  file {}/{}  chunks={}", epoch + 1, epochs, fi + 1, files.len(), epoch_cnt);
+                        use std::io::{Write, stdout};
+                        stdout().flush().ok();
+                    }
                 }
             }
+
             let avg = epoch_loss / epoch_cnt.max(1) as f64;
             total_loss += avg;
             total_cnt += 1;
@@ -1446,6 +1535,36 @@ impl SelfMirror {
             }
         }
         reports
+    }
+
+    pub fn evaluate_debug(&mut self) -> String {
+        let mut sim_pred = 0.0f64;
+        let mut sim_baseline = 0.0f64;
+        let mut cnt = 0usize;
+        let paths: Vec<String> = self.nodes.iter().map(|n| n.path.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+        let max_chunks = 500usize;
+        for fp in &paths {
+            if cnt >= max_chunks { break; }
+            let content = match std::fs::read_to_string(fp) { Ok(c) => c, Err(_) => continue };
+            for chunk in content.split_whitespace().collect::<Vec<_>>().chunks(10) {
+                if cnt >= max_chunks { break; }
+                let text = chunk.join(" ");
+                let sdr = encode_text(&text);
+                let (tm_pred, _) = self.predictor.tm.feed(&sdr);
+                let hv = crate::ai::temporal_predictor::sdr_to_hypervector(&tm_pred, self.predictor.hjepa.dim);
+                self.predictor.buffer.push(hv);
+                if self.predictor.buffer.len() > self.predictor.buf_capacity { self.predictor.buffer.remove(0); }
+                if self.predictor.buffer.len() <= self.predictor.hjepa.levels[0].context_len { continue; }
+                let ctx: Vec<&Hypervector> = self.predictor.buffer[..self.predictor.buffer.len()-1].iter().collect();
+                let actual = self.predictor.buffer.last().unwrap();
+                let baseline = ctx[ctx.len()-1];
+                let pred = self.predictor.hjepa.levels[0].predict(&ctx);
+                sim_pred += pred.similarity(actual);
+                sim_baseline += baseline.similarity(actual);
+                cnt += 1;
+            }
+        }
+        format!("DBG sim(pred,actual)={:.4} sim(baseline,actual)={:.4} n={}", sim_pred/cnt as f64, sim_baseline/cnt as f64, cnt)
     }
 }
 

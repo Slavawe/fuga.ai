@@ -4,3 +4,4 @@ pub mod pentagon_storage;
 pub mod wave_cube;
 pub mod fuga_synthesizer;
 pub mod tensor_phase;
+pub mod tokenizer_bridge;

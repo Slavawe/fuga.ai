@@ -6,16 +6,16 @@
 /temp_repos
 /data
 /datasets
-#*.bin
+*.bin
 *.gguf
 *.idx
 *.mmap
 
 # Mirror data (regenerated on each run)
-#fuga_mirror_tm*.bin
-#fuga_mirror_jepa*.bin
-#fuga_mirror_nodes*.bin
-#fuga_buffer.bin
+fuga_mirror_tm*.bin
+fuga_mirror_jepa*.bin
+fuga_mirror_nodes*.bin
+fuga_buffer.bin
 
 # Logs, dumps, configs
 *.log
@@ -36,6 +36,32 @@
 /corpus_src/
 /temp_repos/
 /datasets/
+
+# Local corpora & training data (not source)
+/java_training/
+/workspace/
+/text_done/
+/text_batches/
+/text_corpus_processed/
+/text_skip/
+/text_corpus/
+/text_tiny/
+/tikones/
+/microwave_sandbox/
+/ref/
+/holdout_files.json
+/holdout_llmcpp.json
+/tunnel_url.txt
+/index.html
+/bench_modes.sh
+/results_modes.csv
+/test_bug.rs
+/*.bak
+fuga_crystal*.bin*
+fuga_code_cube*.bin*
+fuga_knowledge_mem.bin
+*_mem.bin
+*_mem.idx
 
 # Agent outputs / ephemeral
 /agent_results/
