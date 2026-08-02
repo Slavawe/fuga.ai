@@ -11,7 +11,9 @@
 // Budget: dim=8192 -> 1KB per vector. L1 route matrix capped at ROUTE_CAP,
 // so a full 30GB model streaming finishes at ~1.1MB on disk.
 
-use crate::ai::crystal::{fnv1a, CrystalEntry, PhaseCrystal, DEFAULT_DIM, DEFAULT_RESONANCE_THRESHOLD, KIND_L0, KIND_L1, KIND_L2};
+use crate::ai::crystal::{
+    CrystalEntry, DEFAULT_DIM, DIM_L2, KIND_L0, KIND_L1, KIND_L2, PhaseCrystal, fnv1a,
+};
 use crate::ai::sdr::SDR_DENSITY;
 use crate::core::hypervector::Hypervector;
 
@@ -66,11 +68,21 @@ impl Dtype {
 
     pub fn label(&self) -> &str {
         match self {
-            Dtype::F32 => "F32", Dtype::F16 => "F16", Dtype::BF16 => "BF16",
-            Dtype::F64 => "F64", Dtype::I64 => "I64", Dtype::I32 => "I32",
-            Dtype::I16 => "I16", Dtype::I8 => "I8", Dtype::U32 => "U32",
-            Dtype::U16 => "U16", Dtype::U8 => "U8", Dtype::F8E4M3 => "F8_E4M3",
-            Dtype::F8E5M2 => "F8_E5M2", Dtype::F8E8M0 => "F8_E8M0", Dtype::F4E2M1 => "F4_E2M1",
+            Dtype::F32 => "F32",
+            Dtype::F16 => "F16",
+            Dtype::BF16 => "BF16",
+            Dtype::F64 => "F64",
+            Dtype::I64 => "I64",
+            Dtype::I32 => "I32",
+            Dtype::I16 => "I16",
+            Dtype::I8 => "I8",
+            Dtype::U32 => "U32",
+            Dtype::U16 => "U16",
+            Dtype::U8 => "U8",
+            Dtype::F8E4M3 => "F8_E4M3",
+            Dtype::F8E5M2 => "F8_E5M2",
+            Dtype::F8E8M0 => "F8_E8M0",
+            Dtype::F4E2M1 => "F4_E2M1",
             Dtype::Unsupported(s) => s,
         }
     }
@@ -96,7 +108,9 @@ fn f16_to_f32(h: u16) -> f32 {
     let exp = (h >> 10) & 0x1f;
     let frac = h & 0x3ff;
     let val = if exp == 0 {
-        if frac == 0 { 0.0 } else {
+        if frac == 0 {
+            0.0
+        } else {
             let f = frac as f32 / 1024.0;
             f * 2f32.powi(-14)
         }
@@ -142,7 +156,11 @@ fn f8e5m2_to_f32(b: u8) -> f32 {
 fn f8e8m0_to_f32(b: u8) -> f32 {
     let sign = (b >> 7) & 1;
     let e = b & 0x7F;
-    let val = if e == 0 { 0.0 } else { 2f32.powi(e as i32 - 127) };
+    let val = if e == 0 {
+        0.0
+    } else {
+        2f32.powi(e as i32 - 127)
+    };
     if sign == 1 { -val } else { val }
 }
 
@@ -162,60 +180,84 @@ fn read_elem(dtype: &Dtype, data: &[u8], elem: usize) -> Option<f64> {
     match dtype {
         Dtype::F32 => {
             let p = elem * 4;
-            if p + 4 > data.len() { return None; }
-            Some(f32::from_le_bytes(data[p..p+4].try_into().ok()?) as f64)
+            if p + 4 > data.len() {
+                return None;
+            }
+            Some(f32::from_le_bytes(data[p..p + 4].try_into().ok()?) as f64)
         }
         Dtype::F16 => {
             let p = elem * 2;
-            if p + 2 > data.len() { return None; }
-            Some(f16_to_f32(u16::from_le_bytes(data[p..p+2].try_into().ok()?)) as f64)
+            if p + 2 > data.len() {
+                return None;
+            }
+            Some(f16_to_f32(u16::from_le_bytes(data[p..p + 2].try_into().ok()?)) as f64)
         }
         Dtype::BF16 => {
             let p = elem * 2;
-            if p + 2 > data.len() { return None; }
-            let bits = (u16::from_le_bytes(data[p..p+2].try_into().ok()?) as u32) << 16;
+            if p + 2 > data.len() {
+                return None;
+            }
+            let bits = (u16::from_le_bytes(data[p..p + 2].try_into().ok()?) as u32) << 16;
             Some(f32::from_bits(bits) as f64)
         }
         Dtype::F64 => {
             let p = elem * 8;
-            if p + 8 > data.len() { return None; }
-            Some(f64::from_le_bytes(data[p..p+8].try_into().ok()?))
+            if p + 8 > data.len() {
+                return None;
+            }
+            Some(f64::from_le_bytes(data[p..p + 8].try_into().ok()?))
         }
         Dtype::I64 => {
             let p = elem * 8;
-            if p + 8 > data.len() { return None; }
-            Some(i64::from_le_bytes(data[p..p+8].try_into().ok()?) as f64)
+            if p + 8 > data.len() {
+                return None;
+            }
+            Some(i64::from_le_bytes(data[p..p + 8].try_into().ok()?) as f64)
         }
         Dtype::I32 | Dtype::U32 => {
             let p = elem * 4;
-            if p + 4 > data.len() { return None; }
-            let raw = i32::from_le_bytes(data[p..p+4].try_into().ok()?);
+            if p + 4 > data.len() {
+                return None;
+            }
+            let raw = i32::from_le_bytes(data[p..p + 4].try_into().ok()?);
             Some(raw as f64)
         }
         Dtype::I16 | Dtype::U16 => {
             let p = elem * 2;
-            if p + 2 > data.len() { return None; }
-            Some(i16::from_le_bytes(data[p..p+2].try_into().ok()?) as f64)
+            if p + 2 > data.len() {
+                return None;
+            }
+            Some(i16::from_le_bytes(data[p..p + 2].try_into().ok()?) as f64)
         }
         Dtype::I8 | Dtype::U8 => {
-            if elem >= data.len() { return None; }
+            if elem >= data.len() {
+                return None;
+            }
             Some(data[elem] as i8 as f64)
         }
         Dtype::F8E4M3 => {
-            if elem >= data.len() { return None; }
+            if elem >= data.len() {
+                return None;
+            }
             Some(f8e4m3_to_f32(data[elem]) as f64)
         }
         Dtype::F8E5M2 => {
-            if elem >= data.len() { return None; }
+            if elem >= data.len() {
+                return None;
+            }
             Some(f8e5m2_to_f32(data[elem]) as f64)
         }
         Dtype::F8E8M0 => {
-            if elem >= data.len() { return None; }
+            if elem >= data.len() {
+                return None;
+            }
             Some(f8e8m0_to_f32(data[elem]) as f64)
         }
         Dtype::F4E2M1 => {
             let byte = elem / 2;
-            if byte >= data.len() { return None; }
+            if byte >= data.len() {
+                return None;
+            }
             let b = data[byte];
             let n = if elem % 2 == 0 { b & 0x0f } else { b >> 4 };
             Some(f4e2m1_to_f32(n) as f64)
@@ -248,10 +290,14 @@ pub fn parse_safetensors_header(bytes: &[u8]) -> Result<(String, Vec<StTensor>),
     }
     let n = u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
     if bytes.len() < 8 + n {
-        return Err(format!("incomplete header: need {} bytes, got {}", 8 + n, bytes.len()));
+        return Err(format!(
+            "incomplete header: need {} bytes, got {}",
+            8 + n,
+            bytes.len()
+        ));
     }
-    let json: serde_json::Value = serde_json::from_slice(&bytes[8..8 + n])
-        .map_err(|e| format!("bad header JSON: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes[8..8 + n]).map_err(|e| format!("bad header JSON: {}", e))?;
     let obj = json.as_object().ok_or("header is not an object")?;
     let mut metadata = String::new();
     let mut tensors = Vec::new();
@@ -260,14 +306,26 @@ pub fn parse_safetensors_header(bytes: &[u8]) -> Result<(String, Vec<StTensor>),
             metadata = v.to_string();
             continue;
         }
-        let dtype = v.get("dtype").and_then(|d| d.as_str())
-            .map(Dtype::from_str).ok_or_else(|| format!("missing dtype for {}", name))?;
-        let shape = v.get("shape").and_then(|s| s.as_array())
+        let dtype = v
+            .get("dtype")
+            .and_then(|d| d.as_str())
+            .map(Dtype::from_str)
+            .ok_or_else(|| format!("missing dtype for {}", name))?;
+        let shape = v
+            .get("shape")
+            .and_then(|s| s.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_u64()).collect::<Vec<u64>>())
             .unwrap_or_default();
-        let offs = v.get("data_offsets").and_then(|o| o.as_array())
+        let offs = v
+            .get("data_offsets")
+            .and_then(|o| o.as_array())
             .filter(|o| o.len() >= 2)
-            .map(|o| (o[0].as_u64().unwrap_or(0) as usize, o[1].as_u64().unwrap_or(0) as usize))
+            .map(|o| {
+                (
+                    o[0].as_u64().unwrap_or(0) as usize,
+                    o[1].as_u64().unwrap_or(0) as usize,
+                )
+            })
             .ok_or_else(|| format!("missing data_offsets for {}", name))?;
         tensors.push(StTensor {
             name: name.clone(),
@@ -298,14 +356,23 @@ fn mix64(mut x: u64) -> u64 {
 /// value-bucket hash (sign only) — captures both where a weight sits and how
 /// large it is. NaN/Inf clamp to 0.
 fn sketch_add(acc: &mut [f64], name_seed: u64, idx: u64, v: f64) {
-    let w = if v.is_finite() { v.clamp(-1.0, 1.0) } else { 0.0 };
+    let w = if v.is_finite() {
+        v.clamp(-1.0, 1.0)
+    } else {
+        0.0
+    };
     let h = mix64(name_seed ^ idx.wrapping_mul(0x9E3779B97F4A7C15));
     let k = (h as usize) % acc.len();
     acc[k] += w;
     let bucket = (w * 8.0).round() as i8;
-    let h2 = mix64(name_seed ^ idx.rotate_left(17) ^ ((bucket as u8) as u64).wrapping_mul(0x100000001b3));
+    let h2 = mix64(
+        name_seed ^ idx.rotate_left(17) ^ ((bucket as u8) as u64).wrapping_mul(0x100000001b3),
+    );
     let k2 = (h2 as usize) % acc.len();
-    acc[k2] += v.signum();
+    // NaN/Inf must contribute nothing: signum() of NaN is NaN, and NaN added
+    // to a bucket permanently poisons it (NaN + x == NaN for any x), which
+    // wiped out every bucket of large tensors with even one NaN element.
+    acc[k2] += if v.is_finite() { v.signum() } else { 0.0 };
 }
 
 #[derive(Clone, Debug)]
@@ -326,51 +393,103 @@ impl WeightSketch {
     }
 
     pub fn density(&self) -> f64 {
-        if self.dim == 0 { return 0.0; }
+        if self.dim == 0 {
+            return 0.0;
+        }
         self.acc.iter().filter(|&&v| v > 0.0).count() as f64 / self.dim as f64
     }
 }
 
 /// Binarize a raw tensor payload into a WeightSketch over the flat index.
+/// Uses the GPU tensor_to_sdr kernel when available (with a CPU fallback),
+/// producing a bit-identical accumulator because the top-k sparsification
+/// runs on the CPU in both paths.
 pub fn binarize_tensor(name: &str, dtype: &Dtype, data: &[u8]) -> WeightSketch {
     let dim = DEFAULT_DIM;
-    let mut acc = vec![0.0f64; dim];
     let name_seed = fnv1a(name.as_bytes());
     let count = match dtype {
         Dtype::F4E2M1 => data.len() * 2,
         Dtype::Unsupported(_) => 0,
         _ => data.len() / dtype.bytes_per_elem(),
     };
-    let mut n = 0u64;
-    let mut nz = 0u64;
-    for i in 0..count {
-        match read_elem(dtype, data, i) {
-            Some(v) => {
-                sketch_add(&mut acc, name_seed, i as u64, v);
-                n += 1;
-                if v != 0.0 && v.is_finite() { nz += 1; }
+
+    let (acc, nz): (Vec<f64>, u64) = match count {
+        0 => (vec![0.0f64; dim], 0),
+        _ => {
+            if let Some(code) = crate::gpu::dtype_code(dtype) {
+                if let Some((gacc, gnz)) =
+                    crate::gpu::gpu_tensor_to_acc(data, dim, code, name_seed, count)
+                {
+                    (gacc, gnz)
+                } else {
+                    cpu_accumulate(dim, name_seed, dtype, data, count)
+                }
+            } else {
+                cpu_accumulate(dim, name_seed, dtype, data, count)
             }
-            None => break,
+        }
+    };
+
+    let n = count as u64;
+    WeightSketch { dim, acc, n, nz }
+}
+
+fn cpu_accumulate(
+    dim: usize,
+    name_seed: u64,
+    dtype: &Dtype,
+    data: &[u8],
+    count: usize,
+) -> (Vec<f64>, u64) {
+    let mut acc = vec![0.0f64; dim];
+    let mut nz: u64 = 0;
+    for i in 0..count {
+        if let Some(v) = read_elem(dtype, data, i) {
+            if v.is_finite() && v != 0.0 {
+                nz += 1;
+            }
+            sketch_add(&mut acc, name_seed, i as u64, v);
         }
     }
-    WeightSketch { dim, acc, n, nz }
+    (acc, nz)
 }
 
 // --- level assignment (L0 syntax / L1 phase / L2 concept) -------------------
 
 pub fn kind_for_name(name: &str) -> u8 {
     let n = name.to_lowercase();
-    if n.contains("embed") || n.contains("lm_head") || n.contains("tok_emb")
-        || n.contains("word_embed") || n.contains("token_embed") || n.contains("output.weight") {
+    if n.contains("embed")
+        || n.contains("lm_head")
+        || n.contains("tok_emb")
+        || n.contains("word_embed")
+        || n.contains("token_embed")
+        || n.contains("output.weight")
+    {
         KIND_L0
-    } else if n.contains("router") || n.contains("gate.weight") || n.contains("norm")
-        || n.contains("attn") || n.contains("kda") || n.contains("q_proj")
-        || n.contains("k_proj") || n.contains("v_proj") || n.contains("o_proj")
-        || n.contains("wq") || n.contains("wkv") || n.contains("wo")
-        || n.contains("mlp") || n.contains("up_proj") || n.contains("down_proj")
-        || n.contains("experts") || n.contains("f_a") || n.contains("f_b")
-        || n.contains("q_a") || n.contains("q_b") || n.contains("kv_a") || n.contains("kv_b")
-        || n.contains("weight") {
+    } else if n.contains("router")
+        || n.contains("gate.weight")
+        || n.contains("norm")
+        || n.contains("attn")
+        || n.contains("kda")
+        || n.contains("q_proj")
+        || n.contains("k_proj")
+        || n.contains("v_proj")
+        || n.contains("o_proj")
+        || n.contains("wq")
+        || n.contains("wkv")
+        || n.contains("wo")
+        || n.contains("mlp")
+        || n.contains("up_proj")
+        || n.contains("down_proj")
+        || n.contains("experts")
+        || n.contains("f_a")
+        || n.contains("f_b")
+        || n.contains("q_a")
+        || n.contains("q_b")
+        || n.contains("kv_a")
+        || n.contains("kv_b")
+        || n.contains("weight")
+    {
         KIND_L1
     } else {
         KIND_L2
@@ -382,7 +501,9 @@ pub fn kind_for_name(name: &str) -> u8 {
 fn is_router_tensor(name: &str, shape: &[u64]) -> bool {
     let n = name.to_lowercase();
     n.contains("router")
-        || ((n.contains("ffn.gate") || n.contains("mlp.gate")) && n.ends_with(".weight") && shape.len() == 2)
+        || ((n.contains("ffn.gate") || n.contains("mlp.gate"))
+            && n.ends_with(".weight")
+            && shape.len() == 2)
 }
 
 /// MoE exclusion for raw-dump mode: routers, gates, and expert FFN tensors.
@@ -430,13 +551,15 @@ impl ShardSource {
                 let mut r = std::io::BufReader::new(f);
                 use std::io::{Read, Seek, SeekFrom};
                 let mut head = [0u8; 8];
-                r.read_exact(&mut head).map_err(|e| format!("read {}: {}", path, e))?;
+                r.read_exact(&mut head)
+                    .map_err(|e| format!("read {}: {}", path, e))?;
                 let n = u64::from_le_bytes(head) as usize;
                 let mut buf = Vec::with_capacity(8 + n);
                 buf.extend_from_slice(&head);
                 buf.resize(8 + n, 0);
                 r.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-                r.read_exact(&mut buf).map_err(|e| format!("read header {}: {}", path, e))?;
+                r.read_exact(&mut buf)
+                    .map_err(|e| format!("read header {}: {}", path, e))?;
                 Ok(buf)
             }
             ShardSource::Remote { base_url } => {
@@ -463,7 +586,8 @@ impl ShardSource {
                 let mut r = std::io::BufReader::new(f);
                 r.seek(SeekFrom::Start(begin)).map_err(|e| e.to_string())?;
                 let mut buf = vec![0u8; t.len];
-                r.read_exact(&mut buf).map_err(|e| format!("read tensor {}: {}", t.name, e))?;
+                r.read_exact(&mut buf)
+                    .map_err(|e| format!("read tensor {}: {}", t.name, e))?;
                 Ok(buf)
             }
             ShardSource::Remote { base_url } => {
@@ -480,9 +604,11 @@ impl ShardSource {
                 let f = std::fs::File::open(path).map_err(|e| format!("open {}: {}", path, e))?;
                 use std::io::{Read, Seek, SeekFrom};
                 let mut r = std::io::BufReader::new(f);
-                r.seek(SeekFrom::Start(data_start + off)).map_err(|e| e.to_string())?;
+                r.seek(SeekFrom::Start(data_start + off))
+                    .map_err(|e| e.to_string())?;
                 let mut buf = vec![0u8; len as usize];
-                r.read_exact(&mut buf).map_err(|e| format!("read slice: {}", e))?;
+                r.read_exact(&mut buf)
+                    .map_err(|e| format!("read slice: {}", e))?;
                 Ok(buf)
             }
             ShardSource::Remote { base_url } => {
@@ -495,28 +621,44 @@ impl ShardSource {
     /// Total bytes of the data section of a shard, given its full header bytes.
     pub fn shard_data_len(&self, header: &[u8]) -> Result<u64, String> {
         let (_meta, tensors) = parse_safetensors_header(header)?;
-        let max_end = tensors.iter().map(|t| t.offset as u64 + t.len as u64).max().unwrap_or(0);
+        let max_end = tensors
+            .iter()
+            .map(|t| t.offset as u64 + t.len as u64)
+            .max()
+            .unwrap_or(0);
         Ok(max_end)
     }
 }
 
 /// HTTP GET with a `Range: bytes=A-B` header (1-based inclusive end).
-fn fetch_range(agent: &ureq::Agent, url: &str, begin: usize, end: usize) -> Result<Vec<u8>, String> {
+fn fetch_range(
+    agent: &ureq::Agent,
+    url: &str,
+    begin: usize,
+    end: usize,
+) -> Result<Vec<u8>, String> {
     if end <= begin {
         return Ok(Vec::new());
     }
     let range = format!("bytes={}-{}", begin, end - 1);
-    let resp = agent.get(url)
+    let resp = agent
+        .get(url)
         .set("Range", &range)
         .set("User-Agent", "fuga-transpile/0.1")
         .call()
         .map_err(|e| format!("range {} -> {}: {}", url, range, e))?;
     let mut buf = Vec::with_capacity(end - begin);
     use std::io::Read;
-    resp.into_reader().take((end - begin) as u64 + 1)
-        .read_to_end(&mut buf).map_err(|e| format!("read body: {}", e))?;
+    resp.into_reader()
+        .take((end - begin) as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("read body: {}", e))?;
     if buf.len() < end - begin {
-        return Err(format!("short range read: got {} of {}", buf.len(), end - begin));
+        return Err(format!(
+            "short range read: got {} of {}",
+            buf.len(),
+            end - begin
+        ));
     }
     buf.truncate(end - begin);
     Ok(buf)
@@ -526,7 +668,12 @@ const FETCH_CHUNK: u64 = 16 * 1024 * 1024;
 const FETCH_RETRIES: usize = 4;
 
 /// Fetch a range with retry + backoff on transient network errors.
-fn fetch_range_retry(agent: &ureq::Agent, url: &str, begin: u64, end: u64) -> Result<Vec<u8>, String> {
+fn fetch_range_retry(
+    agent: &ureq::Agent,
+    url: &str,
+    begin: u64,
+    end: u64,
+) -> Result<Vec<u8>, String> {
     let mut attempt = 0usize;
     loop {
         match fetch_range(agent, url, begin as usize, end as usize) {
@@ -537,7 +684,13 @@ fn fetch_range_retry(agent: &ureq::Agent, url: &str, begin: u64, end: u64) -> Re
                     return Err(e);
                 }
                 let backoff = std::time::Duration::from_secs(2u64.pow(attempt as u32).min(30));
-                eprintln!("  … retry {} ({:.1} MB range) in {:?}: {}", attempt, (end - begin) as f64 / 1_048_576.0, backoff, e);
+                eprintln!(
+                    "  … retry {} ({:.1} MB range) in {:?}: {}",
+                    attempt,
+                    (end - begin) as f64 / 1_048_576.0,
+                    backoff,
+                    e
+                );
                 std::thread::sleep(backoff);
             }
         }
@@ -578,23 +731,41 @@ impl ChunkStream {
             let url = url.clone();
             let agent = agent.clone();
             let _ = data_start;
-            std::thread::spawn(move || loop {
-                let idx = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if idx >= nchunks { break; }
-                let begin = data_start + (idx as u64) * FETCH_CHUNK;
-                let end = (begin + FETCH_CHUNK).min(data_start + data_len);
-                let t0 = std::time::Instant::now();
-                let res = fetch_range_retry(&agent, &url, begin, end);
-                let dl = (end - begin) as f64 / 1_048_576.0;
-                let mbps = if t0.elapsed().as_secs_f64() > 0.0 { dl / t0.elapsed().as_secs_f64() } else { 0.0 };
-                eprintln!("  [chunk {}] {:.1} MB in {:.1}s = {:.1} MB/s", idx, dl, t0.elapsed().as_secs_f64(), mbps);
-                if tx.send((idx, res)).is_err() {
-                    break;
+            std::thread::spawn(move || {
+                loop {
+                    let idx = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if idx >= nchunks {
+                        break;
+                    }
+                    let begin = data_start + (idx as u64) * FETCH_CHUNK;
+                    let end = (begin + FETCH_CHUNK).min(data_start + data_len);
+                    let t0 = std::time::Instant::now();
+                    let res = fetch_range_retry(&agent, &url, begin, end);
+                    let dl = (end - begin) as f64 / 1_048_576.0;
+                    let mbps = if t0.elapsed().as_secs_f64() > 0.0 {
+                        dl / t0.elapsed().as_secs_f64()
+                    } else {
+                        0.0
+                    };
+                    eprintln!(
+                        "  [chunk {}] {:.1} MB in {:.1}s = {:.1} MB/s",
+                        idx,
+                        dl,
+                        t0.elapsed().as_secs_f64(),
+                        mbps
+                    );
+                    if tx.send((idx, res)).is_err() {
+                        break;
+                    }
                 }
             });
         }
         drop(tx);
-        ChunkStream { rx, next_idx: 0, pending: Vec::new() }
+        ChunkStream {
+            rx,
+            next_idx: 0,
+            pending: Vec::new(),
+        }
     }
 
     /// Return the next chunk in data-section order, blocking until it lands.
@@ -619,7 +790,10 @@ impl ChunkStream {
                         self.next_idx += 1;
                         return res;
                     }
-                    return Err(format!("chunk stream ended early at chunk {}", self.next_idx));
+                    return Err(format!(
+                        "chunk stream ended early at chunk {}",
+                        self.next_idx
+                    ));
                 }
             }
         }
@@ -628,16 +802,27 @@ impl ChunkStream {
 
 /// List `.safetensors` shards of an HF repo via the tree API.
 pub fn list_hf_shards(repo: &str, revision: &str) -> Result<Vec<(String, u64)>, String> {
-    let rev = if revision.is_empty() { "main" } else { revision };
-    let url = format!("https://huggingface.co/api/models/{}/tree/{}?recursive=true", repo, rev);
+    let rev = if revision.is_empty() {
+        "main"
+    } else {
+        revision
+    };
+    let host = std::env::var("FUGA_HF_HOST").unwrap_or_else(|_| "huggingface.co".to_string());
+    let url = format!(
+        "https://{}/api/models/{}/tree/{}?recursive=true",
+        host, repo, rev
+    );
     let agent = shared_agent();
-    let resp = agent.get(&url)
+    let resp = agent
+        .get(&url)
         .set("User-Agent", "fuga-transpile/0.1")
         .call()
         .map_err(|e| format!("list {}: {}", url, e))?;
-    let body = resp.into_string()
+    let body = resp
+        .into_string()
         .map_err(|e| format!("read list: {}", e))?;
-    let arr: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("list JSON: {}", e))?;
+    let arr: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("list JSON: {}", e))?;
     let mut out = Vec::new();
     if let Some(items) = arr.as_array() {
         for it in items {
@@ -653,9 +838,105 @@ pub fn list_hf_shards(repo: &str, revision: &str) -> Result<Vec<(String, u64)>, 
 }
 
 /// Resolve a shard path to its raw download URL.
+/// The host can be overridden via the `FUGA_HF_HOST` env var (e.g. `hf-mirror.com`).
 pub fn hf_resolve_url(repo: &str, path: &str, revision: &str) -> String {
-    let rev = if revision.is_empty() { "main" } else { revision };
-    format!("https://huggingface.co/{}/resolve/{}/{}", repo, rev, path)
+    let rev = if revision.is_empty() {
+        "main"
+    } else {
+        revision
+    };
+    let host = std::env::var("FUGA_HF_HOST").unwrap_or_else(|_| "huggingface.co".to_string());
+    format!("https://{}/{}/resolve/{}/{}", host, repo, rev, path)
+}
+
+/// Extract a stable, mirror-independent shard label (file name like
+/// `model-00030-of-00048.safetensors`) from any shard URL/path. Used so the
+/// `done` resume list survives switching between ModelScope / HF mirrors.
+pub fn shard_label(url_or_path: &str) -> String {
+    if let Some(fp) = url_or_path.split("FilePath=").nth(1) {
+        let fp = fp.split('&').next().unwrap_or(fp);
+        let fp = fp.split('?').next().unwrap_or(fp);
+        if !fp.is_empty() {
+            return fp.to_string();
+        }
+    }
+    url_or_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(url_or_path)
+        .to_string()
+}
+
+/// List `.safetensors` shards of a ModelScope repo via the files API.
+/// Falls back to "master" revision when the revision is empty. ModelScope
+/// uses subdirectories (tree entries) which are walked recursively.
+pub fn list_ms_shards(repo: &str, revision: &str) -> Result<Vec<(String, u64)>, String> {
+    fn walk(
+        agent: &ureq::Agent,
+        repo: &str,
+        rev: &str,
+        root: &str,
+        out: &mut Vec<(String, u64)>,
+    ) -> Result<(), String> {
+        let url = format!(
+            "https://modelscope.cn/api/v1/models/{}/repo/files?Revision={}&Root={}",
+            repo, rev, root
+        );
+        let resp = agent
+            .get(&url)
+            .set("User-Agent", "fuga-transpile/0.1")
+            .call()
+            .map_err(|e| format!("list {}: {}", url, e))?;
+        let body = resp
+            .into_string()
+            .map_err(|e| format!("read list: {}", e))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| format!("list JSON: {}", e))?;
+        let files = v.get("Data").and_then(|d| d.get("Files"));
+        let mut dirs = Vec::new();
+        if let Some(arr) = files.and_then(|f| f.as_array()) {
+            for it in arr {
+                let path = it.get("Path").and_then(|p| p.as_str()).unwrap_or("");
+                let size = it.get("Size").and_then(|s| s.as_u64()).unwrap_or(0);
+                let typ = it.get("Type").and_then(|t| t.as_str()).unwrap_or("blob");
+                if typ == "tree" {
+                    dirs.push(path.to_string());
+                } else if path.ends_with(".safetensors") {
+                    out.push((path.to_string(), size));
+                }
+            }
+        }
+        for d in dirs {
+            let sub = format!("{}/", d.trim_end_matches('/'));
+            walk(agent, repo, rev, &sub, out)?;
+        }
+        Ok(())
+    }
+    let rev = if revision.is_empty() {
+        "master"
+    } else {
+        revision
+    };
+    let agent = shared_agent();
+    let mut out = Vec::new();
+    walk(&agent, repo, &rev, "", &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// Resolve a ModelScope shard path to its raw download URL. The API responds
+/// with a 302 redirect to a signed CDN URL with a fresh auth_key, so the URL
+/// itself stays valid; each request gets a new signature.
+pub fn ms_resolve_url(repo: &str, path: &str, revision: &str) -> String {
+    let rev = if revision.is_empty() {
+        "master"
+    } else {
+        revision
+    };
+    format!(
+        "https://modelscope.cn/api/v1/models/{}/repo?Revision={}&FilePath={}",
+        repo, rev, path
+    )
 }
 
 // --- accumulator ------------------------------------------------------------
@@ -680,7 +961,12 @@ impl Default for TranspileConfig {
     fn default() -> Self {
         TranspileConfig {
             select: Vec::new(),
-            keep: vec!["embed".into(), "lm_head".into(), "gate".into(), "router".into()],
+            keep: vec![
+                "embed".into(),
+                "lm_head".into(),
+                "gate".into(),
+                "router".into(),
+            ],
             max_tensors: None,
             max_shards: None,
             route_cap: ROUTE_CAP,
@@ -730,10 +1016,14 @@ impl TranspileAccumulator {
     }
 
     fn state_take_str(data: &[u8], pos: &mut usize) -> Result<String, String> {
-        if *pos + 4 > data.len() { return Err("state: short string length".into()); }
+        if *pos + 4 > data.len() {
+            return Err("state: short string length".into());
+        }
         let n = u32::from_le_bytes(data[*pos..*pos + 4].try_into().unwrap()) as usize;
         *pos += 4;
-        if *pos + n > data.len() { return Err("state: short string body".into()); }
+        if *pos + n > data.len() {
+            return Err("state: short string body".into());
+        }
         let s = String::from_utf8(data[*pos..*pos + n].to_vec()).map_err(|e| e.to_string())?;
         *pos += n;
         Ok(s)
@@ -749,14 +1039,20 @@ impl TranspileAccumulator {
         buf.extend_from_slice(&(self.processed as u32).to_le_bytes());
         buf.extend_from_slice(&self.bytes_in.to_le_bytes());
         for v in [&self.l0, &self.l1, &self.l2] {
-            for x in v { buf.extend_from_slice(&x.to_le_bytes()); }
+            for x in v {
+                buf.extend_from_slice(&x.to_le_bytes());
+            }
         }
         buf.extend_from_slice(&(self.skipped.len() as u32).to_le_bytes());
-        for s in &self.skipped { Self::state_push_str(&mut buf, s); }
+        for s in &self.skipped {
+            Self::state_push_str(&mut buf, s);
+        }
         buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
         let wc = (self.dim + 63) / 64;
         for e in &self.entries {
-            for w in &e.hv.words { buf.extend_from_slice(&w.to_le_bytes()); }
+            for w in &e.hv.words {
+                buf.extend_from_slice(&w.to_le_bytes());
+            }
             buf.extend_from_slice(&e.key.to_le_bytes());
             Self::state_push_str(&mut buf, &e.key_text);
             buf.extend_from_slice(&e.resonance.to_le_bytes());
@@ -765,7 +1061,9 @@ impl TranspileAccumulator {
             Self::state_push_str(&mut buf, &e.text);
         }
         buf.extend_from_slice(&(self.done.len() as u32).to_le_bytes());
-        for s in &self.done { Self::state_push_str(&mut buf, s); }
+        for s in &self.done {
+            Self::state_push_str(&mut buf, s);
+        }
         std::fs::write(path, &buf).map_err(|e| format!("save state {}: {}", path, e))
     }
 
@@ -803,10 +1101,13 @@ impl TranspileAccumulator {
         let nent = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         for _ in 0..nent {
-            if pos + wc * 8 > data.len() { return Err("state: short hv".into()); }
+            if pos + wc * 8 > data.len() {
+                return Err("state: short hv".into());
+            }
             let mut words = vec![0u64; wc];
             for j in 0..wc {
-                words[j] = u64::from_le_bytes(data[pos + j * 8..pos + (j + 1) * 8].try_into().unwrap());
+                words[j] =
+                    u64::from_le_bytes(data[pos + j * 8..pos + (j + 1) * 8].try_into().unwrap());
             }
             pos += wc * 8;
             let key = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
@@ -819,19 +1120,40 @@ impl TranspileAccumulator {
             let kind = data[pos];
             pos += 1;
             let text = Self::state_take_str(&data, &mut pos)?;
-            entries.push(CrystalEntry { hv: Hypervector::from_raw(dim, words), key, key_text, resonance, route, kind, text });
+            entries.push(CrystalEntry {
+                hv: Hypervector::from_raw(dim, words),
+                key,
+                key_text,
+                resonance,
+                route,
+                kind,
+                text,
+            });
         }
         let mut done = Vec::new();
         let ndone = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         for _ in 0..ndone {
-            done.push(Self::state_take_str(&data, &mut pos)?);
+            let raw = Self::state_take_str(&data, &mut pos)?;
+            done.push(shard_label(&raw));
         }
         let mut l0_index = std::collections::HashMap::with_capacity(entries.len());
         for (i, e) in entries.iter().enumerate() {
             l0_index.insert(e.key, i);
         }
-        Ok(TranspileAccumulator { dim, l0, l1, l2, entries, l0_index, processed, bytes_in, skipped, route_cap, done })
+        Ok(TranspileAccumulator {
+            dim,
+            l0,
+            l1,
+            l2,
+            entries,
+            l0_index,
+            processed,
+            bytes_in,
+            skipped,
+            route_cap,
+            done,
+        })
     }
 
     fn merge(&mut self, kind: u8, sketch: &WeightSketch) {
@@ -851,19 +1173,42 @@ impl TranspileAccumulator {
         }
     }
 
-    fn push_entry(&mut self, hv: Hypervector, key_text: String, resonance: f32, kind: u8, text: String) {
+    fn push_entry(
+        &mut self,
+        hv: Hypervector,
+        key_text: String,
+        resonance: f32,
+        kind: u8,
+        text: String,
+    ) {
         let key = fnv1a(key_text.as_bytes());
         let route = ((key >> 8) & 0xFF) as u16;
-        let entry = CrystalEntry { hv, key, key_text, resonance, route, kind, text };
+        let entry = CrystalEntry {
+            hv,
+            key,
+            key_text,
+            resonance,
+            route,
+            kind,
+            text,
+        };
         let idx = self.entries.len();
         self.l0_index.insert(entry.key, idx);
         self.entries.push(entry);
     }
 
     /// Process one tensor payload into the accumulator.
-    pub fn add_tensor(&mut self, name: &str, dtype: &Dtype, shape: &[u64], data: &[u8], keep: bool) {
+    pub fn add_tensor(
+        &mut self,
+        name: &str,
+        dtype: &Dtype,
+        shape: &[u64],
+        data: &[u8],
+        keep: bool,
+    ) {
         if !dtype.supported() {
-            self.skipped.push(format!("{} [{} unsupported]", name, dtype.label()));
+            self.skipped
+                .push(format!("{} [{} unsupported]", name, dtype.label()));
             return;
         }
         let sketch = binarize_tensor(name, dtype, data);
@@ -879,17 +1224,28 @@ impl TranspileAccumulator {
                 shape[1] as usize * dtype.bytes_per_elem()
             };
             for e in 0..rows {
-                if self.route_cap == 0 { break; }
+                if self.route_cap == 0 {
+                    break;
+                }
                 let begin = e * row_bytes;
                 let end = (begin + row_bytes).min(data.len());
-                if begin >= end { continue; }
+                if begin >= end {
+                    continue;
+                }
                 let row = &data[begin..end];
                 let rs = binarize_tensor(&format!("{}:expert_{}", name, e), dtype, row);
                 let hv = rs.to_hypervector();
                 let key_text = format!("{}:expert_{}", name, e);
                 let resonance = (rs.nz as f64 / rs.n.max(1) as f64).clamp(0.0, 1.0) as f32;
-                let text = format!("{} shape=[{}, {}] dtype={} n={} nz={}",
-                    key_text, shape[0], shape[1], dtype.label(), rs.n, rs.nz);
+                let text = format!(
+                    "{} shape=[{}, {}] dtype={} n={} nz={}",
+                    key_text,
+                    shape[0],
+                    shape[1],
+                    dtype.label(),
+                    rs.n,
+                    rs.nz
+                );
                 self.push_entry(hv, key_text, resonance, KIND_L1, text);
                 self.route_cap -= 1;
             }
@@ -898,8 +1254,14 @@ impl TranspileAccumulator {
         if keep {
             let hv = sketch.to_hypervector();
             let resonance = (sketch.nz as f64 / sketch.n.max(1) as f64).clamp(0.0, 1.0) as f32;
-            let text = format!("{} shape={:?} dtype={} n={} nz={}",
-                name, shape, dtype.label(), sketch.n, sketch.nz);
+            let text = format!(
+                "{} shape={:?} dtype={} n={} nz={}",
+                name,
+                shape,
+                dtype.label(),
+                sketch.n,
+                sketch.nz
+            );
             self.push_entry(hv, name.to_string(), resonance, kind, text);
         }
 
@@ -922,8 +1284,12 @@ impl TranspileAccumulator {
             crystal.entries.push(ce);
             crystal.l0_index.insert(e.key, crystal.entries.len() - 1);
         }
-        for (acc, tag) in [(&self.l0, CONCEPT_L0), (&self.l1, CONCEPT_L1), (&self.l2, CONCEPT_L2)] {
-            let hv = sparse_from_acc(acc, self.dim);
+        for (acc, tag) in [
+            (&self.l0, CONCEPT_L0),
+            (&self.l1, CONCEPT_L1),
+            (&self.l2, CONCEPT_L2),
+        ] {
+            let hv = sparse_from_acc(acc, DIM_L2);
             let key_text = tag.to_string();
             let key = fnv1a(tag.as_bytes());
             let route = ((key >> 8) & 0xFF) as u16;
@@ -946,7 +1312,11 @@ impl TranspileAccumulator {
     pub fn stats(&self) -> String {
         format!(
             "accumulator: {} tensors, {} bytes, {} entries, {} skipped, dim={}",
-            self.processed, self.bytes_in, self.entries.len(), self.skipped.len(), self.dim,
+            self.processed,
+            self.bytes_in,
+            self.entries.len(),
+            self.skipped.len(),
+            self.dim,
         )
     }
 }
@@ -957,7 +1327,9 @@ impl TranspileAccumulator {
 /// restores the "no resonance -> silence" property.
 fn sparse_from_acc(acc: &[f64], dim: usize) -> Hypervector {
     let k = ((dim as f64 * SDR_DENSITY).ceil() as usize).max(1);
-    let mut scored: Vec<(usize, f64)> = acc.iter().enumerate()
+    let mut scored: Vec<(usize, f64)> = acc
+        .iter()
+        .enumerate()
         .filter(|(_, v)| v.abs() > 0.0)
         .map(|(i, v)| (i, v.abs()))
         .collect();
@@ -998,14 +1370,24 @@ pub fn transpile_shard(
     if cfg.dry_run {
         println!("  {} tensors in {}:", tensors.len(), label);
         for t in tensors.iter().take(64) {
-            println!("    {:<60} {:?} {:?} ({} B)", t.name, t.shape, t.dtype.label(), t.len);
+            println!(
+                "    {:<60} {:?} {:?} ({} B)",
+                t.name,
+                t.shape,
+                t.dtype.label(),
+                t.len
+            );
         }
         if tensors.len() > 64 {
             println!("    … {} more", tensors.len() - 64);
         }
         return Ok(TranspileStats {
-            shard: label, tensors: tensors.len(), bytes: 0,
-            entries_added: 0, elapsed: start.elapsed(), mbps: 0.0,
+            shard: label,
+            tensors: tensors.len(),
+            bytes: 0,
+            entries_added: 0,
+            elapsed: start.elapsed(),
+            mbps: 0.0,
         });
     }
 
@@ -1020,11 +1402,15 @@ pub fn transpile_shard(
     // HF multi-GB socket resets and the OOM kill from buffering an entire
     // 3.4 GB shard on a low-RAM host. Remote shards are downloaded through
     // a parallel chunk stream (multiple connections, like aria2c -xN -sN).
-    let data_len = if cfg.whole { source.shard_data_len(&header)? } else { 0 };
+    let data_len = if cfg.whole || (cfg.raw && matches!(source, ShardSource::Remote { .. })) {
+        source.shard_data_len(&header)?
+    } else {
+        0
+    };
     let mut chunk_stream = match source {
-        ShardSource::Remote { .. } if cfg.whole && data_len > 0 => {
-            Some(ChunkStream::start(source, data_start, data_len, cfg.concurrency))
-        }
+        ShardSource::Remote { .. } if (cfg.whole || cfg.raw) && data_len > 0 => Some(
+            ChunkStream::start(source, data_start, data_len, cfg.concurrency),
+        ),
         _ => None,
     };
 
@@ -1034,8 +1420,11 @@ pub fn transpile_shard(
     let mut tensors_done = 0usize;
 
     for t in tensors {
-        if processed >= max_tensors { break; }
-        let selected = cfg.select.is_empty() || cfg.select.iter().any(|s| t.name.contains(s.as_str()));
+        if processed >= max_tensors {
+            break;
+        }
+        let selected =
+            cfg.select.is_empty() || cfg.select.iter().any(|s| t.name.contains(s.as_str()));
         if !selected {
             continue;
         }
@@ -1045,11 +1434,12 @@ pub fn transpile_shard(
             cfg.keep.iter().any(|s| t.name.contains(s.as_str()))
         };
         if !t.dtype.supported() {
-            acc.skipped.push(format!("{} [{} unsupported]", t.name, t.dtype.label()));
+            acc.skipped
+                .push(format!("{} [{} unsupported]", t.name, t.dtype.label()));
             continue;
         }
         let off = t.offset as u64;
-        if cfg.whole {
+        if cfg.whole || cfg.raw {
             if off < win_start + win_pos as u64 {
                 // Out-of-order tensor behind the read cursor: fetch separately.
                 let data = source.fetch_tensor(data_start, &t)?;
@@ -1063,12 +1453,21 @@ pub fn transpile_shard(
                         None => {
                             let fb = win_start + window.len() as u64;
                             let fl = FETCH_CHUNK.min(data_len - fb);
-                            if fl == 0 { return Err(format!("window past end of shard data (tensor {})", t.name)); }
+                            if fl == 0 {
+                                return Err(format!(
+                                    "window past end of shard data (tensor {})",
+                                    t.name
+                                ));
+                            }
                             source.fetch_slice(data_start, fb, fl)?
                         }
                     };
                     window.extend_from_slice(&part);
-                    println!("  … whole-shard {:.1}% ({:.1} GB fetched)", (win_start + window.len() as u64) as f64 * 100.0 / data_len as f64, (win_start + window.len() as u64) as f64 / 1_073_741_824.0);
+                    println!(
+                        "  … whole-shard {:.1}% ({:.1} GB fetched)",
+                        (win_start + window.len() as u64) as f64 * 100.0 / data_len as f64,
+                        (win_start + window.len() as u64) as f64 / 1_073_741_824.0
+                    );
                 }
                 // Now drop the consumed prefix, keeping the window bounded.
                 if rel > FETCH_CHUNK as usize / 2 {
@@ -1085,14 +1484,26 @@ pub fn transpile_shard(
             tensors_done += 1;
             processed += 1;
             if tensors_done % 100 == 0 {
-                println!("  … {}/{} tensors ({:.1} MB, {})", tensors_done, total, (win_start + win_pos as u64) as f64 / 1_048_576.0, label);
+                println!(
+                    "  … {}/{} tensors ({:.1} MB, {})",
+                    tensors_done,
+                    total,
+                    (win_start + win_pos as u64) as f64 / 1_048_576.0,
+                    label
+                );
             }
         } else {
             let data = source.fetch_tensor(data_start, &t)?;
             acc.add_tensor(&t.name, &t.dtype, &t.shape, &data, keep);
             processed += 1;
             if processed % 100 == 0 {
-                println!("  … {}/{} tensors ({:.1} MB, {})", processed, total, bytes as f64 / 1_048_576.0, label);
+                println!(
+                    "  … {}/{} tensors ({:.1} MB, {})",
+                    processed,
+                    total,
+                    bytes as f64 / 1_048_576.0,
+                    label
+                );
             }
         }
         bytes += t.len as u64;
@@ -1100,7 +1511,9 @@ pub fn transpile_shard(
     let elapsed = start.elapsed();
     let mbps = if elapsed.as_secs_f64() > 0.0 {
         bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64()
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     Ok(TranspileStats {
         shard: label,
         tensors: processed,
@@ -1134,7 +1547,9 @@ mod tests {
         let mut body = String::from("{");
         for (i, (name, _)) in tensors.iter().enumerate() {
             let n = name.replace('/', "::");
-            if i > 0 { body.push(','); }
+            if i > 0 {
+                body.push(',');
+            }
             body.push_str(&format!(
                 "\"{}\":{{\"dtype\":\"F32\",\"shape\":[{}],\"data_offsets\":[{},{}]}}",
                 n, 0, offsets[i].0, offsets[i].1
@@ -1183,13 +1598,19 @@ mod tests {
         let sk1 = binarize_tensor("w", &Dtype::F32, &a);
         let sk2 = binarize_tensor("w", &Dtype::F32, &a);
         assert_eq!(sk1.acc, sk2.acc);
-        assert_eq!(overlap_fraction(&sk1.to_hypervector(), &sk2.to_hypervector()), 1.0);
+        assert_eq!(
+            overlap_fraction(&sk1.to_hypervector(), &sk2.to_hypervector()),
+            1.0
+        );
 
         // quantized (8-bit-rounded) version of the same tensor stays close
-        let q: Vec<f32> = a.chunks_exact(4).map(|c| {
-            let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-            (v * 8.0).round() / 8.0
-        }).collect();
+        let q: Vec<f32> = a
+            .chunks_exact(4)
+            .map(|c| {
+                let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                (v * 8.0).round() / 8.0
+            })
+            .collect();
         let skq = binarize_tensor("w", &Dtype::F32, &f32_bytes(&q));
         let same = overlap_fraction(&sk1.to_hypervector(), &skq.to_hypervector());
         assert!(same > 0.35, "quantized variant too far: {:.3}", same);

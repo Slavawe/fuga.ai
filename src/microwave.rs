@@ -3,15 +3,30 @@ use std::path::Path;
 use std::process::Command;
 
 fn strip_prefix<'a>(s: &'a str) -> &'a str {
-    let prefixes = ["pub ", "pub(crate) ", "pub(super) ", "pub(in ", "async ",
-                     "unsafe ", "extern ", "static ", "const ", "default "];
+    let prefixes = [
+        "pub ",
+        "pub(crate) ",
+        "pub(super) ",
+        "pub(in ",
+        "async ",
+        "unsafe ",
+        "extern ",
+        "static ",
+        "const ",
+        "default ",
+    ];
     let mut r = s;
     loop {
         let before = r;
         for p in &prefixes {
-            if r.starts_with(p) { r = &r[p.len()..]; break; }
+            if r.starts_with(p) {
+                r = &r[p.len()..];
+                break;
+            }
         }
-        if r == before { break; }
+        if r == before {
+            break;
+        }
     }
     r
 }
@@ -376,11 +391,17 @@ int process(size_t n) {
 }"#;
 
         println!("\n  ┌─ Self-Test 1: Rust evaluation ──────────────────────");
-        let r1 = self.run_binary(&binary_path, &["eval_rust".to_string(), good_code.to_string()]);
+        let r1 = self.run_binary(
+            &binary_path,
+            &["eval_rust".to_string(), good_code.to_string()],
+        );
         println!("  Output:\n{}", r1);
 
         println!("\n  ┌─ Self-Test 2: C++ evaluation ───────────────────────");
-        let r2 = self.run_binary(&binary_path, &["eval_cpp".to_string(), good_cpp.to_string()]);
+        let r2 = self.run_binary(
+            &binary_path,
+            &["eval_cpp".to_string(), good_cpp.to_string()],
+        );
         println!("  Output:\n{}", r2);
 
         println!("\n  ┌─ Self-Test 3: Vector similarity ────────────────────");

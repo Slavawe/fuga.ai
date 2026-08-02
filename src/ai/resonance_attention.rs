@@ -1,7 +1,7 @@
 use crate::core::hypervector::Hypervector;
 use crate::core::wave_cube::WaveCube;
-use crate::weaver::super_token::SuperToken;
 use crate::gpu;
+use crate::weaver::super_token::SuperToken;
 
 pub struct ResonanceAttention {
     dim: usize,
@@ -27,47 +27,64 @@ impl ResonanceAttention {
     }
 
     pub fn attention_map<const N: usize, const S: usize>(
-        &self, st: &SuperToken, cube: &WaveCube<N, S>, region: Option<&[(usize, usize); N]>
+        &self,
+        st: &SuperToken,
+        cube: &WaveCube<N, S>,
+        region: Option<&[(usize, usize); N]>,
     ) -> Vec<AttentionCell> {
         let default_ranges = [(0, S); N];
         let ranges = region.unwrap_or(&default_ranges);
 
         let mut results = Vec::new();
-        self.enumerate_cells(cube, ranges, &mut |coords: &[usize; N], cell_hv: &Hypervector| {
-            let score = self.resonance_score(&st.vector, cell_hv);
-            if score > 0.55 {
-                results.push(AttentionCell {
-                    x: coords.get(0).copied().unwrap_or(0),
-                    y: coords.get(1).copied().unwrap_or(0),
-                    z: coords.get(2).copied().unwrap_or(0),
-                    w: coords.get(3).copied().unwrap_or(0),
-                    v: coords.get(4).copied().unwrap_or(0),
-                    score,
-                });
-            }
-        });
+        self.enumerate_cells(
+            cube,
+            ranges,
+            &mut |coords: &[usize; N], cell_hv: &Hypervector| {
+                let score = self.resonance_score(&st.vector, cell_hv);
+                if score > 0.55 {
+                    results.push(AttentionCell {
+                        x: coords.get(0).copied().unwrap_or(0),
+                        y: coords.get(1).copied().unwrap_or(0),
+                        z: coords.get(2).copied().unwrap_or(0),
+                        w: coords.get(3).copied().unwrap_or(0),
+                        v: coords.get(4).copied().unwrap_or(0),
+                        score,
+                    });
+                }
+            },
+        );
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         results.truncate(16);
         results
     }
 
     fn enumerate_cells<const N: usize, const S: usize, F>(
-        &self, cube: &WaveCube<N, S>, ranges: &[(usize, usize); N], mut f: F,
-    )
-    where
+        &self,
+        cube: &WaveCube<N, S>,
+        ranges: &[(usize, usize); N],
+        mut f: F,
+    ) where
         F: FnMut(&[usize; N], &Hypervector),
     {
         for idx in 0..WaveCube::<N, S>::TOTAL_CELLS {
             let coords = cube.coords_from_idx(idx);
-            let in_range = coords.iter().zip(ranges.iter()).all(|(&c, &(lo, hi))| c >= lo && c < hi);
-            if !in_range { continue; }
+            let in_range = coords
+                .iter()
+                .zip(ranges.iter())
+                .all(|(&c, &(lo, hi))| c >= lo && c < hi);
+            if !in_range {
+                continue;
+            }
             let cell_hv = cube.cell_at(&coords);
             f(&coords, &cell_hv);
         }
     }
 
     pub fn beam_attention<const N: usize, const S: usize>(
-        &self, st: &SuperToken, cube: &WaveCube<N, S>, beam: usize
+        &self,
+        st: &SuperToken,
+        cube: &WaveCube<N, S>,
+        beam: usize,
     ) -> Vec<AttentionCell> {
         let total = WaveCube::<N, S>::TOTAL_CELLS;
         let sigma = 0.5 / (cube.dim as f64).sqrt();
@@ -76,7 +93,9 @@ impl ResonanceAttention {
         if gpu::is_gpu_available() {
             let gpu_scores = gpu::gpu_resonance_scan(&st.vector, &cube.cube);
             if let Some(scores) = gpu_scores {
-                let mut cells: Vec<AttentionCell> = scores.iter().enumerate()
+                let mut cells: Vec<AttentionCell> = scores
+                    .iter()
+                    .enumerate()
                     .filter(|&(_, s)| *s as f64 > threshold)
                     .map(|(idx, &s)| {
                         let coords = cube.coords_from_idx(idx);
@@ -98,7 +117,8 @@ impl ResonanceAttention {
 
         let step = (total + beam - 1) / beam;
 
-        let chunk_results: Vec<AttentionCell> = (0..total).step_by(step)
+        let chunk_results: Vec<AttentionCell> = (0..total)
+            .step_by(step)
             .flat_map(|start| {
                 let end = (start + step).min(total);
                 let mut best: Option<AttentionCell> = None;
@@ -133,14 +153,29 @@ impl ResonanceAttention {
     }
 
     pub fn write_attention<const N: usize, const S: usize>(
-        &self, cube: &mut WaveCube<N, S>, x: usize, y: usize, z: usize, w: usize, v: usize, hv: &Hypervector,
+        &self,
+        cube: &mut WaveCube<N, S>,
+        x: usize,
+        y: usize,
+        z: usize,
+        w: usize,
+        v: usize,
+        hv: &Hypervector,
     ) {
         let mut coords = [0; N];
         coords[0] = x;
-        if N > 1 { coords[1] = y; }
-        if N > 2 { coords[2] = z; }
-        if N > 3 { coords[3] = w; }
-        if N > 4 { coords[4] = v; }
+        if N > 1 {
+            coords[1] = y;
+        }
+        if N > 2 {
+            coords[2] = z;
+        }
+        if N > 3 {
+            coords[3] = w;
+        }
+        if N > 4 {
+            coords[4] = v;
+        }
         let existing = cube.cell_at(&coords);
         let bound = existing.bind(hv);
         cube.write_at(&coords, &bound);

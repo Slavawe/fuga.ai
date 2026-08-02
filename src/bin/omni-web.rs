@@ -1,16 +1,15 @@
 use fuga::{
-    WaveCube, TokenBuilder,
+    CodeQualityFilter, FixProposal, FugaEngine, LanguageId, MultiEngine, MultiFixGenerator,
+    TokenBuilder, TokenInfo, WaveCube,
     ai::FugaAI,
+    core::wave_cube::peek_cube_header,
     omni::{self, OmniEngine},
     speech::{self, FugaText},
     tokenize_corpus_text,
-    core::wave_cube::peek_cube_header,
-    CodeQualityFilter, FugaEngine, MultiEngine, MultiFixGenerator,
-    LanguageId, FixProposal, TokenInfo,
 };
-use tiny_http::{Server, Response, Header};
-use std::sync::{Arc, Mutex};
 use std::env;
+use std::sync::{Arc, Mutex};
+use tiny_http::{Header, Response, Server};
 
 const SITE_HTML: &str = include_str!("site.html");
 
@@ -25,7 +24,8 @@ fn run_microwave(mw_path: &str, mode: &str, code: &str) -> String {
     let tmp = std::env::temp_dir().join("mw_eval.rs");
     let _ = std::fs::write(&tmp, code);
     let output = std::process::Command::new(mw_path)
-        .arg(mode).arg(&tmp)
+        .arg(mode)
+        .arg(&tmp)
         .output();
     let _ = std::fs::remove_file(&tmp);
     match output {
@@ -44,11 +44,20 @@ fn parse_mw_output(output: &str) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-fn handle_code_analyze<const N: usize, const S: usize>(state: &mut WebState<N, S>, body: &str) -> String {
+fn handle_code_analyze<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    body: &str,
+) -> String {
     let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let code = req.get("code").and_then(|v| v.as_str()).unwrap_or("");
-    let lang_name = req.get("language").and_then(|v| v.as_str()).unwrap_or("rust");
-    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("web_input.rs");
+    let lang_name = req
+        .get("language")
+        .and_then(|v| v.as_str())
+        .unwrap_or("rust");
+    let path = req
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("web_input.rs");
 
     let lang = match lang_name {
         "rust" => LanguageId::Rust,
@@ -64,9 +73,17 @@ fn handle_code_analyze<const N: usize, const S: usize>(state: &mut WebState<N, S
     match state.qual.analyze(code, lang, path) {
         Ok(score) => {
             let mw_out = if lang == LanguageId::Rust || lang_name == "rust" {
-                parse_mw_output(&run_microwave("microwave_sandbox/target/release/mini-fuga", "eval-rust-file", code))
+                parse_mw_output(&run_microwave(
+                    "microwave_sandbox/target/release/mini-fuga",
+                    "eval-rust-file",
+                    code,
+                ))
             } else if lang == LanguageId::Cpp || lang == LanguageId::C {
-                parse_mw_output(&run_microwave("microwave_sandbox/target/release/mini-fuga", "eval-cpp-file", code))
+                parse_mw_output(&run_microwave(
+                    "microwave_sandbox/target/release/mini-fuga",
+                    "eval-cpp-file",
+                    code,
+                ))
             } else {
                 serde_json::Value::Null
             };
@@ -80,17 +97,27 @@ fn handle_code_analyze<const N: usize, const S: usize>(state: &mut WebState<N, S
                 "bugs": score.bugs_detected,
                 "summary": score.summary,
                 "microwave": mw_out,
-            }).to_string()
+            })
+            .to_string()
         }
         Err(e) => serde_json::json!({"error": e}).to_string(),
     }
 }
 
-fn handle_code_fix<const N: usize, const S: usize>(state: &mut WebState<N, S>, body: &str) -> String {
+fn handle_code_fix<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    body: &str,
+) -> String {
     let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let code = req.get("code").and_then(|v| v.as_str()).unwrap_or("");
-    let lang_name = req.get("language").and_then(|v| v.as_str()).unwrap_or("rust");
-    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("web_input.rs");
+    let lang_name = req
+        .get("language")
+        .and_then(|v| v.as_str())
+        .unwrap_or("rust");
+    let path = req
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("web_input.rs");
 
     let lang = match lang_name {
         "rust" => LanguageId::Rust,
@@ -134,7 +161,8 @@ fn handle_code_fix<const N: usize, const S: usize>(state: &mut WebState<N, S>, b
                 "violations": orig_score.violations,
                 "bugs": orig_score.bugs_detected,
             }
-        }).to_string();
+        })
+        .to_string();
     }
 
     let mut fixed = code.to_string();
@@ -154,9 +182,15 @@ fn handle_code_fix<const N: usize, const S: usize>(state: &mut WebState<N, S>, b
     };
 
     let mw_orig = parse_mw_output(&run_microwave(
-        "microwave_sandbox/target/release/mini-fuga", "eval-rust-file", code));
+        "microwave_sandbox/target/release/mini-fuga",
+        "eval-rust-file",
+        code,
+    ));
     let mw_fixed = parse_mw_output(&run_microwave(
-        "microwave_sandbox/target/release/mini-fuga", "eval-rust-file", &fixed));
+        "microwave_sandbox/target/release/mini-fuga",
+        "eval-rust-file",
+        &fixed,
+    ));
 
     serde_json::json!({
         "fixed": true,
@@ -180,10 +214,14 @@ fn handle_code_fix<const N: usize, const S: usize>(state: &mut WebState<N, S>, b
         },
         "microwave_original": mw_orig,
         "microwave_fixed": mw_fixed,
-    }).to_string()
+    })
+    .to_string()
 }
 
-fn handle_code_generate<const N: usize, const S: usize>(state: &mut WebState<N, S>, body: &str) -> String {
+fn handle_code_generate<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    body: &str,
+) -> String {
     let req: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
     let prompt = req.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -217,19 +255,33 @@ fn handle_code_generate<const N: usize, const S: usize>(state: &mut WebState<N, 
         "language": lang,
         "hits": hits.len(),
         "entropy": format!("{:.4}", state.omni.ai.cube.global_entropy()),
-    }).to_string()
+    })
+    .to_string()
 }
 
 fn detect_lang_from_prompt(prompt: &str) -> &'static str {
     let p = prompt.to_lowercase();
-    if p.contains("rust") || p.contains("cargo") || p.contains("impl") || p.contains("mut") { "rust" }
-    else if p.contains("python") || p.contains("def ") || p.contains("import") { "python" }
-    else if p.contains("go ") || p.contains("golang") || p.contains("goroutine") { "go" }
-    else if p.contains("c++") || p.contains("cpp") || p.contains("template") { "cpp" }
-    else if p.contains("c ") || p.contains("malloc") || p.contains("printf") { "c" }
-    else if p.contains("typescript") || p.contains("ts ") || p.contains("react") || p.contains("angular") { "typescript" }
-    else if p.contains("javascript") || p.contains("js ") || p.contains("node") { "javascript" }
-    else { "rust" }
+    if p.contains("rust") || p.contains("cargo") || p.contains("impl") || p.contains("mut") {
+        "rust"
+    } else if p.contains("python") || p.contains("def ") || p.contains("import") {
+        "python"
+    } else if p.contains("go ") || p.contains("golang") || p.contains("goroutine") {
+        "go"
+    } else if p.contains("c++") || p.contains("cpp") || p.contains("template") {
+        "cpp"
+    } else if p.contains("c ") || p.contains("malloc") || p.contains("printf") {
+        "c"
+    } else if p.contains("typescript")
+        || p.contains("ts ")
+        || p.contains("react")
+        || p.contains("angular")
+    {
+        "typescript"
+    } else if p.contains("javascript") || p.contains("js ") || p.contains("node") {
+        "javascript"
+    } else {
+        "rust"
+    }
 }
 
 fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
@@ -287,7 +339,8 @@ fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
 
 fn take_lines(text: &str, n: usize) -> String {
     let mut seen = std::collections::HashSet::new();
-    let parts: Vec<&str> = text.lines()
+    let parts: Vec<&str> = text
+        .lines()
         .filter(|l| !l.contains("(sim=") && !l.starts_with("Answer") && !l.starts_with("Route"))
         .filter(|l| !l.trim().is_empty())
         .filter(|l| seen.insert(l.trim()))
@@ -297,10 +350,16 @@ fn take_lines(text: &str, n: usize) -> String {
 }
 
 fn answer_from_flat<const N: usize, const S: usize>(ai: &mut FugaAI<N, S>, query: &str) -> String {
-    let tokens: Vec<TokenInfo> = query.split_whitespace().enumerate().map(|(_, w)| TokenInfo {
-        id: w.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)),
-        text: w.to_string(),
-    }).collect();
+    let tokens: Vec<TokenInfo> = query
+        .split_whitespace()
+        .enumerate()
+        .map(|(_, w)| TokenInfo {
+            id: w
+                .bytes()
+                .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)),
+            text: w.to_string(),
+        })
+        .collect();
     let output = ai.think(&tokens);
     let answer = ai.answer_from_output(&output, query);
     if answer.contains("No knowledge stored") || answer.len() < 20 {
@@ -320,40 +379,66 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
     let result = state.omni.query(query, &tokens);
     let omni_text = omni::render_omni_result(&result);
 
-    let conv = if domain == "general" || domain == "text" || domain == "dialogue" || domain == "narrative" {
-        let moe_text = state.omni.ai.answer_from_moe(query);
-        let answer = take_lines(&moe_text, 3);
-        if !answer.is_empty() {
-            answer
+    let conv =
+        if domain == "general" || domain == "text" || domain == "dialogue" || domain == "narrative"
+        {
+            let moe_text = state.omni.ai.answer_from_moe(query);
+            let answer = take_lines(&moe_text, 3);
+            if !answer.is_empty() {
+                answer
+            } else {
+                let flat = answer_from_flat(&mut state.omni.ai, query);
+                if !flat.is_empty() {
+                    flat
+                } else {
+                    speech::conversational_reply(query, domain, &[])
+                }
+            }
         } else {
-            let flat = answer_from_flat(&mut state.omni.ai, query);
-            if !flat.is_empty() { flat } else { speech::conversational_reply(query, domain, &[]) }
-        }
-    } else {
-        speech::conversational_reply(query, domain, match &result.domain_result {
-            omni::OmniDomainResult::Physics(a) => &a.system_vector,
-            _ => &[],
-        })
-    };
+            speech::conversational_reply(
+                query,
+                domain,
+                match &result.domain_result {
+                    omni::OmniDomainResult::Physics(a) => &a.system_vector,
+                    _ => &[],
+                },
+            )
+        };
 
     let sv = match &result.domain_result {
-        omni::OmniDomainResult::Physics(a) => format!("[{}]", a.system_vector.iter()
-            .map(|v| format!("{:.4e}", v)).collect::<Vec<_>>().join(", ")),
+        omni::OmniDomainResult::Physics(a) => format!(
+            "[{}]",
+            a.system_vector
+                .iter()
+                .map(|v| format!("{:.4e}", v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         _ => "[]".to_string(),
     };
 
-    let is_code_request = query.contains("write ") || query.contains("generate ")
-        || query.contains("create ") || query.contains("implement ")
-        || query.contains("make ") || query.contains("code for ")
-        || query.contains("fn ") || query.contains("function")
-        || query.contains("программа") || query.contains("код ") || query.contains("функция")
-        || query.contains("напиши") || query.contains("создай");
+    let is_code_request = query.contains("write ")
+        || query.contains("generate ")
+        || query.contains("create ")
+        || query.contains("implement ")
+        || query.contains("make ")
+        || query.contains("code for ")
+        || query.contains("fn ")
+        || query.contains("function")
+        || query.contains("программа")
+        || query.contains("код ")
+        || query.contains("функция")
+        || query.contains("напиши")
+        || query.contains("создай");
 
     let generated_code = if is_code_request {
         let body = serde_json::json!({"prompt": query}).to_string();
         let gend = handle_code_generate::<N, S>(state, &body);
         let v: serde_json::Value = serde_json::from_str(&gend).unwrap_or_default();
-        v.get("generated_code").and_then(|g| g.as_str()).unwrap_or("").to_string()
+        v.get("generated_code")
+            .and_then(|g| g.as_str())
+            .unwrap_or("")
+            .to_string()
     } else {
         String::new()
     };
@@ -370,10 +455,14 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
         "memory": result.memory_size,
         "generated_code": generated_code,
         "code_analysis": code_analysis,
-    }).to_string()
+    })
+    .to_string()
 }
 
-fn detect_and_analyze_code<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> serde_json::Value {
+fn detect_and_analyze_code<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    query: &str,
+) -> serde_json::Value {
     let extracted: Vec<(String, String)> = {
         let mut blocks = Vec::new();
         let mut in_block = false;
@@ -422,11 +511,20 @@ fn detect_and_analyze_code<const N: usize, const S: usize>(state: &mut WebState<
                 || trimmed.starts_with("void ")
                 || trimmed.starts_with("std::");
             if looks_like_code {
-                let lang = if query.contains("fn ") || query.contains("impl ") || query.contains("let mut") { "rust" }
-                    else if query.contains("#include") || query.contains("int main") { "c" }
-                    else if query.contains("def ") || query.contains("import ") { "python" }
-                    else if query.contains("func ") || query.contains("package ") { "go" }
-                    else { "rust" };
+                let lang = if query.contains("fn ")
+                    || query.contains("impl ")
+                    || query.contains("let mut")
+                {
+                    "rust"
+                } else if query.contains("#include") || query.contains("int main") {
+                    "c"
+                } else if query.contains("def ") || query.contains("import ") {
+                    "python"
+                } else if query.contains("func ") || query.contains("package ") {
+                    "go"
+                } else {
+                    "rust"
+                };
                 blocks.push((lang.to_string(), trimmed.to_string()));
             }
         }
@@ -438,16 +536,19 @@ fn detect_and_analyze_code<const N: usize, const S: usize>(state: &mut WebState<
     }
 
     let (lang_name, code) = &extracted[0];
-    let path = format!("chat_code.{}", match lang_name.as_str() {
-        "rust" | "rs" => "rs",
-        "c" => "c",
-        "cpp" | "c++" => "cpp",
-        "go" => "go",
-        "python" | "py" => "py",
-        "ts" | "typescript" => "ts",
-        "js" => "js",
-        _ => "rs",
-    });
+    let path = format!(
+        "chat_code.{}",
+        match lang_name.as_str() {
+            "rust" | "rs" => "rs",
+            "c" => "c",
+            "cpp" | "c++" => "cpp",
+            "go" => "go",
+            "python" | "py" => "py",
+            "ts" | "typescript" => "ts",
+            "js" => "js",
+            _ => "rs",
+        }
+    );
 
     let lang = match lang_name.as_str() {
         "rust" | "rs" => LanguageId::Rust,
@@ -466,15 +567,31 @@ fn detect_and_analyze_code<const N: usize, const S: usize>(state: &mut WebState<
     };
 
     let mw_out = if lang == LanguageId::Rust || lang_name == "rust" {
-        parse_mw_output(&run_microwave("microwave_sandbox/target/release/mini-fuga", "eval-rust-file", code))
+        parse_mw_output(&run_microwave(
+            "microwave_sandbox/target/release/mini-fuga",
+            "eval-rust-file",
+            code,
+        ))
     } else if lang == LanguageId::Cpp || lang == LanguageId::C {
-        parse_mw_output(&run_microwave("microwave_sandbox/target/release/mini-fuga", "eval-cpp-file", code))
+        parse_mw_output(&run_microwave(
+            "microwave_sandbox/target/release/mini-fuga",
+            "eval-cpp-file",
+            code,
+        ))
     } else {
         serde_json::Value::Null
     };
 
-    let bugs_text = if qual_result.bugs_detected { "⚠️ BUGS DETECTED" } else { "✓ no bugs" };
-    let violations_text = if qual_result.violations > 0 { format!("⚠ {} violations", qual_result.violations) } else { "✓ no violations".to_string() };
+    let bugs_text = if qual_result.bugs_detected {
+        "⚠️ BUGS DETECTED"
+    } else {
+        "✓ no bugs"
+    };
+    let violations_text = if qual_result.violations > 0 {
+        format!("⚠ {} violations", qual_result.violations)
+    } else {
+        "✓ no violations".to_string()
+    };
 
     serde_json::json!({
         "language": lang_name,
@@ -531,8 +648,8 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
         dim: cube_dim,
     }));
 
-    let server = Server::http(&format!("0.0.0.0:{}", port))
-        .expect(&format!("Failed to bind port {}", port));
+    let server =
+        Server::http(&format!("0.0.0.0:{}", port)).expect(&format!("Failed to bind port {}", port));
     let ip = std::net::TcpStream::connect("8.8.8.8:53")
         .ok()
         .and_then(|s| s.local_addr().ok())
@@ -553,14 +670,18 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
         let method = request.method().as_str().to_string();
 
         let response = match (method.as_str(), url.as_str()) {
-            ("GET", "/") | ("GET", "/index.html") => {
-                Response::from_string(SITE_HTML)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
-            }
+            ("GET", "/") | ("GET", "/index.html") => Response::from_string(SITE_HTML).with_header(
+                Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap(),
+            ),
             ("GET", "/api/stats") => {
                 let st = state.lock().unwrap();
                 let moe_total = st.omni.ai.moe.total_size();
-                let domains: Vec<serde_json::Value> = st.omni.ai.moe.domain_sizes().iter()
+                let domains: Vec<serde_json::Value> = st
+                    .omni
+                    .ai
+                    .moe
+                    .domain_sizes()
+                    .iter()
                     .map(|(d, s)| serde_json::json!({"name": d, "size": s}))
                     .collect();
                 let j = serde_json::json!({
@@ -573,33 +694,42 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     "ndim": N,
                     "domains": domains,
                 });
-                Response::from_string(j.to_string())
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                Response::from_string(j.to_string()).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
             }
             ("POST", "/api/chat") => {
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body).unwrap_or(0);
-                let query: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({"message": ""}));
-                let text = query.get("message").or_else(|| query.get("query")).and_then(|v| v.as_str()).unwrap_or("");
+                let query: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::json!({"message": ""}));
+                let text = query
+                    .get("message")
+                    .or_else(|| query.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let reply = {
                     let mut st = state.lock().unwrap();
                     handle_chat::<N, S>(&mut st, text)
                 };
                 let resp = serde_json::json!({"reply": reply});
-                Response::from_string(resp.to_string())
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                Response::from_string(resp.to_string()).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
             }
             ("POST", "/api/speak") => {
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body).unwrap_or(0);
-                let query: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({"text": ""}));
+                let query: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::json!({"text": ""}));
                 let text = query.get("text").and_then(|v| v.as_str()).unwrap_or("");
                 let wav = {
                     let st = state.lock().unwrap();
                     handle_speak::<N, S>(&st, text)
                 };
-                Response::from_data(wav)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"audio/wav"[..]).unwrap())
+                Response::from_data(wav).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"audio/wav"[..]).unwrap(),
+                )
             }
             ("POST", "/api/code-analyze") => {
                 let mut body = String::new();
@@ -608,8 +738,9 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     let mut st = state.lock().unwrap();
                     handle_code_analyze::<N, S>(&mut st, &body)
                 };
-                Response::from_string(result)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                Response::from_string(result).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
             }
             ("POST", "/api/code-fix") => {
                 let mut body = String::new();
@@ -618,8 +749,9 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     let mut st = state.lock().unwrap();
                     handle_code_fix::<N, S>(&mut st, &body)
                 };
-                Response::from_string(result)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                Response::from_string(result).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
             }
             ("POST", "/api/code-generate") => {
                 let mut body = String::new();
@@ -628,12 +760,11 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     let mut st = state.lock().unwrap();
                     handle_code_generate::<N, S>(&mut st, &body)
                 };
-                Response::from_string(result)
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
+                Response::from_string(result).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
             }
-            _ => {
-                Response::from_string("404 Not Found").with_status_code(404)
-            }
+            _ => Response::from_string("404 Not Found").with_status_code(404),
         };
 
         if let Err(e) = request.respond(response) {
@@ -644,11 +775,17 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
 
 fn main() {
     let cube_path = env::var("FUGA_CUBE_PATH").unwrap_or_else(|_| "fuga_code_cube.bin".into());
-    let port: u16 = env::var("FUGA_WEB_PORT").unwrap_or_else(|_| "8080".into()).parse().unwrap_or(8080);
+    let port: u16 = env::var("FUGA_WEB_PORT")
+        .unwrap_or_else(|_| "8080".into())
+        .parse()
+        .unwrap_or(8080);
 
     let (ndim, side_len, _dim) = match peek_cube_header(&cube_path) {
         Ok(h) => h,
-        Err(e) => { eprintln!("{}", e); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
     };
     match (ndim, side_len) {
         (4, 4) => run_server::<4, 4>(&cube_path, port),

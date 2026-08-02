@@ -19,27 +19,56 @@ pub struct TokenConfig {
 
 impl TokenConfig {
     pub fn from_json(path: &str) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-        let json: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        let json: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         let mut special_tokens = HashMap::new();
         if let Some(added) = json.get("added_tokens_decoder").and_then(|v| v.as_object()) {
             for (key, val) in added {
                 let id: u32 = key.parse().unwrap_or(0);
-                let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let special = val.get("special").and_then(|v| v.as_bool()).unwrap_or(false);
-                special_tokens.insert(id, SpecialToken { id, content, special });
+                let content = val
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let special = val
+                    .get("special")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                special_tokens.insert(
+                    id,
+                    SpecialToken {
+                        id,
+                        content,
+                        special,
+                    },
+                );
             }
         }
 
-        let bos = json.get("bos_token").and_then(|v| v.as_str()).unwrap_or("[BOS]").to_string();
-        let eos = json.get("eos_token").and_then(|v| v.as_str()).unwrap_or("[EOS]").to_string();
-        let pad = json.get("pad_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let bos = json
+            .get("bos_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[BOS]")
+            .to_string();
+        let eos = json
+            .get("eos_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("[EOS]")
+            .to_string();
+        let pad = json
+            .get("pad_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let mut extra_specials = Vec::new();
-        if let Some(extra) = json.get("additional_special_tokens").and_then(|v| v.as_array()) {
+        if let Some(extra) = json
+            .get("additional_special_tokens")
+            .and_then(|v| v.as_array())
+        {
             for v in extra {
                 if let Some(s) = v.as_str() {
                     extra_specials.push(s.to_string());
@@ -48,7 +77,10 @@ impl TokenConfig {
         }
 
         Ok(TokenConfig {
-            vocab_size: json.get("model_max_length").and_then(|v| v.as_u64()).unwrap_or(128000) as usize,
+            vocab_size: json
+                .get("model_max_length")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(128000) as usize,
             special_tokens,
             pat_str: String::new(),
             bos_token: bos,
@@ -76,7 +108,9 @@ impl TokenBuilder {
     pub fn load_config(&mut self, path: &str) -> Result<(), String> {
         let config = TokenConfig::from_json(path)?;
         for (id, tok) in &config.special_tokens {
-            self.merged_special.entry(*id).or_insert_with(|| tok.clone());
+            self.merged_special
+                .entry(*id)
+                .or_insert_with(|| tok.clone());
         }
         self.merged_vocab_size = self.merged_vocab_size.max(config.vocab_size);
         self.configs.push(config);
@@ -100,7 +134,9 @@ impl TokenBuilder {
     }
 
     pub fn build_flat_vocab(&self) -> Vec<(u32, String)> {
-        let mut tokens: Vec<(u32, String)> = self.merged_special.iter()
+        let mut tokens: Vec<(u32, String)> = self
+            .merged_special
+            .iter()
             .map(|(id, t)| (*id, t.content.clone()))
             .collect();
         tokens.sort_by_key(|(id, _)| *id);
@@ -120,8 +156,12 @@ impl TokenBuilder {
         full
     }
 
-    pub fn merged_special(&self) -> &HashMap<u32, SpecialToken> { &self.merged_special }
-    pub fn vocab_size(&self) -> usize { self.merged_vocab_size }
+    pub fn merged_special(&self) -> &HashMap<u32, SpecialToken> {
+        &self.merged_special
+    }
+    pub fn vocab_size(&self) -> usize {
+        self.merged_vocab_size
+    }
 
     pub fn report(&self) -> String {
         let mut out = String::new();
@@ -132,7 +172,10 @@ impl TokenBuilder {
         let mut sorted: Vec<_> = self.merged_special.iter().collect();
         sorted.sort_by_key(|(id, _)| *id);
         for (id, tok) in &sorted {
-            out.push_str(&format!("  {}: {:?} (special: {})\n", id, tok.content, tok.special));
+            out.push_str(&format!(
+                "  {}: {:?} (special: {})\n",
+                id, tok.content, tok.special
+            ));
         }
         out
     }

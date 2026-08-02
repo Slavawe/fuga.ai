@@ -1,4 +1,3 @@
-
 #[derive(Clone)]
 pub struct Valve {
     pub position: f64,
@@ -7,7 +6,10 @@ pub struct Valve {
 
 impl Valve {
     pub fn new(max_flow: f64) -> Self {
-        Self { position: 0.0, max_flow }
+        Self {
+            position: 0.0,
+            max_flow,
+        }
     }
 
     pub fn set(&mut self, pos: f64) {
@@ -28,7 +30,11 @@ pub struct Pipe {
 
 impl Pipe {
     pub fn new(volume: f64) -> Self {
-        Self { pressure: 0.0, volume, inflow: 0.0 }
+        Self {
+            pressure: 0.0,
+            volume,
+            inflow: 0.0,
+        }
     }
 
     pub fn step(&mut self, dt: f64, valve: &Valve) {
@@ -49,7 +55,12 @@ pub struct Heater {
 
 impl Heater {
     pub fn new(mass: f64) -> Self {
-        Self { power: 0.0, temperature: 20.0, mass, specific_heat: 4184.0 }
+        Self {
+            power: 0.0,
+            temperature: 20.0,
+            mass,
+            specific_heat: 4184.0,
+        }
     }
 
     pub fn step(&mut self, dt: f64, coolant_flow: f64, coolant_temp: f64) {
@@ -78,7 +89,13 @@ pub struct Boiler {
 
 impl Boiler {
     pub fn new(water_mass: f64) -> Self {
-        Self { water_temp: 20.0, pressure: 101325.0, water_mass, vapor_mass: 0.0, heat_input: 0.0 }
+        Self {
+            water_temp: 20.0,
+            pressure: 101325.0,
+            water_mass,
+            vapor_mass: 0.0,
+            heat_input: 0.0,
+        }
     }
 
     pub fn step(&mut self, dt: f64, heat_kw: f64, water_in: f64) {
@@ -102,7 +119,9 @@ impl Boiler {
         if self.vapor_mass <= 0.0 && self.water_temp < 99.9 {
             Phase::Liquid
         } else if self.vapor_mass > 0.0 && self.water_mass > 0.0 {
-            Phase::Boiling { vapor_fraction: self.vapor_mass / (self.water_mass + self.vapor_mass).max(0.001) }
+            Phase::Boiling {
+                vapor_fraction: self.vapor_mass / (self.water_mass + self.vapor_mass).max(0.001),
+            }
         } else {
             Phase::Gas
         }

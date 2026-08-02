@@ -1,5 +1,5 @@
-use crate::ai::sdr::encode_text;
 use crate::ai::htm_temporal::TemporalMemory;
+use crate::ai::sdr::encode_text;
 
 const Z_WINDOW: usize = 20;
 const ANOMALY_Z_THRESHOLD: f64 = -1.5;
@@ -39,18 +39,27 @@ impl StyloProfile {
             if p > 0.0 { acc - p * p.log2() } else { acc }
         });
         let unique_ratio = freq.len() as f64 / n.max(1) as f64;
-        let avg_line_len = if lines.is_empty() { 0.0 } else {
+        let avg_line_len = if lines.is_empty() {
+            0.0
+        } else {
             lines.iter().map(|l| l.len() as f64).sum::<f64>() / lines.len() as f64
         };
 
         let mut struct_freq: Vec<usize> = Vec::new();
         let mut cur = 0usize;
         for c in chars {
-            if c == '\n' { struct_freq.push(cur); cur = 0; }
-            else if c.is_whitespace() { cur += 1; }
-            else { cur += 1; }
+            if c == '\n' {
+                struct_freq.push(cur);
+                cur = 0;
+            } else if c.is_whitespace() {
+                cur += 1;
+            } else {
+                cur += 1;
+            }
         }
-        if cur > 0 { struct_freq.push(cur); }
+        if cur > 0 {
+            struct_freq.push(cur);
+        }
         let total_w = struct_freq.iter().sum::<usize>().max(1);
         let structural_entropy = struct_freq.iter().fold(0.0, |acc, &c| {
             let p = c as f64 / total_w as f64;
@@ -108,7 +117,9 @@ impl AnomalyDetector {
 
         let entropy_shift = if let Some(ref base) = self.baseline_profile {
             (profile.token_entropy - base.token_entropy).abs()
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         if z_score < ANOMALY_Z_THRESHOLD || entropy_shift > ENTROPY_SHIFT_THRESHOLD {
             let event = AnomalyEvent {
@@ -128,11 +139,22 @@ impl AnomalyDetector {
 
     pub fn compute_z_score(&self, score: f64) -> f64 {
         let n = self.match_history.len();
-        if n < 3 { return 0.0; }
+        if n < 3 {
+            return 0.0;
+        }
         let mean = self.match_history.iter().sum::<f64>() / n as f64;
-        let variance = self.match_history.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+        let variance = self
+            .match_history
+            .iter()
+            .map(|v| (v - mean).powi(2))
+            .sum::<f64>()
+            / n as f64;
         let std = variance.sqrt();
-        if std < 1e-9 { 0.0 } else { (score - mean) / std }
+        if std < 1e-9 {
+            0.0
+        } else {
+            (score - mean) / std
+        }
     }
 
     pub fn profile_text(&self, text: &str) -> StyloProfile {
@@ -140,9 +162,16 @@ impl AnomalyDetector {
     }
 
     pub fn stats(&self) -> String {
-        format!("step={} matches={} anomalies={} baseline_entropy={:.4}",
-            self.step, self.match_history.len(), self.anomalies.len(),
-            self.baseline_profile.as_ref().map(|p| p.token_entropy).unwrap_or(0.0))
+        format!(
+            "step={} matches={} anomalies={} baseline_entropy={:.4}",
+            self.step,
+            self.match_history.len(),
+            self.anomalies.len(),
+            self.baseline_profile
+                .as_ref()
+                .map(|p| p.token_entropy)
+                .unwrap_or(0.0)
+        )
     }
 }
 
@@ -191,10 +220,14 @@ impl AnomalyReflector {
     }
 
     pub fn reflect_summary(&self) -> String {
-        format!("reflections={} total={} last_z={:.2} buffer={}",
+        format!(
+            "reflections={} total={} last_z={:.2} buffer={}",
             self.total_corrections,
             self.detector.step,
-            self.correction_buffer.last().map(|c| c.z_score).unwrap_or(0.0),
+            self.correction_buffer
+                .last()
+                .map(|c| c.z_score)
+                .unwrap_or(0.0),
             self.correction_buffer.len(),
         )
     }

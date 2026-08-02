@@ -14,7 +14,7 @@ fn test_hjepa_new_defaults() {
     assert_eq!(hj.levels[0].stride, 1);
     assert_eq!(hj.levels[1].stride, 3);
     assert_eq!(hj.levels[2].stride, 5);
-    assert_eq!(hj.levels[0].perm_offsets.len(), 16);  // ctx * PERM_EXPANSION (4*4)
+    assert_eq!(hj.levels[0].perm_offsets.len(), 16); // ctx * PERM_EXPANSION (4*4)
     assert_eq!(hj.levels[1].weights.len(), 12 * 8192); // ctx * PERM_EXPANSION * dim (3*4*8192)
 }
 

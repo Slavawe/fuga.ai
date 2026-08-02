@@ -1,5 +1,5 @@
-use tree_sitter::{Language, Parser, StreamingIterator};
 use std::path::Path;
+use tree_sitter::{Language, Parser, StreamingIterator};
 
 /// Поддерживаемые языки
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -28,7 +28,9 @@ impl LanguageId {
     }
 
     pub fn from_path(path: &Path) -> Option<Self> {
-        path.extension().and_then(|e| e.to_str()).and_then(Self::from_extension)
+        path.extension()
+            .and_then(|e| e.to_str())
+            .and_then(Self::from_extension)
     }
 
     pub fn tree_sitter_language(&self) -> Language {
@@ -61,7 +63,11 @@ impl LanguageId {
             LanguageId::C | LanguageId::Cpp => &["function_definition"],
             LanguageId::Go => &["function_declaration", "method_declaration"],
             LanguageId::Python => &["function_definition"],
-            LanguageId::TypeScript | LanguageId::JavaScript => &["function_declaration", "arrow_function", "method_definition"],
+            LanguageId::TypeScript | LanguageId::JavaScript => &[
+                "function_declaration",
+                "arrow_function",
+                "method_definition",
+            ],
         }
     }
 
@@ -71,7 +77,9 @@ impl LanguageId {
             LanguageId::C | LanguageId::Cpp => &["identifier"],
             LanguageId::Go => &["field_identifier", "identifier"],
             LanguageId::Python => &["identifier"],
-            LanguageId::TypeScript | LanguageId::JavaScript => &["property_identifier", "identifier"],
+            LanguageId::TypeScript | LanguageId::JavaScript => {
+                &["property_identifier", "identifier"]
+            }
         }
     }
 }
@@ -89,7 +97,12 @@ pub fn parse_source(source: &str, lang: LanguageId) -> Option<tree_sitter::Tree>
 
 /// Запускает tree-sitter query и возвращает совпадения
 /// Принимает source + Tree (Tree создаётся отдельно, чтобы lifetime совпадал)
-pub fn run_query<'a>(query_str: &str, source: &'a str, lang: LanguageId, tree: &'a tree_sitter::Tree) -> Option<Vec<QueryResult>> {
+pub fn run_query<'a>(
+    query_str: &str,
+    source: &'a str,
+    lang: LanguageId,
+    tree: &'a tree_sitter::Tree,
+) -> Option<Vec<QueryResult>> {
     let lang_inst = lang.tree_sitter_language();
     let query = tree_sitter::Query::new(&lang_inst, query_str).ok()?;
     let root = tree.root_node();
@@ -154,10 +167,20 @@ pub fn count_nodes_by_kind(node: tree_sitter::Node, kinds: &[&str]) -> usize {
 }
 
 /// Collect function names from a tree
-pub fn collect_function_names(tree: &tree_sitter::Tree, source: &str, lang: LanguageId) -> Vec<String> {
+pub fn collect_function_names(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    lang: LanguageId,
+) -> Vec<String> {
     let root = tree.root_node();
     let mut names = Vec::new();
-    collect_func_names_recursive(root, source, lang.function_kinds(), lang.function_name_kinds(), &mut names);
+    collect_func_names_recursive(
+        root,
+        source,
+        lang.function_kinds(),
+        lang.function_name_kinds(),
+        &mut names,
+    );
     names
 }
 
@@ -194,7 +217,11 @@ fn collect_func_names_recursive(
     }
 }
 
-fn find_name_recursive(node: tree_sitter::Node, source: &str, name_kinds: &[&str]) -> Option<String> {
+fn find_name_recursive(
+    node: tree_sitter::Node,
+    source: &str,
+    name_kinds: &[&str],
+) -> Option<String> {
     if name_kinds.contains(&node.kind()) {
         return Some(source[node.byte_range()].to_string());
     }
@@ -208,7 +235,12 @@ fn find_name_recursive(node: tree_sitter::Node, source: &str, name_kinds: &[&str
 }
 
 /// Find enclosing function for a given line number
-pub fn find_enclosing_function(tree: &tree_sitter::Tree, source: &str, lang: LanguageId, target_line: usize) -> Option<String> {
+pub fn find_enclosing_function(
+    tree: &tree_sitter::Tree,
+    source: &str,
+    lang: LanguageId,
+    target_line: usize,
+) -> Option<String> {
     let root = tree.root_node();
     let func_kinds = lang.function_kinds();
     let name_kinds = lang.function_name_kinds();
@@ -238,7 +270,9 @@ fn find_enc_fn_recursive(
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if let Some(name) = find_enc_fn_recursive(child, source, func_kinds, name_kinds, target_line) {
+        if let Some(name) =
+            find_enc_fn_recursive(child, source, func_kinds, name_kinds, target_line)
+        {
             return Some(name);
         }
     }

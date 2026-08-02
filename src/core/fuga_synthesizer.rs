@@ -46,9 +46,7 @@ impl FugaSynthesizer {
         let coherence = cube.coherence();
 
         if entropy < 0.3 || coherence < 0.4 {
-            let diagonal_queries: Vec<Hypervector> = (0..S)
-                .map(|i| cube.cell(i, i, i))
-                .collect();
+            let diagonal_queries: Vec<Hypervector> = (0..S).map(|i| cube.cell(i, i, i)).collect();
             let query_refs: Vec<&Hypervector> = diagonal_queries.iter().collect();
             let results = pentagon.batch_fetch(&query_refs);
 
@@ -102,7 +100,12 @@ impl FugaSynthesizer {
 mod tests {
     use super::*;
 
-    fn make_test_env() -> (WaveCube<3, 4>, InformationTriangle, PentagonStorage, FugaSynthesizer) {
+    fn make_test_env() -> (
+        WaveCube<3, 4>,
+        InformationTriangle,
+        PentagonStorage,
+        FugaSynthesizer,
+    ) {
         let dim = 16384;
         let cube = WaveCube::<3, 4>::new(dim);
         let triangle = InformationTriangle::new(dim);
@@ -134,6 +137,9 @@ mod tests {
         let chaos_inject = Hypervector::random(dim);
         triangle.vertex_chaos = triangle.vertex_chaos.bundle(&[&chaos_inject]);
         let result = synth.synthesize(&mut cube.clone(), &mut triangle, &pentagon, &chaos_inject);
-        assert!(result.confidence > 0.0, "Constructed attack should produce non-zero signal");
+        assert!(
+            result.confidence > 0.0,
+            "Constructed attack should produce non-zero signal"
+        );
     }
 }

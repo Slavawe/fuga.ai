@@ -1,6 +1,8 @@
-use rand::SeedableRng;
 use crate::core::hypervector::Hypervector;
-use syn::{File, Item, ItemFn, Signature, Type, FnArg, ReturnType, Attribute, Block, Stmt, Expr, Generics};
+use rand::SeedableRng;
+use syn::{
+    Attribute, Block, Expr, File, FnArg, Generics, Item, ItemFn, ReturnType, Signature, Stmt, Type,
+};
 
 #[derive(Debug, Clone)]
 pub struct SemanticAnalysis {
@@ -53,13 +55,19 @@ impl SemanticLayer {
             Hypervector::random(self.dim)
         } else {
             let first = &function_vectors[0].1;
-            let others: Vec<&Hypervector> = function_vectors.iter().skip(1).map(|(_, v)| v).collect();
+            let others: Vec<&Hypervector> =
+                function_vectors.iter().skip(1).map(|(_, v)| v).collect();
             first.bundle(&others)
         };
 
         let coherence = self.compute_coherence(&function_vectors);
 
-        SemanticAnalysis { semantic_vector, function_vectors, coherence, anomalies }
+        SemanticAnalysis {
+            semantic_vector,
+            function_vectors,
+            coherence,
+            anomalies,
+        }
     }
 
     fn encode_function(&self, func: &ItemFn) -> Hypervector {
@@ -84,14 +92,22 @@ impl SemanticLayer {
         if let ReturnType::Type(_, ty) = &sig.output {
             comps.push(self.encode_type(ty));
         }
-        if comps.is_empty() { Hypervector::random(self.dim) } 
-        else { comps[0].bundle(&comps.iter().skip(1).collect::<Vec<_>>()) }
+        if comps.is_empty() {
+            Hypervector::random(self.dim)
+        } else {
+            comps[0].bundle(&comps.iter().skip(1).collect::<Vec<_>>())
+        }
     }
 
     fn encode_type(&self, ty: &Type) -> Hypervector {
         match ty {
             Type::Path(tp) => {
-                let segs: Vec<_> = tp.path.segments.iter().map(|s| s.ident.to_string()).collect();
+                let segs: Vec<_> = tp
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
                 self.encode_string(&segs.join("::"))
             }
             Type::Reference(r) => {
@@ -101,8 +117,11 @@ impl SemanticLayer {
             }
             Type::Tuple(t) => {
                 let elems: Vec<_> = t.elems.iter().map(|e| self.encode_type(e)).collect();
-                if elems.is_empty() { Hypervector::random(self.dim) }
-                else { elems[0].bundle(&elems.iter().skip(1).collect::<Vec<_>>()) }
+                if elems.is_empty() {
+                    Hypervector::random(self.dim)
+                } else {
+                    elems[0].bundle(&elems.iter().skip(1).collect::<Vec<_>>())
+                }
             }
             Type::Array(a) => {
                 let elem = self.encode_type(&a.elem);
@@ -117,18 +136,26 @@ impl SemanticLayer {
     }
 
     fn encode_generics(&self, gens: &Generics) -> Hypervector {
-        let names: Vec<_> = gens.params.iter()
+        let names: Vec<_> = gens
+            .params
+            .iter()
             .map(|p| match p {
                 syn::GenericParam::Type(t) => t.ident.to_string(),
                 syn::GenericParam::Lifetime(l) => l.lifetime.ident.to_string(),
                 syn::GenericParam::Const(c) => c.ident.to_string(),
-            }).collect();
+            })
+            .collect();
         self.encode_string(&names.join(","))
     }
 
     fn encode_attributes(&self, attrs: &[Attribute]) -> Hypervector {
-        if attrs.is_empty() { return Hypervector::random(self.dim); }
-        let names: Vec<_> = attrs.iter().filter_map(|a| a.path().get_ident().map(|i| i.to_string())).collect();
+        if attrs.is_empty() {
+            return Hypervector::random(self.dim);
+        }
+        let names: Vec<_> = attrs
+            .iter()
+            .filter_map(|a| a.path().get_ident().map(|i| i.to_string()))
+            .collect();
         self.encode_string(&names.join(","))
     }
 
@@ -137,14 +164,21 @@ impl SemanticLayer {
         for stmt in &block.stmts {
             comps.push(self.encode_stmt(stmt));
         }
-        if comps.is_empty() { Hypervector::random(self.dim) }
-        else { comps[0].bundle(&comps.iter().skip(1).collect::<Vec<_>>()) }
+        if comps.is_empty() {
+            Hypervector::random(self.dim)
+        } else {
+            comps[0].bundle(&comps.iter().skip(1).collect::<Vec<_>>())
+        }
     }
 
     fn encode_stmt(&self, stmt: &Stmt) -> Hypervector {
         match stmt {
             Stmt::Expr(e, _) => self.encode_expr(e),
-            Stmt::Local(l) => l.init.as_ref().map(|init| self.encode_expr(&init.expr)).unwrap_or_else(|| Hypervector::random(self.dim)),
+            Stmt::Local(l) => l
+                .init
+                .as_ref()
+                .map(|init| self.encode_expr(&init.expr))
+                .unwrap_or_else(|| Hypervector::random(self.dim)),
             _ => Hypervector::random(self.dim),
         }
     }
@@ -185,21 +219,27 @@ impl SemanticLayer {
     }
 
     fn compute_coherence(&self, funcs: &[(String, Hypervector)]) -> f64 {
-        if funcs.len() < 2 { return 1.0; }
+        if funcs.len() < 2 {
+            return 1.0;
+        }
         let mut sims = Vec::new();
         for i in 0..funcs.len() {
-            for j in i+1..funcs.len() {
+            for j in i + 1..funcs.len() {
                 sims.push(funcs[i].1.similarity(&funcs[j].1));
             }
         }
-        if sims.is_empty() { 1.0 } else { sims.iter().sum::<f64>() / sims.len() as f64 }
+        if sims.is_empty() {
+            1.0
+        } else {
+            sims.iter().sum::<f64>() / sims.len() as f64
+        }
     }
 }
 
 fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());

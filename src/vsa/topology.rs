@@ -24,7 +24,9 @@ pub fn ls_bind(a: &Hypervector, b: &Hypervector, block_bits: usize) -> Hypervect
 
         for bi in 0..block_bits {
             let src_bit = base + bi;
-            if src_bit >= dim { break; }
+            if src_bit >= dim {
+                break;
+            }
             if ((a.words[src_bit / 64] >> (src_bit % 64)) & 1) == 1 {
                 let dst_bit = base + (bi + phase) % block_bits;
                 words[dst_bit / 64] |= 1 << (dst_bit % 64);
@@ -59,7 +61,9 @@ pub fn ls_unbind(a: &Hypervector, b: &Hypervector, block_bits: usize) -> Hyperve
 
         for bi in 0..block_bits {
             let src_bit = base + bi;
-            if src_bit >= dim { break; }
+            if src_bit >= dim {
+                break;
+            }
             if ((a.words[src_bit / 64] >> (src_bit % 64)) & 1) == 1 {
                 let dst_bit = base + (bi + (block_bits - phase)) % block_bits;
                 words[dst_bit / 64] |= 1 << (dst_bit % 64);
@@ -81,7 +85,9 @@ pub fn quantized_delta(pred_raw: &[f64], actual: &Hypervector, dim: usize) -> Hy
 }
 
 pub fn phase_smooth(hv: &Hypervector, radius: usize) -> Hypervector {
-    if radius == 0 { return hv.clone(); }
+    if radius == 0 {
+        return hv.clone();
+    }
     let perms: Vec<Hypervector> = (1..=radius).map(|k| hv.permute(k)).collect();
     let refs: Vec<&Hypervector> = perms.iter().collect();
     hv.bundle(&refs).balance_density()
@@ -105,8 +111,16 @@ mod tests {
         let b = Hypervector::random(8192);
         let bound = ls_bind(&a, &b, 32);
         let rebound = ls_unbind(&bound, &b, 32);
-        let sim = a.words.iter().zip(rebound.words.iter()).filter(|pair| pair.0 == pair.1).count();
-        assert!(sim as f64 / (a.words.len() as f64) > 0.99, "unbind should nearly restore a");
+        let sim = a
+            .words
+            .iter()
+            .zip(rebound.words.iter())
+            .filter(|pair| pair.0 == pair.1)
+            .count();
+        assert!(
+            sim as f64 / (a.words.len() as f64) > 0.99,
+            "unbind should nearly restore a"
+        );
     }
 
     #[test]
@@ -121,8 +135,16 @@ mod tests {
         }
         let bound_a = ls_bind(&a, &b, 32);
         let bound_a2 = ls_bind(&a2, &b, 32);
-        let same = bound_a.words.iter().zip(bound_a2.words.iter()).filter(|pair| pair.0 == pair.1).count();
-        assert!(same as f64 / (bound_a.words.len() as f64) > 0.98, "single-bit change in a should minimally affect bind output");
+        let same = bound_a
+            .words
+            .iter()
+            .zip(bound_a2.words.iter())
+            .filter(|pair| pair.0 == pair.1)
+            .count();
+        assert!(
+            same as f64 / (bound_a.words.len() as f64) > 0.98,
+            "single-bit change in a should minimally affect bind output"
+        );
     }
 
     #[test]
@@ -131,7 +153,11 @@ mod tests {
         let mut pred = vec![0.0f64; dim];
         let actual = Hypervector::random(dim);
         for i in 0..dim {
-            pred[i] = if ((actual.words[i / 64] >> (i % 64)) & 1) == 1 { 1.0 } else { -0.5 };
+            pred[i] = if ((actual.words[i / 64] >> (i % 64)) & 1) == 1 {
+                1.0
+            } else {
+                -0.5
+            };
         }
         let delta = quantized_delta(&pred, &actual, dim);
         assert_eq!(delta.dim, dim);

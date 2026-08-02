@@ -38,22 +38,29 @@ impl FluidField {
         let mut new_vx = self.velocity_x.clone();
         let mut new_vz = self.velocity_z.clone();
 
-        for i in 1..w-1 {
-            for j in 1..h-1 {
+        for i in 1..w - 1 {
+            for j in 1..h - 1 {
                 let idx = j * w + i;
 
-                let dxx = self.density[idx+1] + self.density[idx-1] - 2.0 * self.density[idx];
-                let dzz = self.density[idx+w] + self.density[idx-w] - 2.0 * self.density[idx];
-                new_d[idx] += dt * (self.diffusion * (dxx + dzz)
-                    - self.velocity_x[idx] * (self.density[idx+1] - self.density[idx-1]) / 2.0
-                    - self.velocity_z[idx] * (self.density[idx+w] - self.density[idx-w]) / 2.0);
+                let dxx = self.density[idx + 1] + self.density[idx - 1] - 2.0 * self.density[idx];
+                let dzz = self.density[idx + w] + self.density[idx - w] - 2.0 * self.density[idx];
+                new_d[idx] += dt
+                    * (self.diffusion * (dxx + dzz)
+                        - self.velocity_x[idx] * (self.density[idx + 1] - self.density[idx - 1])
+                            / 2.0
+                        - self.velocity_z[idx] * (self.density[idx + w] - self.density[idx - w])
+                            / 2.0);
 
-                let vxx = self.velocity_x[idx+1] + self.velocity_x[idx-1] - 2.0 * self.velocity_x[idx];
-                let vxz = self.velocity_x[idx+w] + self.velocity_x[idx-w] - 2.0 * self.velocity_x[idx];
+                let vxx = self.velocity_x[idx + 1] + self.velocity_x[idx - 1]
+                    - 2.0 * self.velocity_x[idx];
+                let vxz = self.velocity_x[idx + w] + self.velocity_x[idx - w]
+                    - 2.0 * self.velocity_x[idx];
                 new_vx[idx] += dt * (self.viscosity * (vxx + vxz));
 
-                let vzx = self.velocity_z[idx+1] + self.velocity_z[idx-1] - 2.0 * self.velocity_z[idx];
-                let vzz = self.velocity_z[idx+w] + self.velocity_z[idx-w] - 2.0 * self.velocity_z[idx];
+                let vzx = self.velocity_z[idx + 1] + self.velocity_z[idx - 1]
+                    - 2.0 * self.velocity_z[idx];
+                let vzz = self.velocity_z[idx + w] + self.velocity_z[idx - w]
+                    - 2.0 * self.velocity_z[idx];
                 new_vz[idx] += dt * (self.viscosity * (vzx + vzz));
             }
         }

@@ -1,4 +1,3 @@
-
 const MAX_FREE_BLOCKS: usize = 256;
 const MAX_CHUNKS: usize = 16;
 
@@ -21,7 +20,10 @@ pub struct BufferAddress {
 }
 
 impl BufferAddress {
-    pub const INVALID: Self = BufferAddress { chunk: -1, offset: usize::MAX };
+    pub const INVALID: Self = BufferAddress {
+        chunk: -1,
+        offset: usize::MAX,
+    };
 }
 
 pub struct DynTallocr {
@@ -32,9 +34,16 @@ pub struct DynTallocr {
 
 impl Chunk {
     fn new(min_size: usize, max_chunk_size: usize, is_last: bool) -> Self {
-        let block_size = if is_last { usize::MAX / 2 } else { min_size.max(max_chunk_size) };
+        let block_size = if is_last {
+            usize::MAX / 2
+        } else {
+            min_size.max(max_chunk_size)
+        };
         Chunk {
-            free_blocks: vec![FreeBlock { offset: 0, size: block_size }],
+            free_blocks: vec![FreeBlock {
+                offset: 0,
+                size: block_size,
+            }],
             max_size: 0,
         }
     }
@@ -52,7 +61,12 @@ impl Chunk {
     fn best_fit_position(&self, size: usize) -> Option<(usize, usize)> {
         let mut best_idx = None;
         let mut best_size = usize::MAX;
-        for (i, block) in self.free_blocks.iter().enumerate().take(self.free_blocks.len().saturating_sub(1)) {
+        for (i, block) in self
+            .free_blocks
+            .iter()
+            .enumerate()
+            .take(self.free_blocks.len().saturating_sub(1))
+        {
             if block.size >= size && block.size < best_size {
                 best_idx = Some(i);
                 best_size = block.size;
@@ -83,7 +97,8 @@ impl DynTallocr {
             return None;
         }
         let is_last = self.chunks.len() == MAX_CHUNKS - 1;
-        self.chunks.push(Chunk::new(min_size, self.max_chunk_size, is_last));
+        self.chunks
+            .push(Chunk::new(min_size, self.max_chunk_size, is_last));
         Some(self.chunks.len() - 1)
     }
 
@@ -95,9 +110,7 @@ impl DynTallocr {
         let mut max_avail = 0;
 
         for (c, chunk) in self.chunks.iter().enumerate() {
-            max_avail = max_avail.max(
-                chunk.free_blocks.iter().map(|b| b.size).max().unwrap_or(0)
-            );
+            max_avail = max_avail.max(chunk.free_blocks.iter().map(|b| b.size).max().unwrap_or(0));
             if let Some((bi, bs)) = chunk.best_fit_position(size) {
                 if bs < best_size {
                     best_chunk = Some(c);
@@ -114,7 +127,11 @@ impl DynTallocr {
                     max_avail = max_avail.max(block.size);
                     if block.size >= size {
                         let reuse = chunk.max_size as i64 - block.offset as i64 - size as i64;
-                        let better = if best_reuse < 0 { reuse > best_reuse } else { reuse >= 0 && reuse < best_reuse };
+                        let better = if best_reuse < 0 {
+                            reuse > best_reuse
+                        } else {
+                            reuse >= 0 && reuse < best_reuse
+                        };
                         if better {
                             best_chunk = Some(c);
                             best_block = Some(chunk.free_blocks.len() - 1);
@@ -131,7 +148,10 @@ impl DynTallocr {
 
         let chunk = &mut self.chunks[best_chunk];
         let block = &mut chunk.free_blocks[best_block];
-        let addr = BufferAddress { chunk: best_chunk as i32, offset: block.offset };
+        let addr = BufferAddress {
+            chunk: best_chunk as i32,
+            offset: block.offset,
+        };
         block.offset += size;
         block.size -= size;
         if block.size == 0 {

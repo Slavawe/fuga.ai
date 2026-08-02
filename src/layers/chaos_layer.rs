@@ -1,7 +1,7 @@
-use rand::SeedableRng;
 use crate::core::hypervector::Hypervector;
-use syn::{File, Item, ItemFn, Expr, BinOp, Block, Stmt};
+use rand::SeedableRng;
 use std::collections::HashMap;
+use syn::{BinOp, Block, Expr, File, Item, ItemFn, Stmt};
 
 #[derive(Debug, Clone)]
 pub struct ChaosAnalysis {
@@ -90,7 +90,10 @@ impl ChaosMutationLayer {
             let hv = deterministic_vector(dim, &format!("{:?}", kind));
             attack_vectors.insert(*kind, hv);
         }
-        Self { dim, attack_vectors }
+        Self {
+            dim,
+            attack_vectors,
+        }
     }
 
     pub fn analyze(&self, file: &File) -> ChaosAnalysis {
@@ -110,17 +113,28 @@ impl ChaosMutationLayer {
 
         attacks.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap());
 
-        ChaosAnalysis { attack_vectors: attacks, stats }
+        ChaosAnalysis {
+            attack_vectors: attacks,
+            stats,
+        }
     }
 
     fn count_mutation_points(&self, func: &ItemFn) -> usize {
-        func.block.stmts.iter().map(|s| self.count_mutation_in_stmt(s)).sum()
+        func.block
+            .stmts
+            .iter()
+            .map(|s| self.count_mutation_in_stmt(s))
+            .sum()
     }
 
     fn count_mutation_in_stmt(&self, stmt: &Stmt) -> usize {
         match stmt {
             Stmt::Expr(e, _) => self.count_mutation_in_expr(e),
-            Stmt::Local(l) => l.init.as_ref().map(|i| self.count_mutation_in_expr(&i.expr)).unwrap_or(0),
+            Stmt::Local(l) => l
+                .init
+                .as_ref()
+                .map(|i| self.count_mutation_in_expr(&i.expr))
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -132,13 +146,24 @@ impl ChaosMutationLayer {
             Expr::Loop(l) => self.count_mutation_in_block(&l.body),
             Expr::While(w) => self.count_mutation_in_block(&w.body),
             Expr::ForLoop(f) => self.count_mutation_in_block(&f.body),
-            Expr::Match(m) => m.arms.iter().map(|a| match &a.body.as_ref() { Expr::Block(b) => self.count_mutation_in_block(&b.block), _ => 0 }).sum(),
+            Expr::Match(m) => m
+                .arms
+                .iter()
+                .map(|a| match &a.body.as_ref() {
+                    Expr::Block(b) => self.count_mutation_in_block(&b.block),
+                    _ => 0,
+                })
+                .sum(),
             _ => 0,
         }
     }
 
     fn count_mutation_in_block(&self, block: &Block) -> usize {
-        block.stmts.iter().map(|s| self.count_mutation_in_stmt(s)).sum()
+        block
+            .stmts
+            .iter()
+            .map(|s| self.count_mutation_in_stmt(s))
+            .sum()
     }
 
     fn generate_attacks_for_function(&self, func: &ItemFn, fn_name: &str) -> Vec<ChaosAttack> {
@@ -151,7 +176,10 @@ impl ChaosMutationLayer {
                 AttackKind::IntegerOverflow,
                 &format!("Function {} has integer operations at risk", fn_name),
                 overflow_risk,
-                AttackMetadata { function: Some(fn_name.into()), ..Default::default() },
+                AttackMetadata {
+                    function: Some(fn_name.into()),
+                    ..Default::default()
+                },
             ));
         }
 
@@ -162,7 +190,10 @@ impl ChaosMutationLayer {
                 AttackKind::DivisionByZero,
                 &format!("Function {} has unchecked division", fn_name),
                 div_risk,
-                AttackMetadata { function: Some(fn_name.into()), ..Default::default() },
+                AttackMetadata {
+                    function: Some(fn_name.into()),
+                    ..Default::default()
+                },
             ));
         }
 
@@ -173,16 +204,35 @@ impl ChaosMutationLayer {
                 AttackKind::InfiniteLoop,
                 &format!("Function {} may have unbounded loops", fn_name),
                 loop_risk,
-                AttackMetadata { function: Some(fn_name.into()), ..Default::default() },
+                AttackMetadata {
+                    function: Some(fn_name.into()),
+                    ..Default::default()
+                },
             ));
         }
 
         attacks
     }
 
-    fn create_attack(&self, kind: AttackKind, desc: &str, priority: f64, meta: AttackMetadata) -> ChaosAttack {
-        let vector = self.attack_vectors.get(&kind).cloned().unwrap_or_else(|| Hypervector::random(self.dim));
-        ChaosAttack { kind, vector, description: desc.into(), priority, metadata: meta }
+    fn create_attack(
+        &self,
+        kind: AttackKind,
+        desc: &str,
+        priority: f64,
+        meta: AttackMetadata,
+    ) -> ChaosAttack {
+        let vector = self
+            .attack_vectors
+            .get(&kind)
+            .cloned()
+            .unwrap_or_else(|| Hypervector::random(self.dim));
+        ChaosAttack {
+            kind,
+            vector,
+            description: desc.into(),
+            priority,
+            metadata: meta,
+        }
     }
 
     fn analyze_integer_ops(&self, block: &Block) -> f64 {
@@ -196,7 +246,11 @@ impl ChaosMutationLayer {
     fn count_int_ops_in_stmt(&self, stmt: &Stmt) -> usize {
         match stmt {
             Stmt::Expr(e, _) => self.count_int_ops_in_expr(e),
-            Stmt::Local(l) => l.init.as_ref().map(|i| self.count_int_ops_in_expr(&i.expr)).unwrap_or(0),
+            Stmt::Local(l) => l
+                .init
+                .as_ref()
+                .map(|i| self.count_int_ops_in_expr(&i.expr))
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -204,7 +258,10 @@ impl ChaosMutationLayer {
     fn count_int_ops_in_expr(&self, expr: &Expr) -> usize {
         match expr {
             Expr::Binary(b) => {
-                let is_int_op = matches!(b.op, BinOp::Add(_) | BinOp::Sub(_) | BinOp::Mul(_) | BinOp::Rem(_));
+                let is_int_op = matches!(
+                    b.op,
+                    BinOp::Add(_) | BinOp::Sub(_) | BinOp::Mul(_) | BinOp::Rem(_)
+                );
                 if is_int_op { 1 } else { 0 }
             }
             _ => 0,
@@ -222,7 +279,11 @@ impl ChaosMutationLayer {
     fn count_divs_in_stmt(&self, stmt: &Stmt) -> usize {
         match stmt {
             Stmt::Expr(e, _) => self.count_divs_in_expr(e),
-            Stmt::Local(l) => l.init.as_ref().map(|i| self.count_divs_in_expr(&i.expr)).unwrap_or(0),
+            Stmt::Local(l) => l
+                .init
+                .as_ref()
+                .map(|i| self.count_divs_in_expr(&i.expr))
+                .unwrap_or(0),
             _ => 0,
         }
     }
@@ -253,9 +314,9 @@ impl ChaosMutationLayer {
 }
 
 fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());

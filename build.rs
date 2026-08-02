@@ -17,7 +17,7 @@ fn main() {
 
     let status = Command::new(&nvcc)
         .arg("-ptx")
-        .arg(&format!("-arch=sm_75"))
+        .arg(format!("-arch=sm_75"))
         .arg("-O3")
         .arg(&kernel_src)
         .arg("-o")

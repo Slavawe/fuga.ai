@@ -1,7 +1,7 @@
 use crate::ai::self_mirror::SelfMirror;
 use crate::assembly::legion::LegionCoordinator;
-use crate::assembly::self_optimizer::{SelfOptimizer, OptimizerConfig};
 use crate::assembly::phase_shield::{PhaseShield, ShieldAction};
+use crate::assembly::self_optimizer::{OptimizerConfig, SelfOptimizer};
 
 #[derive(Clone, Debug)]
 pub struct PipelineConfig {
@@ -63,7 +63,9 @@ impl UnifiedPipeline {
 
         for _ in 0..self.config.max_cycles {
             self.cycle += 1;
-            if self.cycle > self.config.max_cycles { break; }
+            if self.cycle > self.config.max_cycles {
+                break;
+            }
 
             let input = seed_inputs[(self.cycle - 1) % seed_inputs.len()];
             let reports = self.coordinator.run_cycle(input, mirror);
@@ -74,18 +76,22 @@ impl UnifiedPipeline {
                     "ExecuteCode" => {
                         total_exec += 1;
                         if let Some(ref a) = r.anomaly {
-                            if a.overshoot { total_vio += 1; }
+                            if a.overshoot {
+                                total_vio += 1;
+                            }
                         }
                     }
                     _ => {}
                 }
             }
 
-            if self.config.auto_adjust && mirror.predictor.tm.cells.len() > self.cell_fatigue.len() {
+            if self.config.auto_adjust && mirror.predictor.tm.cells.len() > self.cell_fatigue.len()
+            {
                 self.cell_fatigue.resize(mirror.predictor.tm.cells.len(), 0);
             }
 
-            self.optimizer.diagnose(&mirror.predictor.tm, &self.cell_fatigue);
+            self.optimizer
+                .diagnose(&mirror.predictor.tm, &self.cell_fatigue);
             if self.config.auto_adjust {
                 let new_cfg = self.optimizer.auto_tune();
                 self.apply_optimization(&new_cfg, mirror);
@@ -95,7 +101,10 @@ impl UnifiedPipeline {
                 let stable = self.coordinator.latest_stability();
                 let overshoot = total_vio > self.cycle;
                 let action = self.shield.evaluate(
-                    1.0 - stable, overshoot, self.optimizer.diagnosis.fatigue_max);
+                    1.0 - stable,
+                    overshoot,
+                    self.optimizer.diagnosis.fatigue_max,
+                );
                 self.apply_shield_action(&action, mirror);
                 self.shield.step(&action);
 
@@ -109,7 +118,10 @@ impl UnifiedPipeline {
                         final_stability: self.coordinator.latest_stability(),
                         shield_actions: self.shield.shift_count,
                         optimizer_adjustments: self.optimizer.adjustment_count,
-                        summary: format!("EMERGENCY_HALT: shield triggered after {} cycles", self.cycle),
+                        summary: format!(
+                            "EMERGENCY_HALT: shield triggered after {} cycles",
+                            self.cycle
+                        ),
                     };
                     return result;
                 }
@@ -126,9 +138,16 @@ impl UnifiedPipeline {
             final_stability,
             shield_actions: self.shield.shift_count,
             optimizer_adjustments: self.optimizer.adjustment_count,
-            summary: format!("cycles={} hyp={} exec={} vio={} stability={:.3} shield={} opt={}",
-                self.cycle, total_hyp, total_exec, total_vio, final_stability,
-                self.shield.shift_count, self.optimizer.adjustment_count),
+            summary: format!(
+                "cycles={} hyp={} exec={} vio={} stability={:.3} shield={} opt={}",
+                self.cycle,
+                total_hyp,
+                total_exec,
+                total_vio,
+                final_stability,
+                self.shield.shift_count,
+                self.optimizer.adjustment_count
+            ),
         }
     }
 
@@ -166,15 +185,24 @@ impl UnifiedPipeline {
     pub fn full_report(&self) -> String {
         let mut out = String::new();
         out.push_str("═══ UNIFIED PIPELINE REPORT ═══\n");
-        out.push_str(&format!("Cycle: {}/{}\n", self.cycle, self.config.max_cycles));
+        out.push_str(&format!(
+            "Cycle: {}/{}\n",
+            self.cycle, self.config.max_cycles
+        ));
         out.push_str(&format!("{}\n", self.optimizer.summary()));
         out.push_str(&format!("{}\n", self.coordinator.summary()));
-        out.push_str(&format!("PhaseShield: shifts={} consec_violations={} critical={}\n",
-            self.shield.shift_count, self.shield.consecutive_violations, self.shield.is_critical()));
-        out.push_str(&format!("OptimizerConfig: fatigue_factor={:.1} threshold={} angle={:.3}\n",
+        out.push_str(&format!(
+            "PhaseShield: shifts={} consec_violations={} critical={}\n",
+            self.shield.shift_count,
+            self.shield.consecutive_violations,
+            self.shield.is_critical()
+        ));
+        out.push_str(&format!(
+            "OptimizerConfig: fatigue_factor={:.1} threshold={} angle={:.3}\n",
             self.optimizer.config.fatigue_factor,
             self.optimizer.config.wta_overlap_threshold,
-            self.optimizer.config.phase_shift_angle));
+            self.optimizer.config.phase_shift_angle
+        ));
         out
     }
 }

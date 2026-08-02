@@ -1,10 +1,10 @@
-use fuga::assembly::{
-    MorrisSandbox, SelfOptimizer, PhaseShield, ShieldAction,
-    legion::{SecondLegion, FirstLegion, LegionCoordinator},
-    unified_pipeline::{UnifiedPipeline, PipelineConfig},
-};
-use fuga::ai::{TemporalMemory, SdrVector, encode_text, HierarchicalJEPA};
 use fuga::ai::self_mirror::SelfMirror;
+use fuga::ai::{HierarchicalJEPA, SdrVector, TemporalMemory, encode_text};
+use fuga::assembly::{
+    MorrisSandbox, PhaseShield, SelfOptimizer, ShieldAction,
+    legion::{FirstLegion, LegionCoordinator, SecondLegion},
+    unified_pipeline::{PipelineConfig, UnifiedPipeline},
+};
 
 fn make_test_mirror() -> SelfMirror {
     let tm = TemporalMemory::new(200, 4);
@@ -35,8 +35,14 @@ fn main() {
 }
 "#;
     let outcome = sandbox.evaluate_code(code, "test_panic.rs");
-    eprintln!("compiles={} runs={} stderr={}", outcome.compiles, outcome.runs, outcome.stderr);
-    eprintln!("exit_code={:?} violations={:?}", outcome.exit_code, outcome.violations);
+    eprintln!(
+        "compiles={} runs={} stderr={}",
+        outcome.compiles, outcome.runs, outcome.stderr
+    );
+    eprintln!(
+        "exit_code={:?} violations={:?}",
+        outcome.exit_code, outcome.violations
+    );
     if outcome.compiles {
         assert!(outcome.anomaly_triggered);
     }

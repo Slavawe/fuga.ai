@@ -1,5 +1,5 @@
 use crate::core::hypervector::Hypervector;
-use crate::multi::language::{LanguageId, parse_source, run_query, count_nodes_by_kind};
+use crate::multi::language::{LanguageId, count_nodes_by_kind, parse_source, run_query};
 use crate::multi::patterns::ViolationPattern;
 use rand::SeedableRng;
 use std::collections::HashMap;
@@ -32,7 +32,10 @@ impl MultiChaosLayer {
             let hv = deterministic_vector(dim, &format!("{:?}", p));
             attack_vectors.insert(*p, hv);
         }
-        Self { dim, attack_vectors }
+        Self {
+            dim,
+            attack_vectors,
+        }
     }
 
     pub fn analyze(&self, source: &str, lang: LanguageId) -> MultiChaosResult {
@@ -40,12 +43,14 @@ impl MultiChaosLayer {
         let mut mutation_points = 0;
 
         if let Some(tree) = parse_source(source, lang) {
-let risky_kinds: &[&str] = match lang {
+            let risky_kinds: &[&str] = match lang {
                 LanguageId::Rust => &["binary_expression", "call_expression"],
                 LanguageId::C | LanguageId::Cpp => &["binary_expression", "call_expression"],
                 LanguageId::Go => &["binary_expression", "call_expression"],
                 LanguageId::Python => &["binary_operator", "call"],
-                LanguageId::TypeScript | LanguageId::JavaScript => &["binary_expression", "call_expression"],
+                LanguageId::TypeScript | LanguageId::JavaScript => {
+                    &["binary_expression", "call_expression"]
+                }
             };
             if !risky_kinds.is_empty() {
                 mutation_points = count_nodes_by_kind(tree.root_node(), risky_kinds);
@@ -59,7 +64,10 @@ let risky_kinds: &[&str] = match lang {
                                 for qr in results {
                                     attacks.push(MultiChaosAttack {
                                         pattern: *pattern,
-                                        vector: self.attack_vectors.get(pattern).cloned()
+                                        vector: self
+                                            .attack_vectors
+                                            .get(pattern)
+                                            .cloned()
                                             .unwrap_or_else(|| Hypervector::random(self.dim)),
                                         description: format!("{:?} via {}", pattern, qr.text),
                                         priority: match pattern.default_severity() {
@@ -73,10 +81,10 @@ let risky_kinds: &[&str] = match lang {
                                         line: qr.start_line,
                                     });
                                 }
-                            },
+                            }
                             None => {}
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -84,14 +92,17 @@ let risky_kinds: &[&str] = match lang {
 
         attacks.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap());
 
-        MultiChaosResult { attack_vectors: attacks, mutation_points }
+        MultiChaosResult {
+            attack_vectors: attacks,
+            mutation_points,
+        }
     }
 }
 
 fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());
@@ -114,7 +125,7 @@ mod tests {
     #[test]
     fn test_multi_chaos_rust() {
         let layer = MultiChaosLayer::new(4096);
-            let code = r#"fn main() { let x = 1 + 2; loop {} }"#;
+        let code = r#"fn main() { let x = 1 + 2; loop {} }"#;
         let result = layer.analyze(code, LanguageId::Rust);
         assert!(result.mutation_points > 0);
     }

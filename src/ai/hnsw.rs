@@ -3,7 +3,11 @@ use crate::core::hypervector::Hypervector;
 
 fn vsa_similarity(a: &[u64], b: &[u64]) -> f64 {
     let total_bits = (a.len() * 64) as f64;
-    let diff: u64 = a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones() as u64).sum();
+    let diff: u64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x ^ y).count_ones() as u64)
+        .sum();
     1.0 - (diff as f64 / total_bits)
 }
 
@@ -12,7 +16,7 @@ fn vsa_similarity(a: &[u64], b: &[u64]) -> f64 {
 
 pub const HASH_BITS: usize = 14;
 pub const NUM_TABLES: usize = 6;
-const PROBES: usize = 8; 
+const PROBES: usize = 8;
 
 type HashKey = u32;
 
@@ -33,7 +37,9 @@ impl VsaIndex {
 
     pub fn build(entries: &[Hypervector]) -> Self {
         let n = entries.len();
-        if n == 0 { return Self::new(); }
+        if n == 0 {
+            return Self::new();
+        }
 
         let wc = entries[0].words.len();
         let total_bits = wc * 64;
@@ -62,7 +68,11 @@ impl VsaIndex {
             }
         }
 
-        Self { vectors, tables, hash_bits }
+        Self {
+            vectors,
+            tables,
+            hash_bits,
+        }
     }
 
     fn compute_hash(vec: &[u64], bits: &[(u8, u8)]) -> HashKey {
@@ -76,7 +86,10 @@ impl VsaIndex {
     }
 
     fn hamming_distance(a: &[u64], b: &[u64]) -> u32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum()
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x ^ y).count_ones())
+            .sum()
     }
 
     fn flip_bit(key: HashKey, bit: usize) -> HashKey {
@@ -102,7 +115,9 @@ impl VsaIndex {
     }
 
     pub fn search(&self, query: &Hypervector, top_k: usize) -> Vec<(usize, f64)> {
-        if self.vectors.is_empty() { return vec![]; }
+        if self.vectors.is_empty() {
+            return vec![];
+        }
 
         let q = &query.words;
         let mut seen = vec![false; self.vectors.len()];
@@ -112,7 +127,9 @@ impl VsaIndex {
             let key = Self::compute_hash(q, &self.hash_bits[t]);
             for probe_key in Self::probe_buckets(key, PROBES) {
                 for &idx in &self.tables[t][probe_key as usize] {
-                    if seen[idx as usize] { continue; }
+                    if seen[idx as usize] {
+                        continue;
+                    }
                     seen[idx as usize] = true;
                     let sim = vsa_similarity(q, &self.vectors[idx as usize]);
                     candidates.push((idx as usize, sim));
@@ -124,9 +141,7 @@ impl VsaIndex {
         if candidates.len() < top_k && self.vectors.len() > top_k {
             let have = candidates.len();
             let need = top_k.saturating_sub(have).min(self.vectors.len() - have);
-            let mut pool: Vec<usize> = (0..self.vectors.len())
-                .filter(|i| !seen[*i])
-                .collect();
+            let mut pool: Vec<usize> = (0..self.vectors.len()).filter(|i| !seen[*i]).collect();
             fastrand::shuffle(&mut pool);
             for &idx in pool.iter().take(need) {
                 let sim = vsa_similarity(q, &self.vectors[idx]);
@@ -139,12 +154,14 @@ impl VsaIndex {
         candidates
     }
 
-    pub fn size(&self) -> usize { self.vectors.len() }
+    pub fn size(&self) -> usize {
+        self.vectors.len()
+    }
 
     pub fn save(&self, path: &str) -> Result<(), String> {
         use std::io::Write;
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
 
         let n = self.vectors.len() as u32;
         f.write_all(&n.to_le_bytes()).map_err(|e| e.to_string())?;
@@ -165,7 +182,8 @@ impl VsaIndex {
         let _n_buckets = 1 << HASH_BITS;
         for table in &self.tables {
             for bucket in table {
-                f.write_all(&(bucket.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+                f.write_all(&(bucket.len() as u32).to_le_bytes())
+                    .map_err(|e| e.to_string())?;
                 for &eid in bucket {
                     f.write_all(&eid.to_le_bytes()).map_err(|e| e.to_string())?;
                 }
@@ -177,8 +195,8 @@ impl VsaIndex {
 
     pub fn load(path: &str, dim: usize) -> Result<Self, String> {
         use std::io::Read;
-        let mut f = std::fs::File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         let wc = (dim + 63) / 64;
 
         let mut n_buf = [0u8; 4];
@@ -228,7 +246,11 @@ impl VsaIndex {
             }
         }
 
-        Ok(Self { vectors, tables, hash_bits })
+        Ok(Self {
+            vectors,
+            tables,
+            hash_bits,
+        })
     }
 }
 

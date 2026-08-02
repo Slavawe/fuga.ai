@@ -13,14 +13,20 @@ pub struct PatternMatcher {
 
 impl PatternMatcher {
     pub fn new(window_size: usize) -> Self {
-        Self { window_size: window_size.max(2).min(16) }
+        Self {
+            window_size: window_size.max(2).min(16),
+        }
     }
 
-    pub fn window_size(&self) -> usize { self.window_size }
+    pub fn window_size(&self) -> usize {
+        self.window_size
+    }
 
     pub fn find_boundaries(&self, stream: &[TokenInfo]) -> Vec<WindowBoundary> {
         let mut boundaries = Vec::new();
-        if stream.is_empty() { return boundaries; }
+        if stream.is_empty() {
+            return boundaries;
+        }
 
         let mut i = 0;
         while i < stream.len() {
@@ -44,12 +50,16 @@ impl PatternMatcher {
     fn find_natural_break(&self, window: &[TokenInfo], max_size: usize) -> usize {
         let mut depth: i32 = 0;
         for (j, tok) in window.iter().enumerate() {
-            if j >= max_size { return j; }
+            if j >= max_size {
+                return j;
+            }
             match tok.text.as_str() {
                 "{" | "[" | "(" => depth += 1,
                 "}" | "]" | ")" => {
                     depth -= 1;
-                    if depth < 0 { return j + 1; }
+                    if depth < 0 {
+                        return j + 1;
+                    }
                 }
                 _ => {}
             }
@@ -68,16 +78,23 @@ impl PatternMatcher {
         if trimmed.starts_with('{') || trimmed.starts_with('[') || text.contains("\"") {
             return TokenRole::JSON;
         }
-        if text.contains("fn ") || text.contains("let ") || text.contains("=>")
-            || text.contains("def ") || text.contains("class ")
-            || text.contains("int ") || text.contains("void ")
+        if text.contains("fn ")
+            || text.contains("let ")
+            || text.contains("=>")
+            || text.contains("def ")
+            || text.contains("class ")
+            || text.contains("int ")
+            || text.contains("void ")
         {
             return TokenRole::CODE;
         }
         if text.contains(['+', '-', '*', '/', '=', '>', '<'].as_slice()) {
             return TokenRole::MATH;
         }
-        if window.iter().any(|t| t.text.len() > 1 && t.text.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+        if window
+            .iter()
+            .any(|t| t.text.len() > 1 && t.text.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        {
             return TokenRole::NATURAL_LANGUAGE;
         }
         TokenRole::empty()

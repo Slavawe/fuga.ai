@@ -1,5 +1,5 @@
 use crate::core::hypervector::Hypervector;
-use crate::multi::language::{LanguageId, parse_source, collect_function_names};
+use crate::multi::language::{LanguageId, collect_function_names, parse_source};
 use rand::SeedableRng;
 
 #[derive(Debug, Clone)]
@@ -67,7 +67,8 @@ impl MultiSemanticLayer {
             Hypervector::random(self.dim)
         } else {
             let first = &function_vectors[0].1;
-            let others: Vec<&Hypervector> = function_vectors.iter().skip(1).map(|(_, v)| v).collect();
+            let others: Vec<&Hypervector> =
+                function_vectors.iter().skip(1).map(|(_, v)| v).collect();
             first.bundle(&others)
         };
 
@@ -83,14 +84,19 @@ impl MultiSemanticLayer {
             sims.iter().sum::<f64>() / sims.len() as f64
         };
 
-        MultiSemanticResult { semantic_vector, function_vectors, coherence, anomalies }
+        MultiSemanticResult {
+            semantic_vector,
+            function_vectors,
+            coherence,
+            anomalies,
+        }
     }
 }
 
 fn encode_string(dim: usize, s: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());

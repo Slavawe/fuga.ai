@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 /// Режим сканирования
@@ -14,13 +14,17 @@ pub enum ScanMode {
 }
 
 /// Расширения поддерживаемых языков
-const SUPPORTED_EXTENSIONS: &[&str] = &["rs", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "go", "py", "ts", "tsx", "js", "jsx"];
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "rs", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "go", "py", "ts", "tsx", "js", "jsx",
+];
 
 fn is_supported_file(path: &Path) -> bool {
-    path.is_file() && path.extension()
-        .and_then(|s| s.to_str())
-        .map(|ext| SUPPORTED_EXTENSIONS.contains(&ext))
-        .unwrap_or(false)
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| SUPPORTED_EXTENSIONS.contains(&ext))
+            .unwrap_or(false)
 }
 
 /// Сканер workspace и рекурсивных директорий
@@ -68,7 +72,10 @@ impl WorkspaceScanner {
             let path = entry.path();
             if is_supported_file(path) {
                 // Пропускаем target/ и .git/
-                if path.components().any(|c| c.as_os_str() == "target" || c.as_os_str() == ".git") {
+                if path
+                    .components()
+                    .any(|c| c.as_os_str() == "target" || c.as_os_str() == ".git")
+                {
                     continue;
                 }
                 files.push(path.to_path_buf());
@@ -76,7 +83,10 @@ impl WorkspaceScanner {
         }
 
         if files.is_empty() {
-            return Err(format!("No supported source files found in {}", path.display()));
+            return Err(format!(
+                "No supported source files found in {}",
+                path.display()
+            ));
         }
 
         Ok(files)
@@ -100,15 +110,16 @@ impl WorkspaceScanner {
         let content = fs::read_to_string(&cargo_toml)
             .map_err(|e| format!("Failed to read Cargo.toml: {}", e))?;
 
-        let manifest: toml::Value = toml::from_str(&content)
-            .map_err(|e| format!("Failed to parse Cargo.toml: {}", e))?;
+        let manifest: toml::Value =
+            toml::from_str(&content).map_err(|e| format!("Failed to parse Cargo.toml: {}", e))?;
 
         let workspace_root = cargo_toml.parent().ok_or("Invalid Cargo.toml path")?;
 
         // Проверяем, есть ли [workspace]
         if let Some(workspace) = manifest.get("workspace") {
             // Workspace with members
-            let members = workspace.get("members")
+            let members = workspace
+                .get("members")
                 .and_then(|m| m.as_array())
                 .ok_or("workspace.members not found or not an array")?;
 
@@ -117,7 +128,7 @@ impl WorkspaceScanner {
             for member in members {
                 let member_path = member.as_str().ok_or("Invalid member path")?;
                 let member_dir = workspace_root.join(member_path);
-                
+
                 // Сканируем src/ каждого члена
                 let src_dir = member_dir.join("src");
                 if src_dir.exists() {

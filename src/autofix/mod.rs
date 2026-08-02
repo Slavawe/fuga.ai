@@ -2,8 +2,8 @@ pub mod fix_generator;
 pub mod fix_validator;
 pub mod patch_generator;
 
-use crate::core::hypervector::Hypervector;
 use crate::core::fuga_synthesizer::BugLocation;
+use crate::core::hypervector::Hypervector;
 
 /// Стратегия исправления бага
 #[derive(Debug, Clone)]

@@ -11,7 +11,11 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { pos: [0.0, 2.0, 6.0], yaw: 0.0, pitch: -0.2 }
+        Self {
+            pos: [0.0, 2.0, 6.0],
+            yaw: 0.0,
+            pitch: -0.2,
+        }
     }
 }
 
@@ -24,11 +28,16 @@ pub struct Render3D {
 
 impl Render3D {
     pub fn new(title: &str) -> Self {
-        let window = Window::new(title, W, H, WindowOptions::default())
-            .expect("Failed to create window");
+        let window =
+            Window::new(title, W, H, WindowOptions::default()).expect("Failed to create window");
         let framebuf = vec![0; W * H];
         let zbuf = vec![f32::INFINITY; W * H];
-        Self { window, framebuf, camera: Camera::default(), zbuf }
+        Self {
+            window,
+            framebuf,
+            camera: Camera::default(),
+            zbuf,
+        }
     }
 
     pub fn clear(&mut self, color: u32) {
@@ -51,12 +60,16 @@ impl Render3D {
         let y = sin_pitch * x + cos_pitch * dy;
         let x = cos_pitch * x - sin_pitch * dy;
 
-        if z <= 0.1 { return None; }
+        if z <= 0.1 {
+            return None;
+        }
         let fov = 800.0;
         let sx = (W as f32 / 2.0) + x * fov / z;
         let sy = (H as f32 / 2.0) - y * fov / z;
 
-        if sx < 0.0 || sx >= W as f32 || sy < 0.0 || sy >= H as f32 { return None; }
+        if sx < 0.0 || sx >= W as f32 || sy < 0.0 || sy >= H as f32 {
+            return None;
+        }
         Some((sx, sy, z))
     }
 
@@ -78,10 +91,18 @@ impl Render3D {
                 let i = iy * W + ix;
                 self.framebuf[i] = color;
             }
-            if (x - x2).abs() < 0.5 && (y - y2).abs() < 0.5 { break; }
+            if (x - x2).abs() < 0.5 && (y - y2).abs() < 0.5 {
+                break;
+            }
             let e2 = 2.0 * err;
-            if e2 >= dy { err += dy; x += sx; }
-            if e2 <= dx { err += dx; y += sy; }
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
         }
     }
 
@@ -137,11 +158,28 @@ impl Render3D {
     pub fn draw_cube_wire(&mut self, cx: f32, cy: f32, cz: f32, s: f32, color: u32) {
         let h = s / 2.0;
         let corners = [
-            [cx-h, cy-h, cz-h], [cx+h, cy-h, cz-h], [cx+h, cy+h, cz-h], [cx-h, cy+h, cz-h],
-            [cx-h, cy-h, cz+h], [cx+h, cy-h, cz+h], [cx+h, cy+h, cz+h], [cx-h, cy+h, cz+h],
+            [cx - h, cy - h, cz - h],
+            [cx + h, cy - h, cz - h],
+            [cx + h, cy + h, cz - h],
+            [cx - h, cy + h, cz - h],
+            [cx - h, cy - h, cz + h],
+            [cx + h, cy - h, cz + h],
+            [cx + h, cy + h, cz + h],
+            [cx - h, cy + h, cz + h],
         ];
         let edges = [
-            (0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
         ];
         for &(i, j) in &edges {
             self.draw_line(&corners[i], &corners[j], color);
@@ -155,11 +193,13 @@ impl Render3D {
             let a2 = (i + 1) as f32 * 2.0 * std::f32::consts::PI / segs as f32;
             self.draw_line(
                 &[cx + r * a1.cos(), cy + r * a1.sin(), cz],
-                &[cx + r * a2.cos(), cy + r * a2.sin(), cz], color,
+                &[cx + r * a2.cos(), cy + r * a2.sin(), cz],
+                color,
             );
             self.draw_line(
                 &[cx + r * a1.cos(), cy, cz + r * a1.sin()],
-                &[cx + r * a2.cos(), cy, cz + r * a2.sin()], color,
+                &[cx + r * a2.cos(), cy, cz + r * a2.sin()],
+                color,
             );
         }
     }
@@ -172,6 +212,10 @@ impl Render3D {
         }
     }
 
-    pub fn is_open(&self) -> bool { self.window.is_open() && !self.window.is_key_down(Key::Escape) }
-    pub fn update(&mut self) { self.window.update_with_buffer(&self.framebuf, W, H).ok(); }
+    pub fn is_open(&self) -> bool {
+        self.window.is_open() && !self.window.is_key_down(Key::Escape)
+    }
+    pub fn update(&mut self) {
+        self.window.update_with_buffer(&self.framebuf, W, H).ok();
+    }
 }

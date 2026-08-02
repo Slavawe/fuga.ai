@@ -1,11 +1,11 @@
 use crate::ai::{FugaAI, MemoryStore};
 use crate::core::wave_cube::WaveCube;
-use crate::weaver::pattern_matcher::TokenInfo;
-use crate::weaver::token_builder::TokenBuilder;
 use crate::fisig_formatter::{self, FisigAnswer};
 use crate::multi_engine::MultiEngine;
 use crate::physics::reactor::ReactorCore;
 use crate::spatial::controller::RoomController;
+use crate::weaver::pattern_matcher::TokenInfo;
+use crate::weaver::token_builder::TokenBuilder;
 
 pub struct OmniIntegrationLayer {
     pub physics_to_code: bool,
@@ -69,56 +69,112 @@ impl<const N: usize, const S: usize> OmniEngine<N, S> {
         self
     }
 
-    pub fn set_vocab(&mut self, _vocab_path: &str) {
-    }
+    pub fn set_vocab(&mut self, _vocab_path: &str) {}
 
     pub fn detect_domain(query: &str) -> &'static str {
         let q = query.to_lowercase();
-        if q.contains("zfc") || q.contains("set theory") || q.contains("axiom")
-            || q.contains("category") || q.contains("yoneda") || q.contains("godel")
+        if q.contains("zfc")
+            || q.contains("set theory")
+            || q.contains("axiom")
+            || q.contains("category")
+            || q.contains("yoneda")
+            || q.contains("godel")
             || q.contains("formal logic")
-        { "zfc" }
-        else if q.contains("manifold") || q.contains("tensor") || q.contains("curvature")
-            || q.contains("riemann") || q.contains("ricci") || q.contains("einstein")
-            || q.contains("levi-civita") || q.contains("cartan") || q.contains("adm")
-        { "geometry" }
-        else if q.contains("qft") || q.contains("quantum field") || q.contains("energy condition")
-            || q.contains("anec") || q.contains("quantum inequality")
-            || q.contains("casimir") || q.contains("ford-roman")
-        { "qft" }
-        else if q.contains("z3") || q.contains("formal verification") || q.contains("smt")
-            || q.contains("llvm") || q.contains("alive2") || q.contains("crucible")
+        {
+            "zfc"
+        } else if q.contains("manifold")
+            || q.contains("tensor")
+            || q.contains("curvature")
+            || q.contains("riemann")
+            || q.contains("ricci")
+            || q.contains("einstein")
+            || q.contains("levi-civita")
+            || q.contains("cartan")
+            || q.contains("adm")
+        {
+            "geometry"
+        } else if q.contains("qft")
+            || q.contains("quantum field")
+            || q.contains("energy condition")
+            || q.contains("anec")
+            || q.contains("quantum inequality")
+            || q.contains("casimir")
+            || q.contains("ford-roman")
+        {
+            "qft"
+        } else if q.contains("z3")
+            || q.contains("formal verification")
+            || q.contains("smt")
+            || q.contains("llvm")
+            || q.contains("alive2")
+            || q.contains("crucible")
             || q.contains("dpll")
-        { "z3" }
-        else if q.contains("mach") || q.contains("woodward") || q.contains("met")
-        { "met" }
-        else if q.contains("alcubierre") || q.contains("warp")
-        { "warp" }
-        else if q.contains("aether") || q.contains("ether") || q.contains("newton")
-        { "aether" }
-        else if q.contains("tesla")
-        { "tesla" }
-        else if q.contains("reactor") || q.contains("neutron") || q.contains("fission")
-            || q.contains("control rod") || q.contains("scram")
-        { "reactor" }
-        else if q.contains("spatial") || q.contains("room") || q.contains("navigation")
-            || q.contains("lidar") || q.contains("rapier") || q.contains("collision")
-        { "spatial" }
-        else if q.contains("code") || q.contains("syntax") || q.contains("compiler")
-            || q.contains("tree-sitter") || q.contains("language") || q.contains("rust")
-            || q.contains("python") || q.contains("javascript") || q.contains("typescript")
-            || q.contains("semantic") || q.contains("pattern") || q.contains("fn ")
-            || q.contains("function") || q.contains("impl ") || q.contains("struct ")
-        { "code" }
-        else if q.contains("диалог") || q.contains("разговор") || q.contains("бесед")
-            || q.contains("расскажи") || q.contains("объясни") || q.contains("почему")
-            || q.contains("зачем") || q.contains("как дела") || q.contains("что такое")
-            || q.contains("кто ты") || q.contains("рассказ") || q.contains("история")
-            || q.contains("narrative") || q.contains("dialogue") || q.contains("story")
-            || q.contains("conversation") || q.contains("hello") || q.contains("hi ")
+        {
+            "z3"
+        } else if q.contains("mach") || q.contains("woodward") || q.contains("met") {
+            "met"
+        } else if q.contains("alcubierre") || q.contains("warp") {
+            "warp"
+        } else if q.contains("aether") || q.contains("ether") || q.contains("newton") {
+            "aether"
+        } else if q.contains("tesla") {
+            "tesla"
+        } else if q.contains("reactor")
+            || q.contains("neutron")
+            || q.contains("fission")
+            || q.contains("control rod")
+            || q.contains("scram")
+        {
+            "reactor"
+        } else if q.contains("spatial")
+            || q.contains("room")
+            || q.contains("navigation")
+            || q.contains("lidar")
+            || q.contains("rapier")
+            || q.contains("collision")
+        {
+            "spatial"
+        } else if q.contains("code")
+            || q.contains("syntax")
+            || q.contains("compiler")
+            || q.contains("tree-sitter")
+            || q.contains("language")
+            || q.contains("rust")
+            || q.contains("python")
+            || q.contains("javascript")
+            || q.contains("typescript")
+            || q.contains("semantic")
+            || q.contains("pattern")
+            || q.contains("fn ")
+            || q.contains("function")
+            || q.contains("impl ")
+            || q.contains("struct ")
+        {
+            "code"
+        } else if q.contains("диалог")
+            || q.contains("разговор")
+            || q.contains("бесед")
+            || q.contains("расскажи")
+            || q.contains("объясни")
+            || q.contains("почему")
+            || q.contains("зачем")
+            || q.contains("как дела")
+            || q.contains("что такое")
+            || q.contains("кто ты")
+            || q.contains("рассказ")
+            || q.contains("история")
+            || q.contains("narrative")
+            || q.contains("dialogue")
+            || q.contains("story")
+            || q.contains("conversation")
+            || q.contains("hello")
+            || q.contains("hi ")
             || q.contains("how are you")
-        { "general" }
-        else { "general" }
+        {
+            "general"
+        } else {
+            "general"
+        }
     }
 
     pub fn query(&mut self, text: &str, tokens: &[TokenInfo]) -> OmniResult {
@@ -126,13 +182,23 @@ impl<const N: usize, const S: usize> OmniEngine<N, S> {
         result
     }
 
-    pub fn query_with_output(&mut self, text: &str, tokens: &[TokenInfo]) -> (OmniResult, crate::ai::AIOutput) {
+    pub fn query_with_output(
+        &mut self,
+        text: &str,
+        tokens: &[TokenInfo],
+    ) -> (OmniResult, crate::ai::AIOutput) {
         let domain = Self::detect_domain(text);
 
         let ai_output = self.ai.think(tokens);
-        let response_text = ai_output.response_tokens
+        let response_text = ai_output
+            .response_tokens
             .as_ref()
-            .map(|t| t.iter().map(|ti| ti.text.as_str()).collect::<Vec<_>>().join(" "))
+            .map(|t| {
+                t.iter()
+                    .map(|ti| ti.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
             .unwrap_or_else(|| "No response generated".to_string());
         let domain_result = match domain {
             "met" | "warp" | "aether" | "tesla" | "zfc" | "geometry" | "qft" | "z3" => {
@@ -151,28 +217,33 @@ impl<const N: usize, const S: usize> OmniEngine<N, S> {
                 let ans = self.query_code(text);
                 OmniDomainResult::Code(ans)
             }
-            _ => {
-                OmniDomainResult::General(response_text)
-            }
+            _ => OmniDomainResult::General(response_text),
         };
 
         let cross_domain = self.run_integration(text, domain);
 
-        (OmniResult {
-            domain: domain.to_string(),
-            domain_result,
-            cross_domain,
-            entropy: self.ai.cube.global_entropy(),
-            coherence: self.ai.cube.coherence(),
-            memory_size: self.ai.memory.size(),
-        }, ai_output)
+        (
+            OmniResult {
+                domain: domain.to_string(),
+                domain_result,
+                cross_domain,
+                entropy: self.ai.cube.global_entropy(),
+                coherence: self.ai.cube.coherence(),
+                memory_size: self.ai.memory.size(),
+            },
+            ai_output,
+        )
     }
 
     fn query_reactor(&self, _text: &str) -> String {
         if let Some(ref r) = self.reactor {
             format!(
                 "ReactorCore:\n  n (power) = {:.4}\n  c (precursors) = {:.4}\n  T (fuel temp) = {:.1} K\n  rho (reactivity) = {:.1} pcm\n  rods = {}",
-                r.n, r.c, r.t, r.rho, r.rods.len()
+                r.n,
+                r.c,
+                r.t,
+                r.rho,
+                r.rods.len()
             )
         } else {
             "No reactor core initialized".to_string()
@@ -183,8 +254,11 @@ impl<const N: usize, const S: usize> OmniEngine<N, S> {
         if let Some(ref s) = self.spatial {
             format!(
                 "RoomController:\n  target = ({:.2}, {:.2})\n  phase stability = {:.4}\n  coherence = {:.4}\n  entropy = {:.4}",
-                s.attractor[0], s.attractor[2],
-                s.phase_stability(), s.coherence(), s.entropy()
+                s.attractor[0],
+                s.attractor[2],
+                s.phase_stability(),
+                s.coherence(),
+                s.entropy()
             )
         } else {
             "No spatial controller initialized".to_string()
@@ -204,16 +278,28 @@ impl<const N: usize, const S: usize> OmniEngine<N, S> {
         let q = query.to_lowercase();
 
         if self.integration.physics_to_code && domain != "code" && q.contains("constraint") {
-            pipes.push("PHYSICS→CODE: constraint vector from physics domain forwarded to code generator".to_string());
+            pipes.push(
+                "PHYSICS→CODE: constraint vector from physics domain forwarded to code generator"
+                    .to_string(),
+            );
         }
         if self.integration.spatial_to_physics && domain != "physics" && q.contains("sensor") {
-            pipes.push("SPATIAL→PHYSICS: LiDAR sensor readings piped to aether density field model".to_string());
+            pipes.push(
+                "SPATIAL→PHYSICS: LiDAR sensor readings piped to aether density field model"
+                    .to_string(),
+            );
         }
         if self.integration.reactor_to_spatial && domain != "spatial" && q.contains("control") {
-            pipes.push("REACTOR→SPATIAL: rod position vector mapped to spatial attractor coordinates".to_string());
+            pipes.push(
+                "REACTOR→SPATIAL: rod position vector mapped to spatial attractor coordinates"
+                    .to_string(),
+            );
         }
         if self.integration.code_to_reactor && domain != "reactor" && q.contains("safety") {
-            pipes.push("CODE→REACTOR: verified Rust safety invariants constrain reactor power ramp rate".to_string());
+            pipes.push(
+                "CODE→REACTOR: verified Rust safety invariants constrain reactor power ramp rate"
+                    .to_string(),
+            );
         }
         pipes
     }
@@ -241,12 +327,18 @@ pub fn render_omni_result(result: &OmniResult) -> String {
     let mut out = String::new();
 
     out.push_str("╔══════════════════════════════════════════════════╗\n");
-    out.push_str(&format!("║  Fuga Omni 1.0  ──  domain: {}              \n", result.domain));
+    out.push_str(&format!(
+        "║  Fuga Omni 1.0  ──  domain: {}              \n",
+        result.domain
+    ));
     out.push_str("╚══════════════════════════════════════════════════╝\n\n");
 
     out.push_str(&format!("  Cube entropy:  {:.4}\n", result.entropy));
     out.push_str(&format!("  Coherence:     {:.4}\n", result.coherence));
-    out.push_str(&format!("  Memory:        {} entries\n\n", result.memory_size));
+    out.push_str(&format!(
+        "  Memory:        {} entries\n\n",
+        result.memory_size
+    ));
 
     match &result.domain_result {
         OmniDomainResult::Physics(ans) => {
@@ -277,7 +369,9 @@ pub fn render_omni_result(result: &OmniResult) -> String {
     out.push_str("╔══════════════════════════════════════════════════╗\n");
     out.push_str(&format!("║  Fuga Omni 1.0  ──  {}", result.domain));
     let pad = 28usize.saturating_sub(result.domain.len());
-    for _ in 0..pad { out.push(' '); }
+    for _ in 0..pad {
+        out.push(' ');
+    }
     out.push_str("║\n");
     out.push_str("╚══════════════════════════════════════════════════╝\n");
 
@@ -331,17 +425,19 @@ pub fn build_omni_corpus(existing: &str, output: &str) -> Result<usize, String> 
     use std::fs;
     use std::io::Write;
 
-    let fisig_content = fs::read_to_string(existing)
-        .map_err(|e| format!("Failed to read {}: {}", existing, e))?;
-    let fisig_lines: Vec<&str> = fisig_content.lines().filter(|l| !l.trim().is_empty()).collect();
+    let fisig_content =
+        fs::read_to_string(existing).map_err(|e| format!("Failed to read {}: {}", existing, e))?;
+    let fisig_lines: Vec<&str> = fisig_content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     let fisig_count = fisig_lines.len();
 
-    let mut out = fs::File::create(output)
-        .map_err(|e| format!("Failed to create {}: {}", output, e))?;
+    let mut out =
+        fs::File::create(output).map_err(|e| format!("Failed to create {}: {}", output, e))?;
 
     for line in &fisig_lines {
-        writeln!(out, "{}", line)
-            .map_err(|e| format!("Write error: {}", e))?;
+        writeln!(out, "{}", line).map_err(|e| format!("Write error: {}", e))?;
     }
 
     let extra_docs = vec![
@@ -354,11 +450,16 @@ pub fn build_omni_corpus(existing: &str, output: &str) -> Result<usize, String> 
     ];
 
     for doc_json in &extra_docs {
-        writeln!(out, "{}", doc_json)
-            .map_err(|e| format!("Write error: {}", e))?;
+        writeln!(out, "{}", doc_json).map_err(|e| format!("Write error: {}", e))?;
     }
 
     let total = fisig_count + extra_docs.len();
-    println!("Omni corpus created: {} docs ({} fisig + {} extra) -> {}", total, fisig_count, extra_docs.len(), output);
+    println!(
+        "Omni corpus created: {} docs ({} fisig + {} extra) -> {}",
+        total,
+        fisig_count,
+        extra_docs.len(),
+        output
+    );
     Ok(total)
 }

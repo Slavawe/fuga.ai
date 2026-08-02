@@ -1,15 +1,15 @@
-pub mod super_token;
+pub mod explorer;
 pub mod pattern_matcher;
+pub mod super_token;
 pub mod token_builder;
 pub mod vocabulary;
-pub mod explorer;
 
 use crate::core::hypervector::Hypervector;
-use super_token::{SuperToken, TokenRole};
 use pattern_matcher::{PatternMatcher, TokenInfo};
-use vocabulary::TokenVocabulary;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use super_token::{SuperToken, TokenRole};
+use vocabulary::TokenVocabulary;
 
 pub fn token_id(text: &str) -> u32 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -36,14 +36,20 @@ impl WeaverEngine {
 
     pub fn cached_vector(&mut self, token_id: u32) -> &Hypervector {
         let dim = self.dim;
-        self.vector_cache.entry(token_id)
+        self.vector_cache
+            .entry(token_id)
             .or_insert_with(|| deterministic_vector(dim, &format!("token_{}", token_id)))
     }
 
-    pub fn dim(&self) -> usize { self.dim }
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
 
-    pub fn compress_stream(&mut self, tokens: &[TokenInfo],
-        idf: Option<&HashMap<u32, f64>>) -> WeaverResult {
+    pub fn compress_stream(
+        &mut self,
+        tokens: &[TokenInfo],
+        idf: Option<&HashMap<u32, f64>>,
+    ) -> WeaverResult {
         let total_input = tokens.len();
         let boundaries = self.pattern_matcher.find_boundaries(tokens);
         let mut super_tokens = Vec::new();
@@ -69,20 +75,30 @@ impl WeaverEngine {
         }
     }
 
-    fn fuse_window(&mut self, tokens: &[TokenInfo], start_pos: usize, role: TokenRole,
-        idf: Option<&HashMap<u32, f64>>) -> SuperToken {
+    fn fuse_window(
+        &mut self,
+        tokens: &[TokenInfo],
+        start_pos: usize,
+        role: TokenRole,
+        idf: Option<&HashMap<u32, f64>>,
+    ) -> SuperToken {
         if tokens.is_empty() {
             return SuperToken::new(Hypervector::random(self.dim), start_pos);
         }
 
-        let token_hvs: Vec<Hypervector> = tokens.iter().enumerate().map(|(pos, tok)| {
-            let hv = self.cached_vector(tok.id).clone();
-            hv.permute(pos % self.dim)
-        }).collect();
+        let token_hvs: Vec<Hypervector> = tokens
+            .iter()
+            .enumerate()
+            .map(|(pos, tok)| {
+                let hv = self.cached_vector(tok.id).clone();
+                hv.permute(pos % self.dim)
+            })
+            .collect();
 
         let mut items: Vec<&Hypervector> = Vec::new();
         for (i, hv) in token_hvs.iter().enumerate() {
-            let repeats = idf.and_then(|w| w.get(&tokens[i].id))
+            let repeats = idf
+                .and_then(|w| w.get(&tokens[i].id))
                 .map(|w| (w * 2.0).round() as usize)
                 .unwrap_or(1)
                 .max(1);
@@ -105,7 +121,11 @@ impl WeaverEngine {
         st
     }
 
-    pub fn unweave_stream(&self, super_tokens: &[SuperToken], vocab: &TokenVocabulary) -> UnweaveResult {
+    pub fn unweave_stream(
+        &self,
+        super_tokens: &[SuperToken],
+        vocab: &TokenVocabulary,
+    ) -> UnweaveResult {
         let mut recovered = Vec::new();
         let mut total_original = 0;
         let mut total_recovered = 0;
@@ -119,7 +139,9 @@ impl WeaverEngine {
                 let token = self.unweave_token(st, pos, vocab);
                 let sim = token.2;
                 total_similarity += sim;
-                if sim > 0.5 { total_recovered += 1; }
+                if sim > 0.5 {
+                    total_recovered += 1;
+                }
                 recovered.push(TokenInfo {
                     id: token.0,
                     text: token.1,
@@ -128,8 +150,16 @@ impl WeaverEngine {
         }
 
         let count = recovered.len();
-        let avg_sim = if count > 0 { total_similarity / count as f64 } else { 0.0 };
-        let accuracy = if total_original > 0 { total_recovered as f64 / total_original as f64 } else { 0.0 };
+        let avg_sim = if count > 0 {
+            total_similarity / count as f64
+        } else {
+            0.0
+        };
+        let accuracy = if total_original > 0 {
+            total_recovered as f64 / total_original as f64
+        } else {
+            0.0
+        };
 
         UnweaveResult {
             recovered_tokens: recovered,
@@ -140,7 +170,12 @@ impl WeaverEngine {
         }
     }
 
-    pub fn unweave_stream_filtered(&self, super_tokens: &[SuperToken], vocab: &TokenVocabulary, candidates: &HashSet<u32>) -> UnweaveResult {
+    pub fn unweave_stream_filtered(
+        &self,
+        super_tokens: &[SuperToken],
+        vocab: &TokenVocabulary,
+        candidates: &HashSet<u32>,
+    ) -> UnweaveResult {
         let mut recovered = Vec::new();
         let mut total_original = 0;
         let mut total_recovered = 0;
@@ -153,11 +188,16 @@ impl WeaverEngine {
             for pos in 0..window_size {
                 let shift = pos % self.dim;
                 let unshifted = st.vector.permute(self.dim - shift);
-                let token = vocab.nearest_in_set(&unshifted, candidates)
-                    .unwrap_or((0, "<UNK>".to_string(), 0.0));
+                let token = vocab.nearest_in_set(&unshifted, candidates).unwrap_or((
+                    0,
+                    "<UNK>".to_string(),
+                    0.0,
+                ));
                 let sim = token.2;
                 total_similarity += sim;
-                if sim > 0.5 { total_recovered += 1; }
+                if sim > 0.5 {
+                    total_recovered += 1;
+                }
                 recovered.push(TokenInfo {
                     id: token.0,
                     text: token.1,
@@ -166,8 +206,16 @@ impl WeaverEngine {
         }
 
         let count = recovered.len();
-        let avg_sim = if count > 0 { total_similarity / count as f64 } else { 0.0 };
-        let accuracy = if total_original > 0 { total_recovered as f64 / total_original as f64 } else { 0.0 };
+        let avg_sim = if count > 0 {
+            total_similarity / count as f64
+        } else {
+            0.0
+        };
+        let accuracy = if total_original > 0 {
+            total_recovered as f64 / total_original as f64
+        } else {
+            0.0
+        };
 
         UnweaveResult {
             recovered_tokens: recovered,
@@ -178,12 +226,19 @@ impl WeaverEngine {
         }
     }
 
-    fn unweave_token(&self, st: &SuperToken, position: usize, vocab: &TokenVocabulary) -> (u32, String, f64) {
+    fn unweave_token(
+        &self,
+        st: &SuperToken,
+        position: usize,
+        vocab: &TokenVocabulary,
+    ) -> (u32, String, f64) {
         let shift = position % self.dim;
         let unshifted = st.vector.permute(self.dim - shift);
 
         let beam = vocab.nearest_beam(&unshifted, 8);
-        beam.into_iter().next().unwrap_or((0, "<UNK>".to_string(), 0.0))
+        beam.into_iter()
+            .next()
+            .unwrap_or((0, "<UNK>".to_string(), 0.0))
     }
 }
 
@@ -208,14 +263,20 @@ impl UnweaveResult {
         out.push_str("=== Fuga Unweave Result ===\n");
         out.push_str(&format!("Original tokens:  {}\n", self.total_original));
         out.push_str(&format!("Recovered tokens: {}\n", self.total_recovered));
-        out.push_str(&format!("Accuracy:         {:.1}%\n", self.accuracy * 100.0));
+        out.push_str(&format!(
+            "Accuracy:         {:.1}%\n",
+            self.accuracy * 100.0
+        ));
         out.push_str(&format!("Avg similarity:   {:.4}\n", self.avg_similarity));
         out.push('\n');
         for (i, tok) in self.recovered_tokens.iter().enumerate().take(20) {
             out.push_str(&format!("  [{}] id={} text={:?}\n", i, tok.id, tok.text));
         }
         if self.recovered_tokens.len() > 20 {
-            out.push_str(&format!("  ... ({} more)\n", self.recovered_tokens.len() - 20));
+            out.push_str(&format!(
+                "  ... ({} more)\n",
+                self.recovered_tokens.len() - 20
+            ));
         }
         out
     }
@@ -232,7 +293,9 @@ impl WeaverResult {
         for (i, st) in self.super_tokens.iter().enumerate() {
             out.push_str(&format!(
                 "SuperToken [{}]: {} tokens compressed, role flags: {:08b}\n",
-                i, st.raw_tokens.len(), st.role_flags.bits()
+                i,
+                st.raw_tokens.len(),
+                st.role_flags.bits()
             ));
         }
         out
@@ -240,9 +303,9 @@ impl WeaverResult {
 }
 
 pub(crate) fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::{RngCore, SeedableRng};
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::{RngCore, SeedableRng};
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());

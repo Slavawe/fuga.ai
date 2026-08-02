@@ -17,7 +17,12 @@ impl JepaPredictor {
         let mut rng = rand::thread_rng();
         let perm_offsets: Vec<usize> = (0..cl).map(|_| rng.gen_range(1..dim)).collect();
         let weights = vec![1.0 / cl as f64; cl];
-        Self { dim, context_len: cl, perm_offsets, weights }
+        Self {
+            dim,
+            context_len: cl,
+            perm_offsets,
+            weights,
+        }
     }
 
     pub fn predict(&self, context: &[&Hypervector]) -> Hypervector {
@@ -34,11 +39,7 @@ impl JepaPredictor {
         combined
     }
 
-    pub fn train_on_sequences(
-        &mut self,
-        sequences: &[Vec<Hypervector>],
-        epochs: usize,
-    ) -> f64 {
+    pub fn train_on_sequences(&mut self, sequences: &[Vec<Hypervector>], epochs: usize) -> f64 {
         let mut rng = rand::thread_rng();
         let mut best_loss = f64::MAX;
         let mut best_perm = self.perm_offsets.clone();
@@ -62,7 +63,11 @@ impl JepaPredictor {
                 }
             }
 
-            let avg_loss = if count > 0 { total_loss / count as f64 } else { 1.0 };
+            let avg_loss = if count > 0 {
+                total_loss / count as f64
+            } else {
+                1.0
+            };
 
             if avg_loss < best_loss {
                 best_loss = avg_loss;
@@ -76,12 +81,16 @@ impl JepaPredictor {
                 } else {
                     let delta = rng.gen_range(1..101);
                     *p = (*p + delta) % self.dim;
-                    if *p == 0 { *p = 1; }
+                    if *p == 0 {
+                        *p = 1;
+                    }
                 }
             }
             for w in &mut self.weights {
                 *w += rng.gen_range(-0.1..0.1);
-                if *w < 0.01 { *w = 0.01; }
+                if *w < 0.01 {
+                    *w = 0.01;
+                }
             }
             let sum: f64 = self.weights.iter().sum();
             for w in &mut self.weights {
@@ -101,14 +110,15 @@ impl JepaPredictor {
 
     pub fn save(&self, path: &str) -> Result<(), String> {
         use std::io::Write;
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
         let dim = self.dim as u32;
         f.write_all(&dim.to_le_bytes()).map_err(|e| e.to_string())?;
         let cl = self.context_len as u32;
         f.write_all(&cl.to_le_bytes()).map_err(|e| e.to_string())?;
         for &p in &self.perm_offsets {
-            f.write_all(&(p as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+            f.write_all(&(p as u32).to_le_bytes())
+                .map_err(|e| e.to_string())?;
         }
         for &w in &self.weights {
             f.write_all(&w.to_le_bytes()).map_err(|e| e.to_string())?;
@@ -117,30 +127,34 @@ impl JepaPredictor {
     }
 
     pub fn load(path: &str) -> Result<Self, String> {
-        
-        let file = std::fs::File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let file =
+            std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
         let data = &mmap[..];
         let mut pos = 0usize;
-        let dim = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+        let dim = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
-        let cl = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+        let cl = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         let mut perm_offsets = Vec::with_capacity(cl);
         for _ in 0..cl {
-            let p = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let p = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
             perm_offsets.push(p);
         }
         let mut weights = Vec::with_capacity(cl);
         for _ in 0..cl {
             let mut buf = [0u8; 8];
-            buf.copy_from_slice(&data[pos..pos+8]);
+            buf.copy_from_slice(&data[pos..pos + 8]);
             pos += 8;
             weights.push(f64::from_le_bytes(buf));
         }
-        Ok(Self { dim, context_len: cl, perm_offsets, weights })
+        Ok(Self {
+            dim,
+            context_len: cl,
+            perm_offsets,
+            weights,
+        })
     }
 }

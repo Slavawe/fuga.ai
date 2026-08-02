@@ -1,8 +1,8 @@
 use std::f64::consts::PI;
 
 pub struct ControlRod {
-    pub position: f64,    // 0.0 = fully inserted, 1.0 = withdrawn
-    pub worth: f64,       // total reactivity worth when fully withdrawn (pcm)
+    pub position: f64, // 0.0 = fully inserted, 1.0 = withdrawn
+    pub worth: f64,    // total reactivity worth when fully withdrawn (pcm)
 }
 
 impl ControlRod {
@@ -12,19 +12,19 @@ impl ControlRod {
 }
 
 pub struct ReactorCore {
-    pub n: f64,              // normalized neutron population (power level)
-    pub c: f64,              // delayed neutron precursor concentration
-    pub t: f64,              // fuel temperature (K above ambient)
-    pub rho: f64,            // net reactivity (pcm)
+    pub n: f64,   // normalized neutron population (power level)
+    pub c: f64,   // delayed neutron precursor concentration
+    pub t: f64,   // fuel temperature (K above ambient)
+    pub rho: f64, // net reactivity (pcm)
 
     // kinetics parameters
-    pub beta: f64,           // delayed neutron fraction
-    pub lambda: f64,         // neutron generation time (s)
-    pub decay: f64,          // precursor decay constant (s^-1)
-    pub power_coeff: f64,    // heating per unit power (K/s per n)
-    pub cooling_coeff: f64,  // cooling rate (1/s)
-    pub alpha_t: f64,        // Doppler temperature coefficient (pcm/K)
-    pub rho_ext: f64,        // external reactivity (pcm)
+    pub beta: f64,          // delayed neutron fraction
+    pub lambda: f64,        // neutron generation time (s)
+    pub decay: f64,         // precursor decay constant (s^-1)
+    pub power_coeff: f64,   // heating per unit power (K/s per n)
+    pub cooling_coeff: f64, // cooling rate (1/s)
+    pub alpha_t: f64,       // Doppler temperature coefficient (pcm/K)
+    pub rho_ext: f64,       // external reactivity (pcm)
 
     pub rods: Vec<ControlRod>,
     pub time: f64,
@@ -33,8 +33,14 @@ pub struct ReactorCore {
 impl Default for ReactorCore {
     fn default() -> Self {
         let mut rods = Vec::new();
-        rods.push(ControlRod { position: 0.5, worth: 2000.0 });
-        rods.push(ControlRod { position: 0.5, worth: 2000.0 });
+        rods.push(ControlRod {
+            position: 0.5,
+            worth: 2000.0,
+        });
+        rods.push(ControlRod {
+            position: 0.5,
+            worth: 2000.0,
+        });
         Self {
             n: 1e-6,
             c: 0.0,
@@ -95,7 +101,10 @@ pub struct ReactorGrid {
 
 impl ReactorGrid {
     pub fn new(n: usize) -> Self {
-        Self { n, flux: vec![0.0; n * n * n] }
+        Self {
+            n,
+            flux: vec![0.0; n * n * n],
+        }
     }
 
     pub fn set_flux_bessel(&mut self, core: &ReactorCore) {

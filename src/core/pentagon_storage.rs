@@ -32,7 +32,10 @@ impl PentagonStorage {
     /// Запрос при дефиците: Куб посылает query_vector,
     /// Пентагон ищет ближайший концепт по расстоянию Хэмминга.
     /// Возвращает (label, hypervector, similarity) если найден концепт выше порога.
-    pub fn fetch_on_deficit(&self, query_vector: &Hypervector) -> Option<(&str, &Hypervector, f64)> {
+    pub fn fetch_on_deficit(
+        &self,
+        query_vector: &Hypervector,
+    ) -> Option<(&str, &Hypervector, f64)> {
         let mut best: Option<(&str, &Hypervector, f64)> = None;
 
         for (label, hv) in &self.memory_bank {
@@ -76,10 +79,17 @@ mod tests {
         let concept = Hypervector::random(10000);
         p.store("syntax_overflow_pattern", concept.clone());
         let found = p.fetch_on_deficit(&concept);
-        assert!(found.is_some(), "Should find stored concept by its own vector");
+        assert!(
+            found.is_some(),
+            "Should find stored concept by its own vector"
+        );
         let (label, _, sim) = found.unwrap();
         assert_eq!(label, "syntax_overflow_pattern");
-        assert!(sim > 0.99, "Self-similarity should be near 1.0, got {}", sim);
+        assert!(
+            sim > 0.99,
+            "Self-similarity should be near 1.0, got {}",
+            sim
+        );
     }
 
     #[test]
@@ -89,6 +99,9 @@ mod tests {
         let b = Hypervector::random(10000);
         p.store("concept_a", a);
         let found = p.fetch_on_deficit(&b);
-        assert!(found.is_none(), "Random vectors should not match above 0.9 threshold");
+        assert!(
+            found.is_none(),
+            "Random vectors should not match above 0.9 threshold"
+        );
     }
 }

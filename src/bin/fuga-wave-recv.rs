@@ -3,10 +3,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use fuga::{
-    Hypervector, MemoryStore,
-    ai::wave_mesh::{cosine_similarity},
-};
+use fuga::{Hypervector, MemoryStore, ai::wave_mesh::cosine_similarity};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -16,19 +13,33 @@ fn main() {
     println!("[Fuga-Wave Recv] Listening on {}...", interface);
 
     let memory = match MemoryStore::load_bin(&mem_path) {
-        Ok(m) => { println!("Memory: {} entries", m.size()); m }
-        Err(e) => { eprintln!("Memory load: {}", e); return; }
+        Ok(m) => {
+            println!("Memory: {} entries", m.size());
+            m
+        }
+        Err(e) => {
+            eprintln!("Memory load: {}", e);
+            return;
+        }
     };
 
-    let _ = Command::new("ip").args(["link", "set", interface, "down"]).status();
-    let _ = Command::new("iw").args([interface, "set", "type", "monitor"]).status();
-    let _ = Command::new("ip").args(["link", "set", interface, "up"]).status();
+    let _ = Command::new("ip")
+        .args(["link", "set", interface, "down"])
+        .status();
+    let _ = Command::new("iw")
+        .args([interface, "set", "type", "monitor"])
+        .status();
+    let _ = Command::new("ip")
+        .args(["link", "set", interface, "up"])
+        .status();
     println!("[Fuga-Wave Recv] {} is in monitor mode.", interface);
 
     let mut seen_frames: u64 = 0;
     loop {
         let output = Command::new("tcpdump")
-            .args(["-i", interface, "-c", "1", "-XX", "-n", "-e", "-t", "-s", "0", "-l"])
+            .args([
+                "-i", interface, "-c", "1", "-XX", "-n", "-e", "-t", "-s", "0", "-l",
+            ])
             .output();
 
         match output {
@@ -71,8 +82,13 @@ fn main() {
                                 best_text = &e.text;
                             }
                         }
-                        println!("[Fuga-Wave Recv] Frame #{} | payload={}B | best_sim={:.4} | \"{:.80}\"",
-                            seen_frames, payload.len(), best_sim, best_text);
+                        println!(
+                            "[Fuga-Wave Recv] Frame #{} | payload={}B | best_sim={:.4} | \"{:.80}\"",
+                            seen_frames,
+                            payload.len(),
+                            best_sim,
+                            best_text
+                        );
                     }
                 }
             }

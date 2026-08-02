@@ -105,7 +105,13 @@ impl SandboxHarness {
     }
 
     fn compile_cpp(&self, file_path: &std::path::Path) -> CppCompileResult {
-        let _out = self.temp_dir.join(format!("{}.exe", file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("a")));
+        let _out = self.temp_dir.join(format!(
+            "{}.exe",
+            file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("a")
+        ));
         let mut cmd = Command::new("g++");
         cmd.arg("-std=c++17")
             .arg("-Wall")
@@ -136,14 +142,28 @@ impl SandboxHarness {
         let mut stats = CppAstStats::default();
         for line in code.lines() {
             let t = line.trim();
-            if t.contains("#include") { stats.includes += 1; }
-            if t.contains("template") && (t.contains('<') || t.contains("typename")) { stats.templates += 1; }
-            if t.starts_with("class ") || t.starts_with("struct ") { stats.classes += 1; }
+            if t.contains("#include") {
+                stats.includes += 1;
+            }
+            if t.contains("template") && (t.contains('<') || t.contains("typename")) {
+                stats.templates += 1;
+            }
+            if t.starts_with("class ") || t.starts_with("struct ") {
+                stats.classes += 1;
+            }
             // Detect function signatures: type name(...) {
-            if (t.starts_with("void ") || t.starts_with("int ") || t.starts_with("bool ") 
-                || t.starts_with("auto ") || t.starts_with("std::") 
-                || t.starts_with("static ") || t.starts_with("size_t ") || t.starts_with("const "))
-                && t.contains('(') && t.contains(')') && !t.contains(";") {
+            if (t.starts_with("void ")
+                || t.starts_with("int ")
+                || t.starts_with("bool ")
+                || t.starts_with("auto ")
+                || t.starts_with("std::")
+                || t.starts_with("static ")
+                || t.starts_with("size_t ")
+                || t.starts_with("const "))
+                && t.contains('(')
+                && t.contains(')')
+                && !t.contains(";")
+            {
                 let sig_part = t.split('{').next().unwrap_or(t).trim();
                 if !sig_part.is_empty() {
                     stats.functions += 1;
@@ -169,14 +189,31 @@ impl SandboxHarness {
         dup_ratio.clamp(0.1, 1.0)
     }
 
-    fn compute_cpp_reward(&self, compile: &CppCompileResult, ast: &CppAstStats, collage: f64) -> f64 {
+    fn compute_cpp_reward(
+        &self,
+        compile: &CppCompileResult,
+        ast: &CppAstStats,
+        collage: f64,
+    ) -> f64 {
         let mut reward = 0.0;
-        if compile.success { reward += 2.0; } else { reward -= compile.errors as f64 * 0.5; }
+        if compile.success {
+            reward += 2.0;
+        } else {
+            reward -= compile.errors as f64 * 0.5;
+        }
         reward -= compile.warnings as f64 * 0.1;
-        if ast.functions > 0 { reward += 0.4 * (ast.functions as f64).ln().max(0.0); }
-        if ast.classes > 0 { reward += 0.5 * (ast.classes as f64).ln().max(0.0); }
-        if ast.templates > 0 { reward += 0.3 * (ast.templates as f64).ln().max(0.0); }
-        if ast.includes > 0 { reward += 0.05 * ast.includes as f64; }
+        if ast.functions > 0 {
+            reward += 0.4 * (ast.functions as f64).ln().max(0.0);
+        }
+        if ast.classes > 0 {
+            reward += 0.5 * (ast.classes as f64).ln().max(0.0);
+        }
+        if ast.templates > 0 {
+            reward += 0.3 * (ast.templates as f64).ln().max(0.0);
+        }
+        if ast.includes > 0 {
+            reward += 0.05 * ast.includes as f64;
+        }
         reward -= collage * 2.0;
         reward.max(-10.0).min(10.0)
     }
@@ -243,11 +280,16 @@ impl SandboxHarness {
             return 1.0;
         }
 
-        let fragment_count = code.lines()
-            .filter(|l| l.trim().starts_with("fn ") || l.trim().starts_with("struct ") || l.trim().starts_with("impl "))
+        let fragment_count = code
+            .lines()
+            .filter(|l| {
+                l.trim().starts_with("fn ")
+                    || l.trim().starts_with("struct ")
+                    || l.trim().starts_with("impl ")
+            })
             .count();
         let expected_structured = stats.functions + stats.structs + stats.impl_blocks;
-        
+
         if expected_structured == 0 {
             return 1.0;
         }
@@ -256,12 +298,13 @@ impl SandboxHarness {
 
         // Additional collage signals
         let lines: Vec<&str> = code.lines().collect();
-        let semicolon_in_comments = lines.iter()
+        let semicolon_in_comments = lines
+            .iter()
             .filter(|l| l.trim().starts_with("//") && l.contains(';'))
             .count();
         let duplicate_fn_sigs = self.count_duplicate_fn_signatures(&lines);
         let duplicate_structs = self.count_duplicate_structs(&lines);
-        
+
         let base_score = if ratio > 3.0 {
             0.8 + (ratio - 3.0).min(1.0) * 0.2
         } else if ratio > 1.5 {
@@ -270,10 +313,10 @@ impl SandboxHarness {
             0.1
         };
 
-        let penalty = (semicolon_in_comments as f64 * 0.15) 
-            + (duplicate_fn_sigs as f64 * 0.2) 
+        let penalty = (semicolon_in_comments as f64 * 0.15)
+            + (duplicate_fn_sigs as f64 * 0.2)
             + (duplicate_structs as f64 * 0.25);
-        
+
         (base_score + penalty).min(1.0)
     }
 

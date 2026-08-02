@@ -1,6 +1,8 @@
 use crate::core::hypervector::Hypervector;
-use crate::multi::language::{LanguageId, parse_source, run_query, count_nodes_by_kind, find_enclosing_function};
-use crate::multi::patterns::{ViolationPattern, Severity};
+use crate::multi::language::{
+    LanguageId, count_nodes_by_kind, find_enclosing_function, parse_source, run_query,
+};
+use crate::multi::patterns::{Severity, ViolationPattern};
 use rand::SeedableRng;
 use std::collections::HashMap;
 
@@ -39,7 +41,10 @@ impl MultiSyntaxLayer {
             let hv = deterministic_vector(dim, &format!("{:?}", p));
             pattern_vectors.insert(*p, hv);
         }
-        Self { dim, pattern_vectors }
+        Self {
+            dim,
+            pattern_vectors,
+        }
     }
 
     pub fn analyze(&self, source: &str, lang: LanguageId, file_name: &str) -> MultiSyntaxResult {
@@ -57,10 +62,13 @@ impl MultiSyntaxLayer {
                             for qr in results {
                                 if qr.capture_name == "violation" {
                                     // Post-filter broad queries for Python (which lacks named fields)
-                                    if lang == LanguageId::Python && !self.python_pattern_matches(*pattern, &qr.text) {
+                                    if lang == LanguageId::Python
+                                        && !self.python_pattern_matches(*pattern, &qr.text)
+                                    {
                                         continue;
                                     }
-                                    let fn_name = find_enclosing_function(&tree, source, lang, qr.start_line);
+                                    let fn_name =
+                                        find_enclosing_function(&tree, source, lang, qr.start_line);
                                     violations.push(MultiSyntaxViolation {
                                         pattern: *pattern,
                                         severity: pattern.default_severity(),
@@ -84,37 +92,56 @@ impl MultiSyntaxLayer {
         let violation_vector = if violations.is_empty() {
             Hypervector::random(self.dim)
         } else {
-            let vecs: Vec<&Hypervector> = violations.iter()
+            let vecs: Vec<&Hypervector> = violations
+                .iter()
                 .filter_map(|v| self.pattern_vectors.get(&v.pattern))
                 .collect();
-            if vecs.is_empty() { Hypervector::random(self.dim) }
-            else { vecs[0].bundle(&vecs[1..]) }
+            if vecs.is_empty() {
+                Hypervector::random(self.dim)
+            } else {
+                vecs[0].bundle(&vecs[1..])
+            }
         };
 
         let safety_score = (1.0 - violations.len() as f64 * 0.08).max(0.0);
 
-        MultiSyntaxResult { safety_score, violation_vector, violations, functions, lines }
+        MultiSyntaxResult {
+            safety_score,
+            violation_vector,
+            violations,
+            functions,
+            lines,
+        }
     }
 
     fn python_pattern_matches(&self, pattern: ViolationPattern, text: &str) -> bool {
         // Python attribute nodes don't use named fields, so queries match broadly.
         // We filter by function name in Rust code.
         let last_dot = text.rfind('.');
-        let func_name = last_dot.map(|i| text[i+1..].trim_end_matches(&['(', ' '][..])).unwrap_or("");
+        let func_name = last_dot
+            .map(|i| text[i + 1..].trim_end_matches(&['(', ' '][..]))
+            .unwrap_or("");
         match pattern {
             ViolationPattern::UnwrapOrExpect => matches!(func_name, "get" | "pop" | "__getitem__"),
-            ViolationPattern::CommandInjection => matches!(func_name, "run" | "Popen" | "call" | "check_output" | "system"),
-            ViolationPattern::FormatStringVulnerability => matches!(func_name, "format" | "format_map"),
-            ViolationPattern::SqlInjection => matches!(func_name, "execute" | "executemany" | "cursor"),
+            ViolationPattern::CommandInjection => matches!(
+                func_name,
+                "run" | "Popen" | "call" | "check_output" | "system"
+            ),
+            ViolationPattern::FormatStringVulnerability => {
+                matches!(func_name, "format" | "format_map")
+            }
+            ViolationPattern::SqlInjection => {
+                matches!(func_name, "execute" | "executemany" | "cursor")
+            }
             _ => true,
         }
     }
 }
 
 fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());
@@ -139,7 +166,11 @@ mod tests {
         let layer = MultiSyntaxLayer::new(4096);
         let code = r#"fn main() { let x = Some(42); x.unwrap(); }"#;
         let result = layer.analyze(code, LanguageId::Rust, "test.rs");
-        assert!(result.safety_score > 0.0, "Should analyze, got {:.2}", result.safety_score);
+        assert!(
+            result.safety_score > 0.0,
+            "Should analyze, got {:.2}",
+            result.safety_score
+        );
     }
 
     #[test]
@@ -147,7 +178,10 @@ mod tests {
         let layer = MultiSyntaxLayer::new(4096);
         let code = r#"void buggy() { char buf[10]; gets(buf); }"#;
         let result = layer.analyze(code, LanguageId::C, "test.c");
-        result.violations.iter().any(|v| v.pattern == ViolationPattern::BufferOverflow);
+        result
+            .violations
+            .iter()
+            .any(|v| v.pattern == ViolationPattern::BufferOverflow);
         assert!(result.safety_score < 1.0 || !result.violations.is_empty());
     }
 }

@@ -1,4 +1,4 @@
-use hound::{WavWriter, WavSpec};
+use hound::{WavSpec, WavWriter};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
@@ -48,7 +48,8 @@ impl FugaText {
     }
 
     pub fn text_to_phonemes(&self, text: &str) -> Vec<String> {
-        let cleaned: String = text.chars()
+        let cleaned: String = text
+            .chars()
             .filter(|c| c.is_alphabetic() || c.is_whitespace() || *c == '\'')
             .collect();
         let lower = cleaned.to_lowercase();
@@ -95,7 +96,8 @@ impl FugaText {
                 'v' => "V",
                 'w' => "W",
                 'z' => "Z",
-                'x' => "K", _ => "",
+                'x' => "K",
+                _ => "",
             };
             if !ph.is_empty() {
                 phones.push(ph.to_string());
@@ -154,11 +156,11 @@ impl FugaText {
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let mut writer = WavWriter::create(path, spec)
-            .map_err(|e| format!("WavWriter: {}", e))?;
+        let mut writer = WavWriter::create(path, spec).map_err(|e| format!("WavWriter: {}", e))?;
         let samples = self.synthesize(text);
         for s in samples {
-            writer.write_sample(s)
+            writer
+                .write_sample(s)
                 .map_err(|e| format!("Write: {}", e))?;
         }
         writer.finalize().map_err(|e| format!("Finalize: {}", e))
@@ -174,10 +176,7 @@ impl FugaText {
         };
         let mut buf = Vec::new();
         {
-            let mut writer = WavWriter::new(
-                std::io::Cursor::new(&mut buf),
-                spec,
-            ).unwrap();
+            let mut writer = WavWriter::new(std::io::Cursor::new(&mut buf), spec).unwrap();
             for s in samples {
                 writer.write_sample(s).unwrap();
             }
@@ -188,52 +187,335 @@ impl FugaText {
 }
 
 const PHONEME_TABLE: &[Phoneme] = &[
-    Phoneme { symbol: "AA", f1: 700.0, f2: 1200.0, f3: 2600.0, duration_ms: 100.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "AE", f1: 660.0, f2: 1700.0, f3: 2500.0, duration_ms: 100.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "AH", f1: 600.0, f2: 1100.0, f3: 2600.0, duration_ms: 90.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "AO", f1: 500.0, f2: 900.0, f3: 2600.0, duration_ms: 110.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "AW", f1: 500.0, f2: 1000.0, f3: 2600.0, duration_ms: 120.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "AY", f1: 450.0, f2: 1800.0, f3: 2600.0, duration_ms: 120.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "EH", f1: 530.0, f2: 1800.0, f3: 2600.0, duration_ms: 90.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "ER", f1: 500.0, f2: 1400.0, f3: 2100.0, duration_ms: 110.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "EY", f1: 450.0, f2: 2000.0, f3: 2600.0, duration_ms: 120.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "IH", f1: 400.0, f2: 2000.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "IY", f1: 300.0, f2: 2200.0, f3: 2800.0, duration_ms: 100.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "OW", f1: 450.0, f2: 900.0, f3: 2600.0, duration_ms: 120.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "OY", f1: 450.0, f2: 1000.0, f3: 2600.0, duration_ms: 120.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "UH", f1: 450.0, f2: 1200.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "UW", f1: 300.0, f2: 900.0, f3: 2200.0, duration_ms: 100.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "B",  f1: 200.0, f2: 800.0, f3: 2000.0, duration_ms: 60.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "CH", f1: 300.0, f2: 1800.0, f3: 3000.0, duration_ms: 80.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "D",  f1: 200.0, f2: 1600.0, f3: 2700.0, duration_ms: 50.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "DH", f1: 300.0, f2: 1400.0, f3: 2400.0, duration_ms: 70.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "F",  f1: 400.0, f2: 1400.0, f3: 2500.0, duration_ms: 90.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "G",  f1: 200.0, f2: 1000.0, f3: 2000.0, duration_ms: 50.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "HH", f1: 300.0, f2: 1500.0, f3: 2600.0, duration_ms: 70.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "JH", f1: 250.0, f2: 1800.0, f3: 2600.0, duration_ms: 70.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "K",  f1: 300.0, f2: 1200.0, f3: 2200.0, duration_ms: 50.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "L",  f1: 400.0, f2: 1200.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "M",  f1: 300.0, f2: 1000.0, f3: 2200.0, duration_ms: 70.0, ptype: PhonemeType::Nasal },
-    Phoneme { symbol: "N",  f1: 300.0, f2: 1400.0, f3: 2400.0, duration_ms: 70.0, ptype: PhonemeType::Nasal },
-    Phoneme { symbol: "NG", f1: 300.0, f2: 1000.0, f3: 2000.0, duration_ms: 80.0, ptype: PhonemeType::Nasal },
-    Phoneme { symbol: "P",  f1: 200.0, f2: 800.0, f3: 2000.0, duration_ms: 40.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "R",  f1: 400.0, f2: 1300.0, f3: 1800.0, duration_ms: 80.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "S",  f1: 400.0, f2: 1500.0, f3: 3000.0, duration_ms: 90.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "SH", f1: 300.0, f2: 1700.0, f3: 2800.0, duration_ms: 90.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "T",  f1: 200.0, f2: 1600.0, f3: 2700.0, duration_ms: 40.0, ptype: PhonemeType::Plosive },
-    Phoneme { symbol: "TH", f1: 300.0, f2: 1400.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "V",  f1: 300.0, f2: 1200.0, f3: 2400.0, duration_ms: 70.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "W",  f1: 300.0, f2: 800.0, f3: 2200.0, duration_ms: 60.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "Y",  f1: 300.0, f2: 2000.0, f3: 2600.0, duration_ms: 60.0, ptype: PhonemeType::Vowel },
-    Phoneme { symbol: "Z",  f1: 400.0, f2: 1400.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "ZH", f1: 300.0, f2: 1600.0, f3: 2600.0, duration_ms: 80.0, ptype: PhonemeType::Fricative },
-    Phoneme { symbol: "_",  f1: 0.0,   f2: 0.0,   f3: 0.0,   duration_ms: 40.0,  ptype: PhonemeType::Silence },
+    Phoneme {
+        symbol: "AA",
+        f1: 700.0,
+        f2: 1200.0,
+        f3: 2600.0,
+        duration_ms: 100.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "AE",
+        f1: 660.0,
+        f2: 1700.0,
+        f3: 2500.0,
+        duration_ms: 100.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "AH",
+        f1: 600.0,
+        f2: 1100.0,
+        f3: 2600.0,
+        duration_ms: 90.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "AO",
+        f1: 500.0,
+        f2: 900.0,
+        f3: 2600.0,
+        duration_ms: 110.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "AW",
+        f1: 500.0,
+        f2: 1000.0,
+        f3: 2600.0,
+        duration_ms: 120.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "AY",
+        f1: 450.0,
+        f2: 1800.0,
+        f3: 2600.0,
+        duration_ms: 120.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "EH",
+        f1: 530.0,
+        f2: 1800.0,
+        f3: 2600.0,
+        duration_ms: 90.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "ER",
+        f1: 500.0,
+        f2: 1400.0,
+        f3: 2100.0,
+        duration_ms: 110.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "EY",
+        f1: 450.0,
+        f2: 2000.0,
+        f3: 2600.0,
+        duration_ms: 120.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "IH",
+        f1: 400.0,
+        f2: 2000.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "IY",
+        f1: 300.0,
+        f2: 2200.0,
+        f3: 2800.0,
+        duration_ms: 100.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "OW",
+        f1: 450.0,
+        f2: 900.0,
+        f3: 2600.0,
+        duration_ms: 120.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "OY",
+        f1: 450.0,
+        f2: 1000.0,
+        f3: 2600.0,
+        duration_ms: 120.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "UH",
+        f1: 450.0,
+        f2: 1200.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "UW",
+        f1: 300.0,
+        f2: 900.0,
+        f3: 2200.0,
+        duration_ms: 100.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "B",
+        f1: 200.0,
+        f2: 800.0,
+        f3: 2000.0,
+        duration_ms: 60.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "CH",
+        f1: 300.0,
+        f2: 1800.0,
+        f3: 3000.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "D",
+        f1: 200.0,
+        f2: 1600.0,
+        f3: 2700.0,
+        duration_ms: 50.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "DH",
+        f1: 300.0,
+        f2: 1400.0,
+        f3: 2400.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "F",
+        f1: 400.0,
+        f2: 1400.0,
+        f3: 2500.0,
+        duration_ms: 90.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "G",
+        f1: 200.0,
+        f2: 1000.0,
+        f3: 2000.0,
+        duration_ms: 50.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "HH",
+        f1: 300.0,
+        f2: 1500.0,
+        f3: 2600.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "JH",
+        f1: 250.0,
+        f2: 1800.0,
+        f3: 2600.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "K",
+        f1: 300.0,
+        f2: 1200.0,
+        f3: 2200.0,
+        duration_ms: 50.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "L",
+        f1: 400.0,
+        f2: 1200.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "M",
+        f1: 300.0,
+        f2: 1000.0,
+        f3: 2200.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Nasal,
+    },
+    Phoneme {
+        symbol: "N",
+        f1: 300.0,
+        f2: 1400.0,
+        f3: 2400.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Nasal,
+    },
+    Phoneme {
+        symbol: "NG",
+        f1: 300.0,
+        f2: 1000.0,
+        f3: 2000.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Nasal,
+    },
+    Phoneme {
+        symbol: "P",
+        f1: 200.0,
+        f2: 800.0,
+        f3: 2000.0,
+        duration_ms: 40.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "R",
+        f1: 400.0,
+        f2: 1300.0,
+        f3: 1800.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "S",
+        f1: 400.0,
+        f2: 1500.0,
+        f3: 3000.0,
+        duration_ms: 90.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "SH",
+        f1: 300.0,
+        f2: 1700.0,
+        f3: 2800.0,
+        duration_ms: 90.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "T",
+        f1: 200.0,
+        f2: 1600.0,
+        f3: 2700.0,
+        duration_ms: 40.0,
+        ptype: PhonemeType::Plosive,
+    },
+    Phoneme {
+        symbol: "TH",
+        f1: 300.0,
+        f2: 1400.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "V",
+        f1: 300.0,
+        f2: 1200.0,
+        f3: 2400.0,
+        duration_ms: 70.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "W",
+        f1: 300.0,
+        f2: 800.0,
+        f3: 2200.0,
+        duration_ms: 60.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "Y",
+        f1: 300.0,
+        f2: 2000.0,
+        f3: 2600.0,
+        duration_ms: 60.0,
+        ptype: PhonemeType::Vowel,
+    },
+    Phoneme {
+        symbol: "Z",
+        f1: 400.0,
+        f2: 1400.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "ZH",
+        f1: 300.0,
+        f2: 1600.0,
+        f3: 2600.0,
+        duration_ms: 80.0,
+        ptype: PhonemeType::Fricative,
+    },
+    Phoneme {
+        symbol: "_",
+        f1: 0.0,
+        f2: 0.0,
+        f3: 0.0,
+        duration_ms: 40.0,
+        ptype: PhonemeType::Silence,
+    },
 ];
 
 fn build_lexicon() -> HashMap<String, Vec<String>> {
     let mut dict = HashMap::new();
     for (word, phones) in LEXICON_ENTRIES {
-        dict.insert(word.to_string(), phones.iter().map(|s| s.to_string()).collect());
+        dict.insert(
+            word.to_string(),
+            phones.iter().map(|s| s.to_string()).collect(),
+        );
     }
     dict
 }
@@ -295,15 +577,24 @@ const LEXICON_ENTRIES: &[(&str, &[&str])] = &[
     ("quantum", &["K", "W", "AA", "N", "T", "AH", "M"]),
     ("riemann", &["R", "IY", "M", "AH", "N"]),
     ("formal", &["F", "AO", "R", "M", "AH", "L"]),
-    ("verification", &["V", "EH", "R", "AH", "F", "IH", "K", "EY", "SH", "AH", "N"]),
+    (
+        "verification",
+        &["V", "EH", "R", "AH", "F", "IH", "K", "EY", "SH", "AH", "N"],
+    ),
     ("z3", &["Z", "IY", "TH", "R", "IY"]),
-    ("constraint", &["K", "AH", "N", "S", "T", "R", "EY", "N", "T"]),
+    (
+        "constraint",
+        &["K", "AH", "N", "S", "T", "R", "EY", "N", "T"],
+    ),
     ("unsat", &["AH", "N", "S", "AE", "T"]),
     ("bubble", &["B", "AH", "B", "AH", "L"]),
     ("negative", &["N", "EH", "G", "AH", "T", "IH", "V"]),
     ("density", &["D", "EH", "N", "S", "IH", "T", "IY"]),
     ("gradient", &["G", "R", "EY", "D", "IY", "AH", "N", "T"]),
-    ("temperature", &["T", "EH", "M", "P", "ER", "AH", "CH", "ER"]),
+    (
+        "temperature",
+        &["T", "EH", "M", "P", "ER", "AH", "CH", "ER"],
+    ),
     ("neutron", &["N", "UW", "T", "R", "AA", "N"]),
     ("fission", &["F", "IH", "SH", "AH", "N"]),
     ("doppler", &["D", "AA", "P", "L", "ER"]),
@@ -373,7 +664,11 @@ pub fn conversational_reply(query: &str, domain: &str, system_vector: &[f64]) ->
             "Когерентность в норме.",
             "Выполнено.",
         ];
-        format!("{} {}", base, affirmations[fastrand::usize(..affirmations.len())])
+        format!(
+            "{} {}",
+            base,
+            affirmations[fastrand::usize(..affirmations.len())]
+        )
     } else {
         format!("{} {}", base, random_affirmation())
     }
@@ -407,15 +702,20 @@ const AFFIRMATIONS: &[&str] = &[
 ];
 
 pub fn generate_speech_bot_response(query: &str, domain: &str, result: &str) -> String {
-    let clean_result = result.lines()
-        .filter(|l| l.contains("Core Theorem") || l.contains("SYSTEM VECTOR") || l.contains("│ Answer"))
+    let clean_result = result
+        .lines()
+        .filter(|l| {
+            l.contains("Core Theorem") || l.contains("SYSTEM VECTOR") || l.contains("│ Answer")
+        })
         .next()
         .unwrap_or("Answer processed");
-    format!("{} Query: {}. Domain: {}. {}", 
+    format!(
+        "{} Query: {}. Domain: {}. {}",
         random_greeting(),
         query,
         domain,
-        clean_result)
+        clean_result
+    )
 }
 
 fn random_greeting() -> &'static str {

@@ -1,5 +1,5 @@
-use crate::vsa::topology::ls_bind;
 use crate::core::hypervector::Hypervector;
+use crate::vsa::topology::ls_bind;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShieldAction {
@@ -27,10 +27,18 @@ impl PhaseShield {
 
     pub fn evaluate(&self, l2_err: f64, overshoot: bool, fatigue_max: u32) -> ShieldAction {
         let mut severity = 0u32;
-        if overshoot { severity += 2; }
-        if l2_err > 0.6 { severity += 1; }
-        if fatigue_max > 20 { severity += 2; }
-        if l2_err > 0.85 { severity += 2; }
+        if overshoot {
+            severity += 2;
+        }
+        if l2_err > 0.6 {
+            severity += 1;
+        }
+        if fatigue_max > 20 {
+            severity += 2;
+        }
+        if l2_err > 0.85 {
+            severity += 2;
+        }
 
         match severity {
             0 => ShieldAction::None,
@@ -42,9 +50,7 @@ impl PhaseShield {
                 let angle = std::f64::consts::FRAC_PI_2;
                 ShieldAction::PhaseShift(angle)
             }
-            5..=6 => {
-                ShieldAction::PhaseShift(std::f64::consts::PI)
-            }
+            5..=6 => ShieldAction::PhaseShift(std::f64::consts::PI),
             _ => ShieldAction::EmergencyHalt("Phase collapse detected".into()),
         }
     }
@@ -52,7 +58,9 @@ impl PhaseShield {
     pub fn apply_shift(&self, hv: &Hypervector, angle: f64) -> Hypervector {
         let _n_blocks = hv.dim / 32;
         let phase_steps = ((angle / std::f64::consts::FRAC_PI_2) as usize).max(1) % 4;
-        if phase_steps == 0 { return hv.clone(); }
+        if phase_steps == 0 {
+            return hv.clone();
+        }
         let mut permuted = hv.clone();
         for _ in 0..phase_steps {
             let rotated = permuted.permute(1);

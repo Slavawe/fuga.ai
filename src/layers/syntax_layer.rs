@@ -1,8 +1,11 @@
-use rand::SeedableRng;
-use syn::visit::Visit;
-use syn::{BinOp, Expr, ExprBinary, ExprCall, ExprLit, ExprMethodCall, ExprUnsafe, ItemEnum, ItemFn, ItemStruct, Lit, Macro};
-use std::collections::HashMap;
 use crate::core::hypervector::Hypervector;
+use rand::SeedableRng;
+use std::collections::HashMap;
+use syn::visit::Visit;
+use syn::{
+    BinOp, Expr, ExprBinary, ExprCall, ExprLit, ExprMethodCall, ExprUnsafe, ItemEnum, ItemFn,
+    ItemStruct, Lit, Macro,
+};
 
 /// Результат работы Синтаксического слоя
 #[derive(Debug, Clone)]
@@ -97,7 +100,10 @@ impl SyntaxInvariantLayer {
             let hv = deterministic_vector(dim, &format!("{:?}", kind));
             violation_vectors.insert(kind.clone(), hv);
         }
-        Self { dim, violation_vectors }
+        Self {
+            dim,
+            violation_vectors,
+        }
     }
 
     pub fn analyze(&self, source: &str) -> Result<SyntaxAnalysisResult, syn::Error> {
@@ -109,9 +115,9 @@ impl SyntaxInvariantLayer {
 }
 
 fn deterministic_vector(dim: usize, seed: &str) -> Hypervector {
+    use rand::RngCore;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use rand::RngCore;
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let mut rng = rand::rngs::StdRng::seed_from_u64(hasher.finish());
@@ -163,7 +169,9 @@ impl SyntaxVisitor {
         if self.violations.is_empty() {
             return Hypervector::random(self.dim);
         }
-        let vecs: Vec<&Hypervector> = self.violations.iter()
+        let vecs: Vec<&Hypervector> = self
+            .violations
+            .iter()
             .filter_map(|v| self.violation_vectors.get(&v.kind))
             .collect();
         if vecs.is_empty() {
@@ -173,26 +181,62 @@ impl SyntaxVisitor {
     }
 
     fn compute_safety_score(&self) -> f64 {
-        if self.violations.is_empty() { return 1.0; }
-        let critical = self.violations.iter().filter(|v| v.severity == Severity::Critical).count();
-        let high = self.violations.iter().filter(|v| v.severity == Severity::High).count();
-        let medium = self.violations.iter().filter(|v| v.severity == Severity::Medium).count();
-        let low = self.violations.iter().filter(|v| v.severity == Severity::Low).count();
-        (1.0 - (critical as f64 * 0.4 + high as f64 * 0.2 + medium as f64 * 0.1 + low as f64 * 0.05)).max(0.0)
+        if self.violations.is_empty() {
+            return 1.0;
+        }
+        let critical = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::Critical)
+            .count();
+        let high = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::High)
+            .count();
+        let medium = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::Medium)
+            .count();
+        let low = self
+            .violations
+            .iter()
+            .filter(|v| v.severity == Severity::Low)
+            .count();
+        (1.0 - (critical as f64 * 0.4
+            + high as f64 * 0.2
+            + medium as f64 * 0.1
+            + low as f64 * 0.05))
+            .max(0.0)
     }
 
     fn add_violation(&mut self, kind: ViolationKind, severity: Severity, msg: &str) {
-        let loc = self.current_function.clone().unwrap_or_else(|| "top-level".into());
-        self.violations.push(SyntaxViolation { kind, location: loc, severity, message: msg.into() });
+        let loc = self
+            .current_function
+            .clone()
+            .unwrap_or_else(|| "top-level".into());
+        self.violations.push(SyntaxViolation {
+            kind,
+            location: loc,
+            severity,
+            message: msg.into(),
+        });
     }
 }
 
 impl<'ast> Visit<'ast> for SyntaxVisitor {
     fn visit_item_fn(&mut self, node: &'ast ItemFn) {
         self.stats.functions += 1;
-        if node.sig.asyncness.is_some() { self.stats.async_functions += 1; }
-        if !node.sig.generics.params.is_empty() { self.stats.generic_functions += 1; }
-        if matches!(node.vis, syn::Visibility::Public(_)) { self.stats.public_functions += 1; }
+        if node.sig.asyncness.is_some() {
+            self.stats.async_functions += 1;
+        }
+        if !node.sig.generics.params.is_empty() {
+            self.stats.generic_functions += 1;
+        }
+        if matches!(node.vis, syn::Visibility::Public(_)) {
+            self.stats.public_functions += 1;
+        }
 
         let prev = self.current_function.take();
         self.current_function = Some(node.sig.ident.to_string());
@@ -244,7 +288,11 @@ impl<'ast> Visit<'ast> for SyntaxVisitor {
 
     fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
         self.stats.loops += 1;
-        self.add_violation(ViolationKind::InfiniteLoop, Severity::Medium, "Unconditional loop");
+        self.add_violation(
+            ViolationKind::InfiniteLoop,
+            Severity::Medium,
+            "Unconditional loop",
+        );
         syn::visit::visit_expr_loop(self, node);
     }
 
@@ -265,9 +313,16 @@ impl<'ast> Visit<'ast> for SyntaxVisitor {
 
     fn visit_expr_binary(&mut self, node: &'ast ExprBinary) {
         if matches!(node.op, BinOp::Div(_) | BinOp::Rem(_)) {
-            if let Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) = &*node.right {
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Int(lit), ..
+            }) = &*node.right
+            {
                 if lit.base10_digits() == "0" {
-                    self.add_violation(ViolationKind::DivisionByZero, Severity::Critical, "Division by zero literal");
+                    self.add_violation(
+                        ViolationKind::DivisionByZero,
+                        Severity::Critical,
+                        "Division by zero literal",
+                    );
                 }
             }
         }
@@ -286,27 +341,55 @@ impl<'ast> Visit<'ast> for SyntaxVisitor {
     fn visit_macro(&mut self, mac: &'ast Macro) {
         let path_str = quote::quote!(#mac).to_string().to_lowercase();
         if path_str.contains("sql") || path_str.contains("query") {
-            self.add_violation(ViolationKind::SqlInjection, Severity::High, "Possible SQL injection vector");
+            self.add_violation(
+                ViolationKind::SqlInjection,
+                Severity::High,
+                "Possible SQL injection vector",
+            );
         }
         if path_str.contains("command") || path_str.contains("exec") || path_str.contains("spawn") {
-            self.add_violation(ViolationKind::CommandInjection, Severity::High, "Possible command injection");
+            self.add_violation(
+                ViolationKind::CommandInjection,
+                Severity::High,
+                "Possible command injection",
+            );
         }
         if path_str.contains("format") {
-            self.add_violation(ViolationKind::FormatString, Severity::Low, "Format macro usage");
+            self.add_violation(
+                ViolationKind::FormatString,
+                Severity::Low,
+                "Format macro usage",
+            );
         }
         syn::visit::visit_macro(self, mac);
     }
 
     fn visit_item_struct(&mut self, node: &'ast ItemStruct) {
-        if node.attrs.iter().any(|a| a.path().is_ident("non_exhaustive")) {
-            self.add_violation(ViolationKind::NonExhaustiveMatch, Severity::Low, "Non-exhaustive struct");
+        if node
+            .attrs
+            .iter()
+            .any(|a| a.path().is_ident("non_exhaustive"))
+        {
+            self.add_violation(
+                ViolationKind::NonExhaustiveMatch,
+                Severity::Low,
+                "Non-exhaustive struct",
+            );
         }
         syn::visit::visit_item_struct(self, node);
     }
 
     fn visit_item_enum(&mut self, node: &'ast ItemEnum) {
-        if node.attrs.iter().any(|a| a.path().is_ident("non_exhaustive")) {
-            self.add_violation(ViolationKind::NonExhaustiveMatch, Severity::Low, "Non-exhaustive enum");
+        if node
+            .attrs
+            .iter()
+            .any(|a| a.path().is_ident("non_exhaustive"))
+        {
+            self.add_violation(
+                ViolationKind::NonExhaustiveMatch,
+                Severity::Low,
+                "Non-exhaustive enum",
+            );
         }
         syn::visit::visit_item_enum(self, node);
     }
@@ -330,7 +413,12 @@ mod tests {
         let code = r#"fn f() { unsafe { let _ = *(0 as *const i32); } }"#;
         let result = layer.analyze(code).unwrap();
         assert!(result.safety_score < 0.9, "got {}", result.safety_score);
-        assert!(result.violations.iter().any(|v| v.kind == ViolationKind::UnsafeBlock));
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::UnsafeBlock)
+        );
     }
 
     #[test]
@@ -339,6 +427,11 @@ mod tests {
         let code = r#"fn main() { let x: Option<i32> = Some(1); x.unwrap(); }"#;
         let result = layer.analyze(code).unwrap();
         assert!(result.stats.unwrap_calls > 0);
-        assert!(result.violations.iter().any(|v| v.kind == ViolationKind::UnwrapExpect));
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|v| v.kind == ViolationKind::UnwrapExpect)
+        );
     }
 }

@@ -1,9 +1,17 @@
-use super::memory_store::{MemoryStore, MemoryEntry};
-use crate::weaver::super_token::SuperToken;
+use super::memory_store::{MemoryEntry, MemoryStore};
 use crate::core::hypervector::Hypervector;
+use crate::weaver::super_token::SuperToken;
 use std::collections::HashMap;
 
-pub const BUILTIN_DOMAINS: &[&str] = &["dialogue", "narrative", "code", "general", "forum", "poetry", "dialogue_pair"];
+pub const BUILTIN_DOMAINS: &[&str] = &[
+    "dialogue",
+    "narrative",
+    "code",
+    "general",
+    "forum",
+    "poetry",
+    "dialogue_pair",
+];
 
 pub struct MoEStore {
     base_path: String,
@@ -29,7 +37,10 @@ impl MoEStore {
         if let Ok(entries) = std::fs::read_dir(".") {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if let Some(rest) = name.strip_prefix("fuga_moe_").and_then(|s| s.strip_suffix(".bin")) {
+                if let Some(rest) = name
+                    .strip_prefix("fuga_moe_")
+                    .and_then(|s| s.strip_suffix(".bin"))
+                {
                     let d = rest.to_string();
                     if !domains.contains(&d) {
                         domains.push(d);
@@ -43,32 +54,71 @@ impl MoEStore {
 
     pub fn domain_for(query: &str) -> &'static str {
         let q = query.to_lowercase();
-        if q.contains("fn ") || q.contains("impl ") || q.contains("struct ")
-            || q.contains("python") || q.contains("rust") || q.contains("javascript")
-            || q.contains("code") || q.contains("syntax") || q.contains("compiler")
-            || q.contains("функция") || q.contains("код") || q.contains("программа")
-            || q.contains("напиши") || q.contains("создай")
-        { "code" }
-        else if q.contains("sysadmin") || q.contains("deploy") || q.contains("server")
-            || q.contains("docker") || q.contains("nginx") || q.contains("config")
-            || q.contains("админ") || q.contains("сервер")
-        { "sysadmin" }
-        else if q.contains("рассказ") || q.contains("истори")
-            || q.contains("книг") || q.contains("рома")
-            || q.contains("novel") || q.contains("story") || q.contains("narrative")
-            || q.contains("chapter") || q.contains("page")
-        { "narrative" }
-        else if q.contains("диалог") || q.contains("разговор") || q.contains("бесед")
-            || q.contains("расскажи") || q.contains("hello") || q.contains("hi ")
-            || q.contains("how are you") || q.contains("привет") || q.contains("как дела")
-        { "dialogue" }
-        else if q.contains("doc") || q.contains("manual") || q.contains("guide")
-            || q.contains("документация") || q.contains("описание")
-        { "docs" }
-        else if q.contains("architecture") || q.contains("design") || q.contains("pattern")
-            || q.contains("архитектура") || q.contains("проект")
-        { "architecture" }
-        else { "general" }
+        if q.contains("fn ")
+            || q.contains("impl ")
+            || q.contains("struct ")
+            || q.contains("python")
+            || q.contains("rust")
+            || q.contains("javascript")
+            || q.contains("code")
+            || q.contains("syntax")
+            || q.contains("compiler")
+            || q.contains("функция")
+            || q.contains("код")
+            || q.contains("программа")
+            || q.contains("напиши")
+            || q.contains("создай")
+        {
+            "code"
+        } else if q.contains("sysadmin")
+            || q.contains("deploy")
+            || q.contains("server")
+            || q.contains("docker")
+            || q.contains("nginx")
+            || q.contains("config")
+            || q.contains("админ")
+            || q.contains("сервер")
+        {
+            "sysadmin"
+        } else if q.contains("рассказ")
+            || q.contains("истори")
+            || q.contains("книг")
+            || q.contains("рома")
+            || q.contains("novel")
+            || q.contains("story")
+            || q.contains("narrative")
+            || q.contains("chapter")
+            || q.contains("page")
+        {
+            "narrative"
+        } else if q.contains("диалог")
+            || q.contains("разговор")
+            || q.contains("бесед")
+            || q.contains("расскажи")
+            || q.contains("hello")
+            || q.contains("hi ")
+            || q.contains("how are you")
+            || q.contains("привет")
+            || q.contains("как дела")
+        {
+            "dialogue"
+        } else if q.contains("doc")
+            || q.contains("manual")
+            || q.contains("guide")
+            || q.contains("документация")
+            || q.contains("описание")
+        {
+            "docs"
+        } else if q.contains("architecture")
+            || q.contains("design")
+            || q.contains("pattern")
+            || q.contains("архитектура")
+            || q.contains("проект")
+        {
+            "architecture"
+        } else {
+            "general"
+        }
     }
 
     pub fn load_domain(&mut self, domain: &str) -> Result<(), String> {
@@ -122,28 +172,48 @@ impl MoEStore {
         self.sizes.remove(domain);
     }
 
-    pub fn search(&self, domain: &str, query: &Hypervector, top_k: usize) -> Vec<(usize, f64, &MemoryEntry)> {
+    pub fn search(
+        &self,
+        domain: &str,
+        query: &Hypervector,
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry)> {
         match self.experts.get(domain) {
             Some(mem) => mem.search(query, top_k),
             None => Vec::new(),
         }
     }
 
-    pub fn search_by_text(&self, domain: &str, query_text: &str, top_k: usize) -> Vec<(usize, f64, &MemoryEntry)> {
+    pub fn search_by_text(
+        &self,
+        domain: &str,
+        query_text: &str,
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry)> {
         match self.experts.get(domain) {
             Some(mem) => mem.search_by_text(query_text, top_k),
             None => Vec::new(),
         }
     }
 
-    pub fn search_with_prompts(&self, domain: &str, query: &Hypervector, prompts: &[&Hypervector], top_k: usize) -> Vec<(usize, f64, &MemoryEntry)> {
+    pub fn search_with_prompts(
+        &self,
+        domain: &str,
+        query: &Hypervector,
+        prompts: &[&Hypervector],
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry)> {
         match self.experts.get(domain) {
             Some(mem) => mem.search_with_prompts(query, prompts, top_k),
             None => Vec::new(),
         }
     }
 
-    pub fn search_all_by_text(&self, query_text: &str, top_k: usize) -> Vec<(usize, f64, &MemoryEntry, &str)> {
+    pub fn search_all_by_text(
+        &self,
+        query_text: &str,
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry, &str)> {
         let mut all = Vec::new();
         for (domain, mem) in &self.experts {
             for (idx, sim, entry) in mem.search_by_text(query_text, top_k) {
@@ -156,13 +226,26 @@ impl MoEStore {
     }
 
     pub fn store(&mut self, st: &SuperToken, text: &str, source_doc: &str, role_hint: &str) {
-        let is_code_file = source_doc.ends_with(".rs") || source_doc.ends_with(".py")
-            || source_doc.ends_with(".js") || source_doc.ends_with(".ts") || source_doc.ends_with(".jsx")
-            || source_doc.ends_with(".html") || source_doc.ends_with(".css") || source_doc.ends_with(".scss")
-            || source_doc.ends_with(".c") || source_doc.ends_with(".cpp") || source_doc.ends_with(".h")
-            || source_doc.ends_with(".go") || source_doc.ends_with(".java") || source_doc.ends_with(".rs")
-            || source_doc.ends_with(".toml") || source_doc.ends_with(".json") || source_doc.ends_with(".yaml")
-            || source_doc.ends_with(".tsx") || source_doc.ends_with(".vue") || source_doc.ends_with(".svelte");
+        let is_code_file = source_doc.ends_with(".rs")
+            || source_doc.ends_with(".py")
+            || source_doc.ends_with(".js")
+            || source_doc.ends_with(".ts")
+            || source_doc.ends_with(".jsx")
+            || source_doc.ends_with(".html")
+            || source_doc.ends_with(".css")
+            || source_doc.ends_with(".scss")
+            || source_doc.ends_with(".c")
+            || source_doc.ends_with(".cpp")
+            || source_doc.ends_with(".h")
+            || source_doc.ends_with(".go")
+            || source_doc.ends_with(".java")
+            || source_doc.ends_with(".rs")
+            || source_doc.ends_with(".toml")
+            || source_doc.ends_with(".json")
+            || source_doc.ends_with(".yaml")
+            || source_doc.ends_with(".tsx")
+            || source_doc.ends_with(".vue")
+            || source_doc.ends_with(".svelte");
         let domain = match role_hint {
             "dialogue" | "Dialogue" => "dialogue",
             "narrative" | "Narrative" => "narrative",
@@ -177,7 +260,10 @@ impl MoEStore {
             _ => "general",
         };
         let key = domain.to_string();
-        let mem = self.experts.entry(key.clone()).or_insert_with(MemoryStore::new);
+        let mem = self
+            .experts
+            .entry(key.clone())
+            .or_insert_with(MemoryStore::new);
         mem.store(st, text, source_doc, role_hint);
         *self.sizes.entry(key).or_insert(0) += 1;
     }
@@ -191,8 +277,7 @@ impl MoEStore {
     }
 
     pub fn domain_sizes(&self) -> Vec<(&str, usize)> {
-        let mut v: Vec<(&str, usize)> = self.sizes.iter()
-            .map(|(k, v)| (k.as_str(), *v)).collect();
+        let mut v: Vec<(&str, usize)> = self.sizes.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v
     }

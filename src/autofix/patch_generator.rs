@@ -9,7 +9,12 @@ impl PatchGenerator {
     }
 
     /// Генерирует unified diff для списка предложений
-    pub fn generate_patch(&self, file_path: &str, original_source: &str, proposals: &[FixProposal]) -> UnifiedDiff {
+    pub fn generate_patch(
+        &self,
+        file_path: &str,
+        original_source: &str,
+        proposals: &[FixProposal],
+    ) -> UnifiedDiff {
         let has_byte_level = proposals.iter().any(|p| p.start_byte.is_some());
 
         if has_byte_level {
@@ -19,11 +24,17 @@ impl PatchGenerator {
         }
     }
 
-    fn generate_byte_level_patch(&self, file_path: &str, original_source: &str, proposals: &[FixProposal]) -> UnifiedDiff {
+    fn generate_byte_level_patch(
+        &self,
+        file_path: &str,
+        original_source: &str,
+        proposals: &[FixProposal],
+    ) -> UnifiedDiff {
         let original_lines: Vec<String> = original_source.lines().map(|l| l.to_string()).collect();
 
         // Sort proposals by start_byte descending to apply right-to-left (preserve offsets)
-        let mut sorted: Vec<&FixProposal> = proposals.iter()
+        let mut sorted: Vec<&FixProposal> = proposals
+            .iter()
             .filter(|p| p.start_byte.is_some() && p.end_byte.is_some())
             .collect();
         sorted.sort_by(|a, b| b.start_byte.unwrap().cmp(&a.start_byte.unwrap()));
@@ -48,7 +59,12 @@ impl PatchGenerator {
         }
     }
 
-    fn generate_line_level_patch(&self, file_path: &str, original_source: &str, proposals: &[FixProposal]) -> UnifiedDiff {
+    fn generate_line_level_patch(
+        &self,
+        file_path: &str,
+        original_source: &str,
+        proposals: &[FixProposal],
+    ) -> UnifiedDiff {
         let original_lines: Vec<String> = original_source.lines().map(|l| l.to_string()).collect();
         let mut patched_lines = original_lines.clone();
 
@@ -71,7 +87,12 @@ impl PatchGenerator {
         }
     }
 
-    fn format_unified_diff(&self, file_path: &str, original: &[String], patched: &[String]) -> String {
+    fn format_unified_diff(
+        &self,
+        file_path: &str,
+        original: &[String],
+        patched: &[String],
+    ) -> String {
         let mut diff = String::new();
         diff.push_str(&format!("--- a/{}\n", file_path));
         diff.push_str(&format!("+++ b/{}\n", file_path));
@@ -96,8 +117,13 @@ impl PatchGenerator {
             let orig_line_count = context_after - context_before + 1;
             let patch_line_count = orig_line_count;
 
-            diff.push_str(&format!("@@ -{},{} +{},{} @@\n", 
-                context_before + 1, orig_line_count, context_before + 1, patch_line_count));
+            diff.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                context_before + 1,
+                orig_line_count,
+                context_before + 1,
+                patch_line_count
+            ));
 
             // Контекст до
             for i in context_before..hunk_start {
@@ -124,7 +150,7 @@ impl PatchGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::autofix::{FixStrategy, FixProposal};
+    use crate::autofix::{FixProposal, FixStrategy};
     use crate::core::fuga_synthesizer::BugLocation;
 
     #[test]

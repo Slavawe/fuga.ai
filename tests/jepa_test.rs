@@ -1,5 +1,5 @@
-use fuga::ai::jepa::JepaPredictor;
 use fuga::Hypervector;
+use fuga::ai::jepa::JepaPredictor;
 
 #[test]
 fn test_jepa_new_defaults() {
@@ -59,7 +59,9 @@ fn test_jepa_train_reduces_loss() {
         let mut total = 0.0;
         let mut count = 0;
         for seq in &sequences {
-            if seq.len() < jepa.context_len + 1 { continue; }
+            if seq.len() < jepa.context_len + 1 {
+                continue;
+            }
             for i in 0..seq.len() - jepa.context_len {
                 let ctx: Vec<&Hypervector> = seq[i..i + jepa.context_len].iter().collect();
                 let pred = jepa.predict(&ctx);

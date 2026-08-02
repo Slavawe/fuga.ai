@@ -1,110 +1,111 @@
-pub mod core;
-pub mod sandbox;
-pub mod sim;
-pub mod spatial;
-pub mod render;
-pub mod physics;
-pub mod layers;
-pub mod engine;
-pub mod autofix;
-pub mod reporters;
-pub mod multi;
-pub mod multi_engine;
-pub mod weaver;
 pub mod ai;
 pub mod anomaly;
 pub mod assembly;
+pub mod autofix;
+pub mod core;
+pub mod engine;
+pub mod layers;
+pub mod multi;
+pub mod multi_engine;
+pub mod physics;
+pub mod render;
+pub mod reporters;
+pub mod sandbox;
+pub mod sim;
+pub mod spatial;
+pub mod weaver;
 
-pub mod quality_filter;
-pub mod text_quality;
 pub mod fisig_formatter;
-pub mod omni;
-pub mod speech;
-pub mod microwave;
-pub mod gpu;
-pub mod vsa;
-pub mod safety;
-pub mod patcher;
 pub mod gguf;
+pub mod gpu;
+pub mod microwave;
+pub mod omni;
+pub mod patcher;
+pub mod quality_filter;
+pub mod safety;
+pub mod speech;
+pub mod text_quality;
+pub mod vsa;
 
+pub use core::fuga_synthesizer::{BugLocation, FugaResult, FugaSynthesizer};
 pub use core::hypervector::Hypervector;
 pub use core::information_triangle::InformationTriangle;
 pub use core::pentagon_storage::PentagonStorage;
 pub use core::wave_cube::WaveCube;
-pub use core::fuga_synthesizer::{FugaResult, FugaSynthesizer, BugLocation};
 
-pub use layers::syntax_layer::{
-    SyntaxInvariantLayer, SyntaxAnalysisResult, SyntaxViolation,
-    ViolationKind, Severity, CodeStats,
-};
-pub use layers::semantic_layer::{
-    SemanticLayer, SemanticAnalysis, SemanticAnomaly, AnomalyKind,
-};
 pub use layers::chaos_layer::{
-    ChaosMutationLayer, ChaosAnalysis, ChaosAttack,
-    AttackKind, AttackMetadata, ChaosStats,
+    AttackKind, AttackMetadata, ChaosAnalysis, ChaosAttack, ChaosMutationLayer, ChaosStats,
+};
+pub use layers::semantic_layer::{AnomalyKind, SemanticAnalysis, SemanticAnomaly, SemanticLayer};
+pub use layers::syntax_layer::{
+    CodeStats, Severity, SyntaxAnalysisResult, SyntaxInvariantLayer, SyntaxViolation, ViolationKind,
 };
 
 pub use engine::{
-    FugaEngine, FugaEngineResult, AnalysisResult, ViolationInfo, AttackInfo,
-    LayerResults, FugaError, SourceStats,
+    AnalysisResult, AttackInfo, FugaEngine, FugaEngineResult, FugaError, LayerResults, SourceStats,
+    ViolationInfo,
 };
 
 pub use autofix::{
-    FixGenerator, FixValidator, PatchGenerator,
-    FixStrategy, FixProposal, UnifiedDiff,
+    FixGenerator, FixProposal, FixStrategy, FixValidator, PatchGenerator, UnifiedDiff,
 };
 
 pub use reporters::{
-    Reporter, OutputFormat, FileAnalysisResult, WorkspaceStats,
-    JsonReporter, HtmlReporter, MarkdownReporter,
-    WorkspaceScanner, ScanMode,
+    FileAnalysisResult, HtmlReporter, JsonReporter, MarkdownReporter, OutputFormat, Reporter,
+    ScanMode, WorkspaceScanner, WorkspaceStats,
 };
 
 pub use multi_engine::{MultiEngine, MultiEngineResult};
 
 pub use multi::{
-    LanguageId, MultiSyntaxLayer, MultiSyntaxResult, MultiSyntaxViolation,
-    MultiSemanticLayer, MultiSemanticResult, MultiSemanticAnomaly,
-    MultiChaosLayer, MultiChaosResult, MultiChaosAttack,
-    ViolationPattern, MultiFixGenerator, CodeTranslator,
+    CodeTranslator, LanguageId, MultiChaosAttack, MultiChaosLayer, MultiChaosResult,
+    MultiFixGenerator, MultiSemanticAnomaly, MultiSemanticLayer, MultiSemanticResult,
+    MultiSyntaxLayer, MultiSyntaxResult, MultiSyntaxViolation, ViolationPattern,
 };
 
 pub use weaver::{
-    WeaverEngine, WeaverResult, UnweaveResult,
+    UnweaveResult, WeaverEngine, WeaverResult,
+    explorer::TokenExplorer,
+    pattern_matcher::TokenInfo,
     super_token::{SuperToken, TokenRole},
     token_builder::TokenBuilder,
-    pattern_matcher::TokenInfo,
     vocabulary::TokenVocabulary,
-    explorer::TokenExplorer,
 };
 
-pub use sim::{
-    CubicController, Pipe, Valve, Heater, Boiler, Phase,
-};
+pub use sim::{Boiler, CubicController, Heater, Phase, Pipe, Valve};
 
 pub use ai::{
-    FugaAI, AIOutput, ResonanceAttention, AttentionCell,
-    DynamicRouter, TargetExpert, ExpertConfig,
-    MemoryStore, MemoryEntry, MoEStore,
-    AnswerEngine, AnswerResult, AnswerHit,
-    CodegenResult, JepaPredictor, HierarchicalJEPA, PromptVectors,
-    SdrVector, SdrIndex, SdrStore, sparsify, encode_text, domain_sdr,
-    SDR_DIM, SDR_DENSITY, SDR_WORDS,
-    TemporalMemory, TemporalCell, DendriteSegment, Synapse,
-    AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,
+    AIOutput, ActOptions, AgentBrain, AgentPaths, AgentTick, AnomalyDetector, AnomalyEvent,
+    AnomalyReflector, AnswerEngine, AnswerHit, AnswerResult, AttentionCell, CodegenResult,
+    CorrectionSignal, DendriteSegment, DynamicRouter, Episode, ExpertConfig, FugaAI,
+    HierarchicalJEPA, JepaPredictor, MemoryEntry, MemoryStore, MoEStore, Outcome, PainAvoidance,
+    PromptVectors, ResonanceAttention, SDR_DENSITY, SDR_DIM, SDR_WORDS, SafeOutcome, SdrIndex,
+    SdrStore, SdrVector, StyloProfile, Synapse, TargetExpert, TemporalCell, TemporalMemory,
+    ThinkOutcome, act_and_observe, act_and_observe_at,
+    crystal::{
+        ANCHOR_FLOOR, ANCHOR_RESONANCE_MIN, ANCHOR_TOTAL_MIN, ANCHOR_WEIGHT_FACT,
+        ANCHOR_WEIGHT_INTENT, ANCHOR_WEIGHT_LOGIC, CrystalEntry, CrystalHit, DEFAULT_DIM,
+        DEFAULT_RESONANCE_THRESHOLD, DIM_L0, DIM_L1, DIM_L2, KIND_L0, KIND_L1, KIND_L2,
+        L2_THRESHOLD_SCALE, PhaseCrystal, QueryConfig, ReasoningFoundations, bind_phase,
+        dim_for_kind, fnv1a, permute_phase, project_phase,
+    },
+    domain_sdr, encode_text, generate_code, generate_safe, inject_noise_sdr, observe,
+    self_mirror::{
+        AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, PhaseNode, RawChunk, SelfMirror,
+    },
+    sparsify,
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
-    self_mirror::{SelfMirror, PhaseNode, AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, RawChunk},
-    crystal::{PhaseCrystal, CrystalHit, CrystalEntry, fnv1a, KIND_L0, KIND_L1, KIND_L2, DEFAULT_RESONANCE_THRESHOLD, DEFAULT_DIM},
-    transpile::{TranspileAccumulator, TranspileConfig, ShardSource, StTensor, Dtype, WeightSketch, parse_safetensors_header, binarize_tensor, kind_for_name, transpile_shard, list_hf_shards, hf_resolve_url, is_repo_id, ROUTE_CAP},
+    transpile::{
+        Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,
+        WeightSketch, binarize_tensor, hf_resolve_url, is_repo_id, kind_for_name, list_hf_shards,
+        list_ms_shards, ms_resolve_url, parse_safetensors_header, shard_label, transpile_shard,
+    },
 };
 
-pub use quality_filter::{
-    CodeQualityFilter, QualityScore, summarize_quality,
-};
+pub use quality_filter::{CodeQualityFilter, QualityScore, summarize_quality};
 pub use text_quality::{
-    TextQualityFilter, TextQualityScore, TextSourceType,
-    extract_dialogue_pairs, summarize_text_quality,
+    TextQualityFilter, TextQualityScore, TextSourceType, extract_dialogue_pairs,
+    summarize_text_quality,
 };
 
 use serde::Deserialize;
@@ -124,29 +125,38 @@ pub struct CorpusChapter {
     pub number: Option<u64>,
 }
 
-pub fn tokenize_corpus_text(text: &str, vocab: &[(u32, String)]) -> Vec<crate::weaver::pattern_matcher::TokenInfo> {
-    use std::collections::HashMap;
+pub fn tokenize_corpus_text(
+    text: &str,
+    vocab: &[(u32, String)],
+) -> Vec<crate::weaver::pattern_matcher::TokenInfo> {
     use crate::weaver::pattern_matcher::TokenInfo;
+    use std::collections::HashMap;
 
-    let word_id_map: HashMap<&str, u32> = vocab.iter()
-        .map(|(id, t)| (t.as_str(), *id))
-        .collect();
+    let word_id_map: HashMap<&str, u32> = vocab.iter().map(|(id, t)| (t.as_str(), *id)).collect();
 
-    text.split_whitespace().enumerate().map(|(_, word)| {
-        let id = word_id_map.get(word).copied().unwrap_or_else(|| {
-            let h = word.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-            100000 + (h % 90000)
-        });
-        TokenInfo { id, text: word.to_string() }
-    }).collect()
+    text.split_whitespace()
+        .enumerate()
+        .map(|(_, word)| {
+            let id = word_id_map.get(word).copied().unwrap_or_else(|| {
+                let h = word
+                    .bytes()
+                    .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+                100000 + (h % 90000)
+            });
+            TokenInfo {
+                id,
+                text: word.to_string(),
+            }
+        })
+        .collect()
 }
 
 pub fn load_corpus(path: &str) -> Result<Vec<CorpusDoc>, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read corpus: {}", e))?;
-    Ok(content.lines()
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read corpus: {}", e))?;
+    Ok(content
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect())
 }
-

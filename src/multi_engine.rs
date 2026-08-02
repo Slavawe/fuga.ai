@@ -1,13 +1,12 @@
-use crate::core::wave_cube::WaveCube;
+use crate::core::fuga_synthesizer::{FugaResult, FugaSynthesizer};
 use crate::core::information_triangle::InformationTriangle;
 use crate::core::pentagon_storage::PentagonStorage;
-use crate::core::fuga_synthesizer::{FugaSynthesizer, FugaResult};
+use crate::core::wave_cube::WaveCube;
+use crate::engine::{FugaError, SourceStats};
 use crate::multi::{
-    LanguageId, MultiSyntaxLayer, MultiSyntaxResult,
-    MultiSemanticLayer, MultiSemanticResult,
-    MultiChaosLayer, MultiChaosResult,
+    LanguageId, MultiChaosLayer, MultiChaosResult, MultiSemanticLayer, MultiSemanticResult,
+    MultiSyntaxLayer, MultiSyntaxResult,
 };
-use crate::engine::{SourceStats, FugaError};
 
 #[derive(Debug, Clone)]
 pub struct MultiEngineResult {
@@ -44,14 +43,20 @@ impl MultiEngine {
         }
     }
 
-    pub fn analyze(&mut self, source: &str, lang: LanguageId, file_name: &str) -> MultiEngineResult {
+    pub fn analyze(
+        &mut self,
+        source: &str,
+        lang: LanguageId,
+        file_name: &str,
+    ) -> MultiEngineResult {
         let syntax = self.syntax_layer.analyze(source, lang, file_name);
         let semantic = self.semantic_layer.analyze(source, lang);
         let chaos = self.chaos_layer.analyze(source, lang);
 
         let best_attack = chaos.attack_vectors.first().map(|a| a.vector.clone());
         let fuga_result = best_attack.map(|vector| {
-            self.synthesizer.synthesize(&mut self.cube, &mut self.triangle, &self.pentagon, &vector)
+            self.synthesizer
+                .synthesize(&mut self.cube, &mut self.triangle, &self.pentagon, &vector)
         });
 
         self.update_pentagon(&syntax, &semantic, &chaos);
@@ -71,22 +76,37 @@ impl MultiEngine {
     }
 
     pub fn analyze_file(&mut self, path: &str) -> Result<MultiEngineResult, FugaError> {
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| FugaError::IoError(e.to_string()))?;
-        let lang = LanguageId::from_path(std::path::Path::new(path))
-            .ok_or_else(|| FugaError::ParseError(format!("Unsupported file extension: {}", path)))?;
+        let source =
+            std::fs::read_to_string(path).map_err(|e| FugaError::IoError(e.to_string()))?;
+        let lang = LanguageId::from_path(std::path::Path::new(path)).ok_or_else(|| {
+            FugaError::ParseError(format!("Unsupported file extension: {}", path))
+        })?;
         Ok(self.analyze(&source, lang, path))
     }
 
-    fn update_pentagon(&mut self, syntax: &MultiSyntaxResult, semantic: &MultiSemanticResult, chaos: &MultiChaosResult) {
+    fn update_pentagon(
+        &mut self,
+        syntax: &MultiSyntaxResult,
+        semantic: &MultiSemanticResult,
+        chaos: &MultiChaosResult,
+    ) {
         if !syntax.violations.is_empty() {
-            self.pentagon.store(&format!("syntax_violations_{}", syntax.violations.len()), syntax.violation_vector.clone());
+            self.pentagon.store(
+                &format!("syntax_violations_{}", syntax.violations.len()),
+                syntax.violation_vector.clone(),
+            );
         }
         if !semantic.anomalies.is_empty() {
-            self.pentagon.store(&format!("semantic_anomalies_{}", semantic.anomalies.len()), semantic.semantic_vector.clone());
+            self.pentagon.store(
+                &format!("semantic_anomalies_{}", semantic.anomalies.len()),
+                semantic.semantic_vector.clone(),
+            );
         }
         for attack in &chaos.attack_vectors {
-            self.pentagon.store(&format!("chaos_{:?}", attack.pattern), attack.vector.clone());
+            self.pentagon.store(
+                &format!("chaos_{:?}", attack.pattern),
+                attack.vector.clone(),
+            );
         }
     }
 }

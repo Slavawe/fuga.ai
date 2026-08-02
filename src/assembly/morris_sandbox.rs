@@ -1,9 +1,9 @@
-use std::os::unix::process::ExitStatusExt;
+use crate::layers::syntax_layer::ViolationKind;
 use std::io::BufRead;
+use std::os::unix::process::ExitStatusExt;
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
-use std::path::PathBuf;
-use crate::layers::syntax_layer::ViolationKind;
 
 #[derive(Clone, Debug)]
 pub struct SandboxOutcome {
@@ -130,12 +130,10 @@ impl MorrisSandbox {
             .arg(exe_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        cmd.output().unwrap_or_else(|_| {
-            Output {
-                status: std::process::ExitStatus::from_raw(1),
-                stdout: Vec::new(),
-                stderr: b"rustc not found".to_vec(),
-            }
+        cmd.output().unwrap_or_else(|_| Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: Vec::new(),
+            stderr: b"rustc not found".to_vec(),
         })
     }
 

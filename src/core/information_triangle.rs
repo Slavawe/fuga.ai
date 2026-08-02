@@ -44,7 +44,7 @@ impl InformationTriangle {
             let acc_bit = (self.accumulator.words[i / 64] >> (i % 64)) & 1;
             let pat_bit = (pattern.words[i / 64] >> (i % 64)) & 1;
             sum[i] = weight_old * if acc_bit == 1 { 1.0 } else { -1.0 }
-                   + weight_new * if pat_bit == 1 { 1.0 } else { -1.0 };
+                + weight_new * if pat_bit == 1 { 1.0 } else { -1.0 };
         }
         let mut words = vec![0u64; wc];
         for (i, &v) in sum.iter().enumerate() {
@@ -52,12 +52,19 @@ impl InformationTriangle {
                 words[i / 64] |= 1u64 << (i % 64);
             }
         }
-        self.accumulator = Hypervector { dim: self.dim, words };
+        self.accumulator = Hypervector {
+            dim: self.dim,
+            words,
+        };
         self.accumulator_count = total;
     }
 
     pub fn emit_to_cube(&self) -> (&Hypervector, &Hypervector, &Hypervector) {
-        (&self.vertex_syntax, &self.vertex_semantics, &self.vertex_chaos)
+        (
+            &self.vertex_syntax,
+            &self.vertex_semantics,
+            &self.vertex_chaos,
+        )
     }
 
     pub fn triangle_coherence(&self) -> f64 {

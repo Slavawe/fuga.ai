@@ -1,7 +1,7 @@
-use crate::core::hypervector::Hypervector;
-use super::vocabulary::TokenVocabulary;
 use super::TokenRole;
 use super::deterministic_vector;
+use super::vocabulary::TokenVocabulary;
+use crate::core::hypervector::Hypervector;
 use rand::Rng;
 
 pub struct TokenExplorer {
@@ -14,12 +14,18 @@ impl TokenExplorer {
     }
 
     pub fn synthesize(&self, concept: &str, _role: TokenRole) -> (u32, Hypervector) {
-        let id = concept.chars().fold(0u32, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u32));
+        let id = concept
+            .chars()
+            .fold(0u32, |acc, c| acc.wrapping_mul(31).wrapping_add(c as u32));
         let hv = deterministic_vector(self.dim, &format!("synth:{}", concept));
         (id, hv)
     }
 
-    pub fn synthesize_concept_chain(&self, concepts: &[&str], role: TokenRole) -> (String, Hypervector) {
+    pub fn synthesize_concept_chain(
+        &self,
+        concepts: &[&str],
+        role: TokenRole,
+    ) -> (String, Hypervector) {
         let name = concepts.join("+");
         let mut acc = deterministic_vector(self.dim, "concept_chain_base");
         for (i, concept) in concepts.iter().enumerate() {
@@ -30,7 +36,12 @@ impl TokenExplorer {
         (name, acc)
     }
 
-    pub fn explore_neighborhood(&self, query: &Hypervector, vocab: &TokenVocabulary, radius: usize) -> Vec<(u32, String, f64)> {
+    pub fn explore_neighborhood(
+        &self,
+        query: &Hypervector,
+        vocab: &TokenVocabulary,
+        radius: usize,
+    ) -> Vec<(u32, String, f64)> {
         let nearest = vocab.nearest_n(query, radius);
         let mut neighbors = Vec::new();
 
@@ -58,7 +69,10 @@ impl TokenExplorer {
                 words[w] ^= 1u64 << b;
             }
         }
-        Hypervector { dim: self.dim, words }
+        Hypervector {
+            dim: self.dim,
+            words,
+        }
     }
 
     pub fn crossover(&self, a: &Hypervector, b: &Hypervector) -> Hypervector {
@@ -71,10 +85,17 @@ impl TokenExplorer {
                 words[w] = (words[w] & !(1u64 << (i % 64))) | (bit << (i % 64));
             }
         }
-        Hypervector { dim: self.dim, words }
+        Hypervector {
+            dim: self.dim,
+            words,
+        }
     }
 
-    pub fn generate_new_tokens(&self, vocab: &TokenVocabulary, count: usize) -> Vec<(u32, String, Hypervector)> {
+    pub fn generate_new_tokens(
+        &self,
+        vocab: &TokenVocabulary,
+        count: usize,
+    ) -> Vec<(u32, String, Hypervector)> {
         let mut rng = rand::thread_rng();
         let mut new_tokens = Vec::new();
 
@@ -96,11 +117,14 @@ impl TokenExplorer {
 
     pub fn explore_tokens(&self, vocab: &TokenVocabulary) -> ExploreReport {
         let ids: Vec<_> = (0..vocab.size().min(100) as u32).collect();
-        let sample: Vec<_> = ids.iter().filter_map(|id| {
-            let text = vocab.search_by_id(*id)?;
-            let hv = vocab.get_vector(*id)?;
-            Some((*id, text.to_string(), hv.entropy()))
-        }).collect();
+        let sample: Vec<_> = ids
+            .iter()
+            .filter_map(|id| {
+                let text = vocab.search_by_id(*id)?;
+                let hv = vocab.get_vector(*id)?;
+                Some((*id, text.to_string(), hv.entropy()))
+            })
+            .collect();
 
         let total = vocab.size();
         ExploreReport { total, sample }

@@ -1,5 +1,5 @@
-use fuga::ai::wave_mesh::{self, hypervector_to_phasors, phasors_to_hypervector, spectral_spread};
 use fuga::Hypervector;
+use fuga::ai::wave_mesh::{self, hypervector_to_phasors, phasors_to_hypervector, spectral_spread};
 
 #[test]
 fn test_phasor_roundtrip() {
@@ -7,7 +7,11 @@ fn test_phasor_roundtrip() {
     let phasors = hypervector_to_phasors(&hv);
     let recovered = phasors_to_hypervector(&phasors);
     let sim = hv.similarity(&recovered);
-    assert!(sim > 0.999, "Roundtrip should be near-perfect, got sim={}", sim);
+    assert!(
+        sim > 0.999,
+        "Roundtrip should be near-perfect, got sim={}",
+        sim
+    );
 }
 
 #[test]

@@ -1,8 +1,8 @@
-use crate::core::hypervector::Hypervector;
-use crate::weaver::{pattern_matcher::TokenInfo, token_id};
-use crate::sandbox::{Canonicalizer, harness::SandboxHarness};
 use super::core::FugaAI;
 use super::resonance_attention::AttentionCell;
+use crate::core::hypervector::Hypervector;
+use crate::sandbox::{Canonicalizer, harness::SandboxHarness};
+use crate::weaver::{pattern_matcher::TokenInfo, token_id};
 
 pub struct CodegenResult {
     pub generated_text: String,
@@ -18,8 +18,11 @@ fn sanitize(raw: &str) -> Option<String> {
     }
 
     let code_start = words.iter().position(|w| {
-        !w.contains('/') && !w.ends_with(".rs") && !w.ends_with(".go")
-            && !w.ends_with(".c") && !w.ends_with(".h")
+        !w.contains('/')
+            && !w.ends_with(".rs")
+            && !w.ends_with(".go")
+            && !w.ends_with(".c")
+            && !w.ends_with(".h")
             && *w != "mod.rs"
     });
 
@@ -28,7 +31,11 @@ fn sanitize(raw: &str) -> Option<String> {
             let cleaned: Vec<&str> = words[start..].to_vec();
             let raw_code = cleaned.join(" ");
             let raw_code = raw_code.trim_start_matches("Code: ");
-            if raw_code.is_empty() { None } else { Some(raw_code.to_string()) }
+            if raw_code.is_empty() {
+                None
+            } else {
+                Some(raw_code.to_string())
+            }
         }
         _ => None,
     }
@@ -37,10 +44,18 @@ fn sanitize(raw: &str) -> Option<String> {
 fn cell_coords<const N: usize>(cell: &AttentionCell) -> [usize; N] {
     let mut c = [0; N];
     c[0] = cell.x;
-    if N > 1 { c[1] = cell.y; }
-    if N > 2 { c[2] = cell.z; }
-    if N > 3 { c[3] = cell.w; }
-    if N > 4 { c[4] = cell.v; }
+    if N > 1 {
+        c[1] = cell.y;
+    }
+    if N > 2 {
+        c[2] = cell.z;
+    }
+    if N > 3 {
+        c[3] = cell.w;
+    }
+    if N > 4 {
+        c[4] = cell.v;
+    }
     c
 }
 
@@ -86,8 +101,13 @@ fn format_code_block(fragments: &[String], max_tokens: usize) -> String {
             out.push(String::new());
             continue;
         }
-        let closes = trimmed.starts_with('}') || trimmed.starts_with(']') || trimmed.starts_with(')');
-        let actual_indent = if closes && indent > 0 { indent - 1 } else { indent };
+        let closes =
+            trimmed.starts_with('}') || trimmed.starts_with(']') || trimmed.starts_with(')');
+        let actual_indent = if closes && indent > 0 {
+            indent - 1
+        } else {
+            indent
+        };
         out.push(format!("{}{}", "    ".repeat(actual_indent), trimmed));
         if trimmed.ends_with('{') || trimmed.ends_with('[') {
             indent += 1;
@@ -106,18 +126,27 @@ pub fn generate<const N: usize, const S: usize>(
     max_tokens: usize,
     temperature: f64,
 ) -> CodegenResult {
-    let seed_tokens: Vec<TokenInfo> = seed.split_whitespace().enumerate().map(|(_, w)| {
-        TokenInfo { id: token_id(&w), text: w.to_string() }
-    }).collect();
+    let seed_tokens: Vec<TokenInfo> = seed
+        .split_whitespace()
+        .enumerate()
+        .map(|(_, w)| TokenInfo {
+            id: token_id(&w),
+            text: w.to_string(),
+        })
+        .collect();
 
     let output = ai.think(&seed_tokens);
 
-    let seed_vec = output.super_tokens.first()
+    let seed_vec = output
+        .super_tokens
+        .first()
         .map(|st| st.vector.clone())
         .unwrap_or_else(|| Hypervector::random(ai.dim));
 
     let st = crate::weaver::super_token::SuperToken::new(seed_vec.clone(), 0);
-    let cells: Vec<AttentionCell> = ai.attention.beam_attention(&st, &ai.cube, 16)
+    let cells: Vec<AttentionCell> = ai
+        .attention
+        .beam_attention(&st, &ai.cube, 16)
         .into_iter()
         .filter(|c| c.score > 0.2)
         .take(8)
@@ -135,12 +164,17 @@ pub fn generate<const N: usize, const S: usize>(
     let mut seen = std::collections::HashSet::new();
     let mut candidates: Vec<(f64, String, Hypervector)> = Vec::new();
 
-    let cell_hvs: Vec<_> = cells.iter().map(|cell| {
-        let coords: [usize; N] = cell_coords(cell);
-        let mut arr = [0; N];
-        for i in 0..N { arr[i] = coords[i]; }
-        (cell.score, ai.cube.cell_at(&arr))
-    }).collect();
+    let cell_hvs: Vec<_> = cells
+        .iter()
+        .map(|cell| {
+            let coords: [usize; N] = cell_coords(cell);
+            let mut arr = [0; N];
+            for i in 0..N {
+                arr[i] = coords[i];
+            }
+            (cell.score, ai.cube.cell_at(&arr))
+        })
+        .collect();
 
     let mut collect = |text: &str, sim: f64, vec: &Hypervector| {
         if let Some(clean) = sanitize(text) {
@@ -157,14 +191,16 @@ pub fn generate<const N: usize, const S: usize>(
     }
 
     for (_score, cell_hv) in &cell_hvs {
-        if ai.memory.size() == 0 { break; }
+        if ai.memory.size() == 0 {
+            break;
+        }
         for (_idx, sim, entry) in ai.memory.search(cell_hv, 5) {
             collect(&entry.text, sim, &entry.vector);
         }
     }
 
     for i in 0..cell_hvs.len().min(4) {
-        for j in (i+1)..cell_hvs.len().min(4) {
+        for j in (i + 1)..cell_hvs.len().min(4) {
             let bundle = cell_hvs[i].1.bundle(&[&cell_hvs[j].1]);
             let blend_score = (cell_hvs[i].0 + cell_hvs[j].0) / 2.0;
             for (_idx, sim, entry) in ai.memory.search(&bundle, 2) {
@@ -188,7 +224,9 @@ pub fn generate<const N: usize, const S: usize>(
     candidates.sort_by(|a, b| {
         let sim_a = seed_vec.similarity(&a.2);
         let sim_b = seed_vec.similarity(&b.2);
-        sim_b.partial_cmp(&sim_a).unwrap_or(std::cmp::Ordering::Equal)
+        sim_b
+            .partial_cmp(&sim_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let fragments: Vec<String> = candidates.into_iter().map(|(_, t, _)| t).collect();
@@ -237,12 +275,17 @@ impl CodegenResult {
         let mut out = String::new();
         out.push_str("=== Fuga CodeGen ===\n");
         out.push_str(&format!("Temperature: {:.2}\n", self.temperature));
-        out.push_str(&format!("Resonance cells: {}\n", self.resonance_cells.len()));
+        out.push_str(&format!(
+            "Resonance cells: {}\n",
+            self.resonance_cells.len()
+        ));
         out.push_str(&format!("Memory hits: {}\n\n", self.memory_hits));
 
         let mut count = 0;
         for line in self.generated_text.lines() {
-            if count >= 40 { break; }
+            if count >= 40 {
+                break;
+            }
             let display = if line.len() > 120 {
                 format!("{}...", &line[..117])
             } else {

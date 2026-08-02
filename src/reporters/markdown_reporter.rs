@@ -1,4 +1,4 @@
-use super::{Reporter, FileAnalysisResult, WorkspaceStats};
+use super::{FileAnalysisResult, Reporter, WorkspaceStats};
 
 pub struct MarkdownReporter;
 
@@ -26,10 +26,17 @@ impl Reporter for MarkdownReporter {
         md.push_str(&format!("| Functions | {} |\n", stats.total_functions));
         md.push_str(&format!("| Violations | {} |\n", stats.total_violations));
         md.push_str(&format!("| Bugs | {} |\n", stats.total_bugs));
-        md.push_str(&format!("| Avg Safety | {:.1}% |\n", stats.avg_safety_score * 100.0));
-        
+        md.push_str(&format!(
+            "| Avg Safety | {:.1}% |\n",
+            stats.avg_safety_score * 100.0
+        ));
+
         if let Some((path, score)) = &stats.worst_file {
-            md.push_str(&format!("\n⚠️ **Worst file**: `{}` (safety: {:.1}%)\n", path, score * 100.0));
+            md.push_str(&format!(
+                "\n⚠️ **Worst file**: `{}` (safety: {:.1}%)\n",
+                path,
+                score * 100.0
+            ));
         }
 
         md.push_str("\n");
@@ -55,7 +62,13 @@ impl Reporter for MarkdownReporter {
 
             let result = &file_result.result;
             let safety = result.safety_score();
-            let icon = if safety > 0.8 { "✅" } else if safety > 0.5 { "⚠️" } else { "🔴" };
+            let icon = if safety > 0.8 {
+                "✅"
+            } else if safety > 0.5 {
+                "⚠️"
+            } else {
+                "🔴"
+            };
 
             md.push_str(&format!("### {} `{}`\n\n", icon, file_result.file_path));
             md.push_str(&format!("- **Lines**: {}\n", result.lines()));
@@ -85,8 +98,14 @@ impl Reporter for MarkdownReporter {
 
             // Layer 2: Semantics
             md.push_str("#### Layer 2: Semantics & VSA\n\n");
-            md.push_str(&format!("- **Coherence**: {:.1}%\n", result.coherence() * 100.0));
-            md.push_str(&format!("- **Anomalies**: {}\n\n", result.anomalies_count()));
+            md.push_str(&format!(
+                "- **Coherence**: {:.1}%\n",
+                result.coherence() * 100.0
+            ));
+            md.push_str(&format!(
+                "- **Anomalies**: {}\n\n",
+                result.anomalies_count()
+            ));
 
             // Layer 3: Chaos
             md.push_str("#### Layer 3: Chaos & Mutations\n\n");
@@ -96,7 +115,12 @@ impl Reporter for MarkdownReporter {
             } else {
                 md.push_str(&format!("Generated {} attack(s):\n\n", attacks.len()));
                 for a in &attacks {
-                    md.push_str(&format!("- 🎯 **{}** (priority: {:.0}%): {}\n", a.kind, a.priority * 100.0, a.description));
+                    md.push_str(&format!(
+                        "- 🎯 **{}** (priority: {:.0}%): {}\n",
+                        a.kind,
+                        a.priority * 100.0,
+                        a.description
+                    ));
                 }
                 md.push_str("\n");
             }
@@ -105,13 +129,19 @@ impl Reporter for MarkdownReporter {
             if result.bug_confidence() > 0.0 || result.bug_detected() {
                 md.push_str("#### Fuga Synthesis\n\n");
                 if result.bug_detected() {
-                    md.push_str(&format!("🐛 **BUG DETECTED** (confidence: {:.1}%)\n\n", result.bug_confidence() * 100.0));
+                    md.push_str(&format!(
+                        "🐛 **BUG DETECTED** (confidence: {:.1}%)\n\n",
+                        result.bug_confidence() * 100.0
+                    ));
                     let desc = result.counterpoint_description();
                     if !desc.is_empty() {
                         md.push_str(&format!("> {}\n\n", desc));
                     }
                 } else {
-                    md.push_str(&format!("✅ **CLEAN** (score: {:.1}%)\n\n", result.bug_confidence() * 100.0));
+                    md.push_str(&format!(
+                        "✅ **CLEAN** (score: {:.1}%)\n\n",
+                        result.bug_confidence() * 100.0
+                    ));
                 }
             }
 

@@ -1,21 +1,23 @@
+use super::memory_store::MemoryStore;
+use super::moe::MoEStore;
+use super::resonance_attention::{AttentionCell, ResonanceAttention};
+use super::router::{DynamicRouter, ExpertConfig, TargetExpert};
 use crate::core::hypervector::Hypervector;
 use crate::core::wave_cube::WaveCube;
 use crate::weaver::WeaverEngine;
-use crate::weaver::super_token::{SuperToken, TokenRole};
 use crate::weaver::pattern_matcher::TokenInfo;
+use crate::weaver::super_token::{SuperToken, TokenRole};
 use crate::weaver::vocabulary::TokenVocabulary;
-use super::resonance_attention::{ResonanceAttention, AttentionCell};
-use super::router::{DynamicRouter, TargetExpert, ExpertConfig};
-use super::memory_store::MemoryStore;
-use super::moe::MoEStore;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 fn extract_code_signatures(tokens: &[TokenInfo]) -> Vec<String> {
     let mut sigs = Vec::new();
-    let type_kws = ["fn", "func", "def", "pub", "impl", "trait", "struct", "enum",
-        "int", "void", "char", "double", "float", "long", "short", "unsigned",
-        "size_t", "static", "inline", "const", "extern", "bool", "union", "signed"];
+    let type_kws = [
+        "fn", "func", "def", "pub", "impl", "trait", "struct", "enum", "int", "void", "char",
+        "double", "float", "long", "short", "unsigned", "size_t", "static", "inline", "const",
+        "extern", "bool", "union", "signed",
+    ];
 
     let words: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
 
@@ -24,13 +26,17 @@ fn extract_code_signatures(tokens: &[TokenInfo]) -> Vec<String> {
         let is_type = type_kws.contains(&kw.as_str());
         let self_has_paren = kw.contains('(');
 
-        if !is_type && !self_has_paren { continue; }
+        if !is_type && !self_has_paren {
+            continue;
+        }
 
         let has_prev_type = is_type
             || (i > 0 && type_kws.contains(&words[i - 1].to_lowercase().as_str()))
             || (i > 1 && type_kws.contains(&words[i - 2].to_lowercase().as_str()));
 
-        if !has_prev_type { continue; }
+        if !has_prev_type {
+            continue;
+        }
 
         let start = if is_type { i } else { i.saturating_sub(2) };
 
@@ -38,27 +44,49 @@ fn extract_code_signatures(tokens: &[TokenInfo]) -> Vec<String> {
         let mut found_paren = false;
         for j in start..words.len().min(start + 9) {
             let tok = words[j];
-            if tok == "{" { break; }
-            if sig.len() > 70 { break; }
+            if tok == "{" {
+                break;
+            }
+            if sig.len() > 70 {
+                break;
+            }
             sig.push(' ');
             sig.push_str(tok);
-            if tok.contains('(') { found_paren = true; }
+            if tok.contains('(') {
+                found_paren = true;
+            }
         }
         let trimmed = sig.trim().to_string();
         let lower = trimmed.to_lowercase();
 
-        if trimmed.is_empty() || !found_paren { continue; }
-        if lower.starts_with("if ") || lower.starts_with("while ") || lower.starts_with("for ")
-            || lower.starts_with("switch ") || lower.starts_with("return ") { continue; }
-        if lower.contains("copyright") || lower.contains("license") { continue; }
-        if trimmed.starts_with('(') || trimmed.starts_with('#') { continue; }
+        if trimmed.is_empty() || !found_paren {
+            continue;
+        }
+        if lower.starts_with("if ")
+            || lower.starts_with("while ")
+            || lower.starts_with("for ")
+            || lower.starts_with("switch ")
+            || lower.starts_with("return ")
+        {
+            continue;
+        }
+        if lower.contains("copyright") || lower.contains("license") {
+            continue;
+        }
+        if trimmed.starts_with('(') || trimmed.starts_with('#') {
+            continue;
+        }
         sigs.push(trimmed);
     }
     let mut seen = std::collections::HashSet::new();
     sigs.retain(|s| {
         let name = s.split('(').next().unwrap_or("").trim().to_string();
-        if name.is_empty() || name.len() > 30 { return true; }
-        if !seen.insert(name) { return false; }
+        if name.is_empty() || name.len() > 30 {
+            return true;
+        }
+        if !seen.insert(name) {
+            return false;
+        }
         true
     });
     sigs.truncate(20);
@@ -110,7 +138,11 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
     }
 
     pub fn think(&mut self, tokens: &[TokenInfo]) -> AIOutput {
-        let idf = if self.idf_weights.is_empty() { None } else { Some(&self.idf_weights) };
+        let idf = if self.idf_weights.is_empty() {
+            None
+        } else {
+            Some(&self.idf_weights)
+        };
         let result = self.weaver.compress_stream(tokens, idf);
 
         let mut all_attention = Vec::new();
@@ -124,14 +156,16 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
                 DynamicRouter::route_by_peek(&tokens.first().map(|t| t.text.as_str()).unwrap_or(""))
             };
 
-            let resonance = all_attention.first()
-                .map(|c| c.score)
-                .unwrap_or(0.0);
+            let resonance = all_attention.first().map(|c| c.score).unwrap_or(0.0);
             if resonance > self.expert_config.activation_threshold {
                 let top_cell = &all_attention[0];
                 self.attention.write_attention(
                     &mut self.cube.clone(),
-                    top_cell.x, top_cell.y, top_cell.z, top_cell.w, top_cell.v,
+                    top_cell.x,
+                    top_cell.y,
+                    top_cell.z,
+                    top_cell.w,
+                    top_cell.v,
                     &st.vector,
                 );
             }
@@ -152,9 +186,8 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         all_attention.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         all_attention.truncate(16);
 
-        let primary_route = DynamicRouter::route_by_peek(
-            &tokens.first().map(|t| t.text.as_str()).unwrap_or("")
-        );
+        let primary_route =
+            DynamicRouter::route_by_peek(&tokens.first().map(|t| t.text.as_str()).unwrap_or(""));
 
         let entropy = self.cube.global_entropy();
         let coherence = self.cube.coherence();
@@ -174,9 +207,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
 
         if let Some(vocab) = &self.vocab {
             let ids: HashSet<u32> = tokens.iter().map(|t| t.id).collect();
-            let unweave = self.weaver.unweave_stream_filtered(
-                &output.super_tokens, vocab, &ids,
-            );
+            let unweave = self
+                .weaver
+                .unweave_stream_filtered(&output.super_tokens, vocab, &ids);
             output.response_tokens = Some(unweave.recovered_tokens);
         }
 
@@ -276,7 +309,11 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         let output = self.think(tokens);
         let role_hint = output.route.name();
         for st in &output.super_tokens {
-            let para_text: String = tokens.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+            let para_text: String = tokens
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             self.memory.store(st, &para_text, source_doc, role_hint);
         }
         if !output.super_tokens.is_empty() {
@@ -284,7 +321,13 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         }
     }
 
-    pub fn absorb_with_quality(&mut self, tokens: &[TokenInfo], source_doc: &str, quality: &crate::quality_filter::QualityScore, source_text: &str) -> bool {
+    pub fn absorb_with_quality(
+        &mut self,
+        tokens: &[TokenInfo],
+        source_doc: &str,
+        quality: &crate::quality_filter::QualityScore,
+        source_text: &str,
+    ) -> bool {
         if quality.weight <= 0.0 {
             return false;
         }
@@ -292,12 +335,18 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         let role_hint = output.route.name();
         let absorb_count = ((output.super_tokens.len() as f64) * quality.weight).ceil() as usize;
         let sigs = extract_code_signatures(tokens);
-        let _fname = Path::new(source_doc).file_name()
+        let _fname = Path::new(source_doc)
+            .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
         let code_text = if source_text.len() > 1600 {
             let cutoff = source_text.floor_char_boundary(1600);
-            format!("{}…\n// {} {}", &source_text[..cutoff], source_doc, sigs.join("; "))
+            format!(
+                "{}…\n// {} {}",
+                &source_text[..cutoff],
+                source_doc,
+                sigs.join("; ")
+            )
         } else {
             format!("{}\n// {} {}", source_text, source_doc, sigs.join("; "))
         };
@@ -354,7 +403,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
     }
 
     pub fn compute_idf(&mut self) {
-        if self.total_docs == 0 { return; }
+        if self.total_docs == 0 {
+            return;
+        }
         self.idf_weights.clear();
         let n = self.total_docs as f64;
         for (&id, &df) in &self.df_map {
@@ -366,21 +417,29 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
     pub fn build_moe_from_memory(&mut self) {
         for entry in self.memory.all_entries() {
             let st = SuperToken::new(entry.vector.clone(), 0);
-            self.moe.store(&st, &entry.text, &entry.source_doc, &entry.role_hint);
+            self.moe
+                .store(&st, &entry.text, &entry.source_doc, &entry.role_hint);
         }
     }
 
     pub fn answer(&mut self, query: &str) -> String {
-        let tokens: Vec<TokenInfo> = query.split_whitespace().enumerate().map(|(_, w)| TokenInfo {
-            id: crate::weaver::token_id(&w),
-            text: w.to_string(),
-        }).collect();
+        let tokens: Vec<TokenInfo> = query
+            .split_whitespace()
+            .enumerate()
+            .map(|(_, w)| TokenInfo {
+                id: crate::weaver::token_id(&w),
+                text: w.to_string(),
+            })
+            .collect();
 
         let output = self.think(&tokens);
 
         if self.memory.size() == 0 {
-            return format!("No knowledge stored. Route: {}, entropy: {:.4}",
-                output.route.name(), output.cube_entropy);
+            return format!(
+                "No knowledge stored. Route: {}, entropy: {:.4}",
+                output.route.name(),
+                output.cube_entropy
+            );
         }
 
         let mut result = String::new();
@@ -401,7 +460,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
                 }
             }
             for (_idx, sim, entry) in &results {
-                if seen_texts.contains(&entry.text) { continue; }
+                if seen_texts.contains(&entry.text) {
+                    continue;
+                }
                 seen_texts.insert(entry.text.clone());
                 result.push_str(&format!("[{}] (sim={:.3})\n", entry.source_doc, sim));
                 result.push_str(&entry.text);
@@ -412,7 +473,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         if seen_texts.is_empty() {
             let text_results = self.memory.search_by_text(query, 3);
             for (_idx, _sim, entry) in &text_results {
-                if seen_texts.contains(&entry.text) { continue; }
+                if seen_texts.contains(&entry.text) {
+                    continue;
+                }
                 seen_texts.insert(entry.text.clone());
                 result.push_str(&format!("{}(text): {}\n", entry.source_doc, entry.text));
             }
@@ -422,8 +485,11 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
 
     pub fn answer_from_output(&self, output: &AIOutput, query: &str) -> String {
         if self.memory.size() == 0 {
-            return format!("No knowledge stored. Route: {}, entropy: {:.4}",
-                output.route.name(), output.cube_entropy);
+            return format!(
+                "No knowledge stored. Route: {}, entropy: {:.4}",
+                output.route.name(),
+                output.cube_entropy
+            );
         }
 
         let mut result = String::new();
@@ -444,7 +510,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
                 }
             }
             for (_idx, sim, entry) in &results {
-                if seen_texts.contains(&entry.text) { continue; }
+                if seen_texts.contains(&entry.text) {
+                    continue;
+                }
                 seen_texts.insert(entry.text.clone());
                 result.push_str(&format!("[{}] (sim={:.3})\n", entry.source_doc, sim));
                 result.push_str(&entry.text);
@@ -455,7 +523,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         if seen_texts.is_empty() {
             let text_results = self.memory.search_by_text(query, 3);
             for (_idx, _sim, entry) in &text_results {
-                if seen_texts.contains(&entry.text) { continue; }
+                if seen_texts.contains(&entry.text) {
+                    continue;
+                }
                 seen_texts.insert(entry.text.clone());
                 result.push_str(&format!("{}{}\n", entry.source_doc, entry.text));
             }
@@ -483,7 +553,8 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         let mut result = String::new();
         result.push_str(&format!("Problem: {:?}\n", problem));
 
-        let sentences: Vec<&str> = problem.split(|c: char| c == '.' || c == '?' || c == '!')
+        let sentences: Vec<&str> = problem
+            .split(|c: char| c == '.' || c == '?' || c == '!')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
@@ -495,10 +566,14 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         for (i, sentence) in sentences.iter().enumerate() {
             result.push_str(&format!("Step {}: {:?}\n", i + 1, sentence));
 
-            let tokens: Vec<TokenInfo> = sentence.split_whitespace().enumerate().map(|(_, w)| TokenInfo {
-                id: crate::weaver::token_id(&w),
-                text: w.to_string(),
-            }).collect();
+            let tokens: Vec<TokenInfo> = sentence
+                .split_whitespace()
+                .enumerate()
+                .map(|(_, w)| TokenInfo {
+                    id: crate::weaver::token_id(&w),
+                    text: w.to_string(),
+                })
+                .collect();
 
             let output = self.think(&tokens);
 
@@ -510,14 +585,20 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
                 }
             }
 
-            let cube_matches = self.query_memory(&output.super_tokens.first().cloned().unwrap_or_else(|| {
-                SuperToken::new(Hypervector::random(self.dim), 0)
-            }));
+            let cube_matches = self.query_memory(
+                &output
+                    .super_tokens
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| SuperToken::new(Hypervector::random(self.dim), 0)),
+            );
             if !cube_matches.is_empty() {
                 result.push_str(&format!("  Cube resonance: {} cells\n", cube_matches.len()));
                 for cell in cube_matches.iter().take(3) {
-                    result.push_str(&format!("    cell ({},{},{},{},{}): score={:.4}\n",
-                        cell.x, cell.y, cell.z, cell.w, cell.v, cell.score));
+                    result.push_str(&format!(
+                        "    cell ({},{},{},{},{}): score={:.4}\n",
+                        cell.x, cell.y, cell.z, cell.w, cell.v, cell.score
+                    ));
                 }
             }
             result.push('\n');
@@ -527,7 +608,9 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
             result.push_str("Retrieved context:\n");
             let mut seen = std::collections::HashSet::new();
             for line in all_context.lines() {
-                if seen.contains(line) { continue; }
+                if seen.contains(line) {
+                    continue;
+                }
                 seen.insert(line.to_string());
                 result.push_str(line);
                 result.push('\n');
@@ -549,8 +632,10 @@ impl AIOutput {
         out.push_str(&format!("Attention hits:  {}\n", self.attention_map.len()));
         out.push('\n');
         for cell in &self.attention_map {
-            out.push_str(&format!("  Cell ({},{},{},{},{}): score={:.4}\n",
-                cell.x, cell.y, cell.z, cell.w, cell.v, cell.score));
+            out.push_str(&format!(
+                "  Cell ({},{},{},{},{}): score={:.4}\n",
+                cell.x, cell.y, cell.z, cell.w, cell.v, cell.score
+            ));
         }
         if let Some(tokens) = &self.response_tokens {
             out.push_str(&format!("\nResponse tokens: {}\n", tokens.len()));
@@ -581,8 +666,14 @@ mod tests {
     fn test_think_with_simple_tokens() {
         let mut ai = make_test_ai();
         let tokens = vec![
-            TokenInfo { id: crate::weaver::token_id("Hello"), text: "Hello".into() },
-            TokenInfo { id: crate::weaver::token_id("world"), text: "world".into() },
+            TokenInfo {
+                id: crate::weaver::token_id("Hello"),
+                text: "Hello".into(),
+            },
+            TokenInfo {
+                id: crate::weaver::token_id("world"),
+                text: "world".into(),
+            },
         ];
         let output = ai.think(&tokens);
         assert!(output.cube_entropy > 0.0);
@@ -613,9 +704,10 @@ mod tests {
     #[test]
     fn test_think_code_routes_to_code_logic() {
         let mut ai = make_test_ai();
-        let tokens = vec![
-            TokenInfo { id: crate::weaver::token_id("def"), text: "def foo(x):".into() },
-        ];
+        let tokens = vec![TokenInfo {
+            id: crate::weaver::token_id("def"),
+            text: "def foo(x):".into(),
+        }];
         let output = ai.think(&tokens);
         assert_eq!(output.route, TargetExpert::CodeLogic);
     }

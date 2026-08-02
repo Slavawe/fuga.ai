@@ -31,9 +31,9 @@ impl PhysicsWorld {
         let query_pipeline = QueryPipeline::new();
         let ccd_solver = CCDSolver::new();
 
-        let ground = ColliderBuilder::halfspace(
-            rapier3d::na::Unit::new_normalize(vector![0.0, 1.0, 0.0])
-        ).build();
+        let ground =
+            ColliderBuilder::halfspace(rapier3d::na::Unit::new_normalize(vector![0.0, 1.0, 0.0]))
+                .build();
         colliders.insert(ground);
 
         let ball_sz = RigidBodyBuilder::dynamic()
@@ -93,7 +93,12 @@ impl PhysicsWorld {
         );
     }
 
-    pub fn ray_cast(&self, origin: &[f32; 3], dir: &[f32; 3], max_dist: f32) -> (f32, Option<String>) {
+    pub fn ray_cast(
+        &self,
+        origin: &[f32; 3],
+        dir: &[f32; 3],
+        max_dist: f32,
+    ) -> (f32, Option<String>) {
         let offset_origin = [origin[0], origin[1] + 0.6, origin[2]];
         let ray = Ray::new(
             point![offset_origin[0], offset_origin[1], offset_origin[2]],

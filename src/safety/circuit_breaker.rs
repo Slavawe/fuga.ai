@@ -1,5 +1,5 @@
-use crate::vsa::topology::ls_bind;
 use crate::core::hypervector::Hypervector;
+use crate::vsa::topology::ls_bind;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SystemState {
@@ -33,8 +33,12 @@ impl FugaCircuitBreaker {
 
     pub fn validate_trajectory(&self, phase_vector: &Hypervector, boundary: &Hypervector) -> bool {
         let bound = ls_bind(phase_vector, boundary, 32);
-        let sim = phase_vector.words.iter().zip(bound.words.iter())
-            .filter(|(a, b)| *a == *b).count();
+        let sim = phase_vector
+            .words
+            .iter()
+            .zip(bound.words.iter())
+            .filter(|(a, b)| *a == *b)
+            .count();
         sim as f64 / phase_vector.words.len() as f64 > 0.85
     }
 }

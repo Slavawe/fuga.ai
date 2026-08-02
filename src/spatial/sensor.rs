@@ -89,22 +89,28 @@ impl SphericalSensor {
         for i in 0..num_rays {
             let theta = 2.0 * std::f32::consts::PI * i as f32 / golden_ratio;
             let phi = (1.0 - 2.0 * (i as f32 + 0.5) / num_rays as f32).acos();
-            directions.push([
-                theta.cos() * phi.sin(),
-                phi.cos(),
-                theta.sin() * phi.sin(),
-            ]);
+            directions.push([theta.cos() * phi.sin(), phi.cos(), theta.sin() * phi.sin()]);
         }
 
-        Self { directions, max_dist }
+        Self {
+            directions,
+            max_dist,
+        }
     }
 
     pub fn cast_all(&self, origin: &[f64; 3], room: &super::room::Room) -> Vec<f32> {
         let o = [origin[0] as f32, origin[1] as f32, origin[2] as f32];
         let eps = 0.35;
-        self.directions.iter().map(|dir| {
-            let ro = [o[0] + dir[0] * eps, o[1] + dir[1] * eps, o[2] + dir[2] * eps];
-            room.cast_ray(&ro, dir, self.max_dist)
-        }).collect()
+        self.directions
+            .iter()
+            .map(|dir| {
+                let ro = [
+                    o[0] + dir[0] * eps,
+                    o[1] + dir[1] * eps,
+                    o[2] + dir[2] * eps,
+                ];
+                room.cast_ray(&ro, dir, self.max_dist)
+            })
+            .collect()
     }
 }

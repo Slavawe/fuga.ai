@@ -1,5 +1,3 @@
-
-
 use rand::RngCore;
 
 #[derive(Clone, Debug)]
@@ -11,7 +9,10 @@ pub struct Hypervector {
 impl Hypervector {
     pub fn new(dim: usize) -> Self {
         let wc = (dim + 63) / 64;
-        Hypervector { dim, words: vec![0u64; wc] }
+        Hypervector {
+            dim,
+            words: vec![0u64; wc],
+        }
     }
 
     pub fn random(dim: usize) -> Self {
@@ -32,7 +33,9 @@ impl Hypervector {
         let word_count = (dim + 63) / 64;
         let mut words = vec![0u64; word_count];
         for (i, &b) in bits.iter().enumerate() {
-            if i >= dim { break; }
+            if i >= dim {
+                break;
+            }
             if b == 1 {
                 words[i / 64] |= 1u64 << (i % 64);
             }
@@ -50,7 +53,10 @@ impl Hypervector {
         for i in 0..wc {
             words[i] = self.words[i] ^ other.words[i];
         }
-        Hypervector { dim: self.dim, words }
+        Hypervector {
+            dim: self.dim,
+            words,
+        }
     }
 
     pub fn unbind(&self, other: &Hypervector) -> Hypervector {
@@ -70,7 +76,11 @@ impl Hypervector {
                 counts[b] = ((self_word >> b) & 1) as u16;
             }
             for other in others {
-                let ow = if w < other.words.len() { other.words[w] } else { 0 };
+                let ow = if w < other.words.len() {
+                    other.words[w]
+                } else {
+                    0
+                };
                 for b in 0..64 {
                     counts[b] += ((ow >> b) & 1) as u16;
                 }
@@ -84,12 +94,17 @@ impl Hypervector {
             result[w] = rw;
         }
 
-        Hypervector { dim: self.dim, words: result }
+        Hypervector {
+            dim: self.dim,
+            words: result,
+        }
     }
 
     pub fn permute(&self, shift: usize) -> Hypervector {
         let s = shift % self.dim;
-        if s == 0 { return self.clone(); }
+        if s == 0 {
+            return self.clone();
+        }
         let wc = self.word_count();
         let mut result = vec![0u64; wc];
         for i in 0..self.dim {
@@ -101,15 +116,17 @@ impl Hypervector {
             let dst_b = dst % 64;
             result[dst_w] |= bit << dst_b;
         }
-        Hypervector { dim: self.dim, words: result }
+        Hypervector {
+            dim: self.dim,
+            words: result,
+        }
     }
 
     pub fn hamming_distance(&self, other: &Hypervector) -> f64 {
         let wc = self.word_count().min(other.word_count());
-         let mismatches = popcount_xor_pair(&self.words, &other.words, wc);
-         mismatches as f64 / self.dim as f64
+        let mismatches = popcount_xor_pair(&self.words, &other.words, wc);
+        mismatches as f64 / self.dim as f64
     }
-
 
     pub fn similarity(&self, other: &Hypervector) -> f64 {
         1.0 - self.hamming_distance(other)
@@ -117,11 +134,12 @@ impl Hypervector {
 
     pub fn partial_hamming_distance(&self, other: &Hypervector, n_words: usize) -> f64 {
         let wc = self.word_count().min(other.word_count()).min(n_words);
-         if wc == 0 { return 0.5; }
-         let mismatches = popcount_xor_pair(&self.words, &other.words, wc);
-         mismatches as f64 / (wc * 64) as f64
+        if wc == 0 {
+            return 0.5;
+        }
+        let mismatches = popcount_xor_pair(&self.words, &other.words, wc);
+        mismatches as f64 / (wc * 64) as f64
     }
-
 
     pub fn partial_similarity(&self, other: &Hypervector, n_words: usize) -> f64 {
         1.0 - self.partial_hamming_distance(other, n_words)
@@ -129,9 +147,8 @@ impl Hypervector {
 
     pub fn entropy(&self) -> f64 {
         let ones = popcount_chunks(&self.words);
-         ones as f64 / self.dim as f64
+        ones as f64 / self.dim as f64
     }
-
 
     pub fn to_i8_bits(&self) -> Vec<i8> {
         let mut bits = vec![1i8; self.dim];
@@ -158,18 +175,26 @@ impl Hypervector {
     pub fn balance_density(&self) -> Hypervector {
         let ones = popcount_chunks(&self.words) as usize;
         let half = self.dim / 2;
-        if ones == half { return self.clone(); }
+        if ones == half {
+            return self.clone();
+        }
         let need_ones = ones < half;
         let needed = if need_ones { half - ones } else { ones - half };
         let mut result = self.clone();
         let mut remaining = needed;
         for bit in 0..self.dim {
-            if remaining == 0 { break; }
+            if remaining == 0 {
+                break;
+            }
             let wi = bit / 64;
             let bi = bit % 64;
             let current = (result.words[wi] >> bi) & 1;
-            if need_ones && current == 1 { continue; }
-            if !need_ones && current == 0 { continue; }
+            if need_ones && current == 1 {
+                continue;
+            }
+            if !need_ones && current == 0 {
+                continue;
+            }
             result.words[wi] ^= 1u64 << bi;
             remaining -= 1;
         }
@@ -183,9 +208,9 @@ fn popcount_chunks(words: &[u64]) -> u64 {
     let remainder = chunks.remainder();
     for chunk in chunks {
         total += chunk[0].count_ones() as u64
-               + chunk[1].count_ones() as u64
-               + chunk[2].count_ones() as u64
-               + chunk[3].count_ones() as u64;
+            + chunk[1].count_ones() as u64
+            + chunk[2].count_ones() as u64
+            + chunk[3].count_ones() as u64;
     }
     for &w in remainder {
         total += w.count_ones() as u64;
@@ -200,9 +225,9 @@ fn popcount_xor_pair(a: &[u64], b: &[u64], n: usize) -> u64 {
     let mut total: u64 = 0;
     for i in (0..a_main.len()).step_by(4) {
         total += (a_main[i] ^ b_main[i]).count_ones() as u64
-               + (a_main[i+1] ^ b_main[i+1]).count_ones() as u64
-               + (a_main[i+2] ^ b_main[i+2]).count_ones() as u64
-               + (a_main[i+3] ^ b_main[i+3]).count_ones() as u64;
+            + (a_main[i + 1] ^ b_main[i + 1]).count_ones() as u64
+            + (a_main[i + 2] ^ b_main[i + 2]).count_ones() as u64
+            + (a_main[i + 3] ^ b_main[i + 3]).count_ones() as u64;
     }
     for i in 0..a_rem.len() {
         total += (a_rem[i] ^ b_rem[i]).count_ones() as u64;
@@ -210,11 +235,9 @@ fn popcount_xor_pair(a: &[u64], b: &[u64], n: usize) -> u64 {
     total
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_random_entropy() {

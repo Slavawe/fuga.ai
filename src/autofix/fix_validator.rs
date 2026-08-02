@@ -10,7 +10,12 @@ impl FixValidator {
     }
 
     /// Валидирует предложенный фикс: применяет его и прогоняет через FugaEngine
-    pub fn validate_fix(&self, original_source: &str, proposal: &FixProposal, engine: &mut FugaEngine) -> ValidationResult {
+    pub fn validate_fix(
+        &self,
+        original_source: &str,
+        proposal: &FixProposal,
+        engine: &mut FugaEngine,
+    ) -> ValidationResult {
         // Применяем патч
         let patched_source = self.apply_proposal(original_source, proposal);
 
@@ -35,8 +40,16 @@ impl FixValidator {
         let safety_before = original_result.layer_results.syntax.safety_score;
         let safety_after = result.layer_results.syntax.safety_score;
 
-        let bug_before = original_result.fuga_result.as_ref().map(|f| f.confidence).unwrap_or(0.0);
-        let bug_after = result.fuga_result.as_ref().map(|f| f.confidence).unwrap_or(0.0);
+        let bug_before = original_result
+            .fuga_result
+            .as_ref()
+            .map(|f| f.confidence)
+            .unwrap_or(0.0);
+        let bug_after = result
+            .fuga_result
+            .as_ref()
+            .map(|f| f.confidence)
+            .unwrap_or(0.0);
 
         // Фикс валиден если:
         // 1. Safety score вырос или остался на том же уровне
@@ -49,8 +62,10 @@ impl FixValidator {
             reason: if valid {
                 "Fix improves safety and reduces bugs".into()
             } else {
-                format!("Fix did not improve metrics: safety {:.2}→{:.2}, bugs {:.2}→{:.2}",
-                    safety_before, safety_after, bug_before, bug_after)
+                format!(
+                    "Fix did not improve metrics: safety {:.2}→{:.2}, bugs {:.2}→{:.2}",
+                    safety_before, safety_after, bug_before, bug_after
+                )
             },
             safety_score_before: safety_before,
             safety_score_after: safety_after,

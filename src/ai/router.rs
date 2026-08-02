@@ -46,16 +46,31 @@ impl DynamicRouter {
 
     pub fn route_by_peek(source: &str) -> TargetExpert {
         let s = source.trim_start();
-        if s.starts_with("def ") || s.starts_with("fn ") || s.starts_with("impl ") || s.starts_with("class ")
-            || s.starts_with("function ") || s.starts_with("const ") || s.starts_with("let ") || s.starts_with("var ")
-            || s.starts_with("import ") || s.starts_with("export ") || s.starts_with("<") || s.starts_with("* ")
-            || s.starts_with("@") || s.starts_with("<!")
+        if s.starts_with("def ")
+            || s.starts_with("fn ")
+            || s.starts_with("impl ")
+            || s.starts_with("class ")
+            || s.starts_with("function ")
+            || s.starts_with("const ")
+            || s.starts_with("let ")
+            || s.starts_with("var ")
+            || s.starts_with("import ")
+            || s.starts_with("export ")
+            || s.starts_with("<")
+            || s.starts_with("* ")
+            || s.starts_with("@")
+            || s.starts_with("<!")
             || s.contains("```")
         {
             return TargetExpert::CodeLogic;
         }
-        if s.starts_with("+") || s.starts_with("-") || s.starts_with("=") || s.contains("∑") || s.contains("∫")
-            || s.chars().any(|c| c == '=' || c == '+' || c == '*' || c == '/' || c == '^')
+        if s.starts_with("+")
+            || s.starts_with("-")
+            || s.starts_with("=")
+            || s.contains("∑")
+            || s.contains("∫")
+            || s.chars()
+                .any(|c| c == '=' || c == '+' || c == '*' || c == '/' || c == '^')
         {
             return TargetExpert::SymbolicMath;
         }
@@ -97,13 +112,22 @@ mod tests {
 
     #[test]
     fn test_route_by_peek_code() {
-        assert_eq!(DynamicRouter::route_by_peek("def foo(x):"), TargetExpert::CodeLogic);
-        assert_eq!(DynamicRouter::route_by_peek("fn bar() {"), TargetExpert::CodeLogic);
+        assert_eq!(
+            DynamicRouter::route_by_peek("def foo(x):"),
+            TargetExpert::CodeLogic
+        );
+        assert_eq!(
+            DynamicRouter::route_by_peek("fn bar() {"),
+            TargetExpert::CodeLogic
+        );
     }
 
     #[test]
     fn test_route_by_peek_general() {
-        assert_eq!(DynamicRouter::route_by_peek("Hello world"), TargetExpert::GeneralLanguage);
+        assert_eq!(
+            DynamicRouter::route_by_peek("Hello world"),
+            TargetExpert::GeneralLanguage
+        );
     }
 }
 

@@ -13,7 +13,12 @@ impl NeutronDiffusion {
         let n = w * h * d;
         let mut source = vec![0.0; n];
         let center = |i: usize, j: usize, k: usize| -> bool {
-            i >= w/3 && i < 2*w/3 && j >= h/3 && j < 2*h/3 && k >= d/3 && k < 2*d/3
+            i >= w / 3
+                && i < 2 * w / 3
+                && j >= h / 3
+                && j < 2 * h / 3
+                && k >= d / 3
+                && k < 2 * d / 3
         };
         for i in 0..w {
             for j in 0..h {
@@ -49,15 +54,40 @@ impl NeutronDiffusion {
                     let idx = (i * h + j) * d + k;
                     let mut lap = 0.0;
 
-                    if i > 0 { lap += self.grid[((i-1)*h + j)*d + k]; } else { lap += self.grid[idx]; }
-                    if i < w-1 { lap += self.grid[((i+1)*h + j)*d + k]; } else { lap += self.grid[idx]; }
-                    if j > 0 { lap += self.grid[(i*h + (j-1))*d + k]; } else { lap += self.grid[idx]; }
-                    if j < h-1 { lap += self.grid[(i*h + (j+1))*d + k]; } else { lap += self.grid[idx]; }
-                    if k > 0 { lap += self.grid[(i*h + j)*d + (k-1)]; } else { lap += self.grid[idx]; }
-                    if k < d-1 { lap += self.grid[(i*h + j)*d + (k+1)]; } else { lap += self.grid[idx]; }
+                    if i > 0 {
+                        lap += self.grid[((i - 1) * h + j) * d + k];
+                    } else {
+                        lap += self.grid[idx];
+                    }
+                    if i < w - 1 {
+                        lap += self.grid[((i + 1) * h + j) * d + k];
+                    } else {
+                        lap += self.grid[idx];
+                    }
+                    if j > 0 {
+                        lap += self.grid[(i * h + (j - 1)) * d + k];
+                    } else {
+                        lap += self.grid[idx];
+                    }
+                    if j < h - 1 {
+                        lap += self.grid[(i * h + (j + 1)) * d + k];
+                    } else {
+                        lap += self.grid[idx];
+                    }
+                    if k > 0 {
+                        lap += self.grid[(i * h + j) * d + (k - 1)];
+                    } else {
+                        lap += self.grid[idx];
+                    }
+                    if k < d - 1 {
+                        lap += self.grid[(i * h + j) * d + (k + 1)];
+                    } else {
+                        lap += self.grid[idx];
+                    }
 
                     lap = (lap - 6.0 * self.grid[idx]) / (dx * dx);
-                    let dphi_dt = self.diffusivity * lap - self.absorption * self.grid[idx] + self.source[idx];
+                    let dphi_dt = self.diffusivity * lap - self.absorption * self.grid[idx]
+                        + self.source[idx];
                     next[idx] = (self.grid[idx] + dt * dphi_dt).max(0.0);
                 }
             }

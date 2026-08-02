@@ -1,13 +1,11 @@
 use crate::core::hypervector::Hypervector;
-use std::collections::HashMap;
 use rand::RngCore;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-const PROMPT_MODES: &[&str] = &[
-    "SAFETY", "EFFICIENT", "CONCISE", "EXPLAIN", "DRY_RUN",
-];
+const PROMPT_MODES: &[&str] = &["SAFETY", "EFFICIENT", "CONCISE", "EXPLAIN", "DRY_RUN"];
 
 pub struct PromptVectors {
     modes: HashMap<String, Hypervector>,
@@ -41,7 +39,8 @@ impl PromptVectors {
     }
 
     pub fn resolve(names: &[String], dim: usize) -> Vec<Hypervector> {
-        names.iter()
+        names
+            .iter()
             .map(|n| Self::make_deterministic(n, dim))
             .collect()
     }

@@ -1,5 +1,5 @@
-use crate::core::wave_cube::WaveCube;
 use crate::core::hypervector::Hypervector;
+use crate::core::wave_cube::WaveCube;
 
 pub struct RoomController {
     pub cube: WaveCube<3, 4>,
@@ -30,7 +30,13 @@ impl RoomController {
         }
     }
 
-    pub fn compute(&mut self, pos: [f64; 3], vel: [f64; 3], distances: &[f32], step_id: usize) -> [f32; 3] {
+    pub fn compute(
+        &mut self,
+        pos: [f64; 3],
+        vel: [f64; 3],
+        distances: &[f32],
+        step_id: usize,
+    ) -> [f32; 3] {
         let dim = self.cube.dim;
         let room = self.half_extent;
 
@@ -42,7 +48,10 @@ impl RoomController {
 
         let hv = Hypervector::from_i8_bits(
             dim,
-            &encoded.iter().map(|&x| if x > 0.5 { 1i8 } else { -1i8 }).collect::<Vec<_>>(),
+            &encoded
+                .iter()
+                .map(|&x| if x > 0.5 { 1i8 } else { -1i8 })
+                .collect::<Vec<_>>(),
         );
         let cell = (step_id % 4, (step_id / 4) % 4, (step_id / 16) % 4);
         self.cube.write_cell(cell.0, cell.1, cell.2, &hv);
@@ -56,17 +65,24 @@ impl RoomController {
         let coherence = self.cube.coherence();
         self.phase_history.push(coherence);
         self.coherence_history.push(coherence);
-        if self.phase_history.len() > 100 { self.phase_history.remove(0); }
-        if self.coherence_history.len() > 500 { self.coherence_history.remove(0); }
+        if self.phase_history.len() > 100 {
+            self.phase_history.remove(0);
+        }
+        if self.coherence_history.len() > 500 {
+            self.coherence_history.remove(0);
+        }
 
         let dx = self.attractor[0] - pos[0];
         let dz = self.attractor[2] - pos[2];
         let dist_to_target = (dx * dx + dz * dz).sqrt();
 
         let wall_dists = [
-            room - pos[0], room + pos[0],
-            room - pos[1], room + pos[1],
-            room - pos[2], room + pos[2],
+            room - pos[0],
+            room + pos[0],
+            room - pos[1],
+            room + pos[1],
+            room - pos[2],
+            room + pos[2],
         ];
         let min_wall = wall_dists.iter().copied().fold(f64::INFINITY, f64::min);
 
@@ -86,7 +102,10 @@ impl RoomController {
         let max_speed = if min_wall < 1.0 { 0.5 } else { 1.5 };
         let dspeed = (desired_vx * desired_vx + desired_vz * desired_vz).sqrt();
         let (desired_vx, desired_vz) = if dspeed > max_speed {
-            (desired_vx / dspeed * max_speed, desired_vz / dspeed * max_speed)
+            (
+                desired_vx / dspeed * max_speed,
+                desired_vz / dspeed * max_speed,
+            )
         } else {
             (desired_vx, desired_vz)
         };
@@ -96,9 +115,12 @@ impl RoomController {
         let mut fy = -vel[1] * 3.0;
 
         let wall_normals: [[f64; 3]; 6] = [
-            [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0], [0.0, 1.0, 0.0],
-            [0.0, 0.0, -1.0], [0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0, 1.0],
         ];
 
         for (wd, n) in wall_dists.iter().zip(wall_normals.iter()) {
@@ -135,7 +157,9 @@ impl RoomController {
     }
 
     pub fn phase_stability(&self) -> f64 {
-        if self.phase_history.len() < 10 { return 1.0; }
+        if self.phase_history.len() < 10 {
+            return 1.0;
+        }
         let recent: Vec<f64> = self.phase_history.iter().rev().take(10).copied().collect();
         let mean: f64 = recent.iter().sum::<f64>() / recent.len() as f64;
         let var: f64 = recent.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / recent.len() as f64;
@@ -143,7 +167,9 @@ impl RoomController {
     }
 
     pub fn coherence(&self) -> f64 {
-        if self.coherence_history.is_empty() { return 0.5; }
+        if self.coherence_history.is_empty() {
+            return 0.5;
+        }
         self.coherence_history[self.coherence_history.len() - 1]
     }
 

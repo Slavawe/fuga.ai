@@ -13,10 +13,9 @@ pub struct MappedCube {
 
 impl MappedCube {
     pub fn open(path: &str) -> Result<Self, String> {
-        let file = File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
-        let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
 
         if mmap.len() < 16 {
             return Err("File too small for header".into());
@@ -45,10 +44,19 @@ impl MappedCube {
         let cell_count = data_len / (wc * 8);
         let expected = side_len.pow(ndim as u32);
         if cell_count != expected {
-            return Err(format!("MappedCube: {} cells, expected {}", cell_count, expected));
+            return Err(format!(
+                "MappedCube: {} cells, expected {}",
+                cell_count, expected
+            ));
         }
 
-        Ok(MappedCube { side_len, ndim, dim, word_count: wc, _mmap: mmap })
+        Ok(MappedCube {
+            side_len,
+            ndim,
+            dim,
+            word_count: wc,
+            _mmap: mmap,
+        })
     }
 
     fn cell_offset(&self, coords: &[usize]) -> usize {
@@ -67,7 +75,10 @@ impl MappedCube {
             buf.copy_from_slice(&self._mmap[off + i * 8..off + (i + 1) * 8]);
             words[i] = u64::from_le_bytes(buf);
         }
-        Hypervector { dim: self.dim, words }
+        Hypervector {
+            dim: self.dim,
+            words,
+        }
     }
 
     pub fn cell_at(&self, coords: &[usize]) -> Hypervector {
@@ -78,12 +89,19 @@ impl MappedCube {
             buf.copy_from_slice(&self._mmap[off + i * 8..off + (i + 1) * 8]);
             words[i] = u64::from_le_bytes(buf);
         }
-        Hypervector { dim: self.dim, words }
+        Hypervector {
+            dim: self.dim,
+            words,
+        }
     }
 
     pub fn to_wave_cube<const N: usize, const S: usize>(&self) -> WaveCube<N, S> {
         assert_eq!(self.ndim, N, "MappedCube ndim {} != N {}", self.ndim, N);
-        assert_eq!(self.side_len, S, "MappedCube side_len {} != S {}", self.side_len, S);
+        assert_eq!(
+            self.side_len, S,
+            "MappedCube side_len {} != S {}",
+            self.side_len, S
+        );
         let total = self.side_len.pow(self.ndim as u32);
         let mut cube = Vec::with_capacity(total);
         for idx in 0..total {
@@ -95,7 +113,10 @@ impl MappedCube {
             }
             cube.push(self.cell_at(&coords));
         }
-        WaveCube { dim: self.dim, cube }
+        WaveCube {
+            dim: self.dim,
+            cube,
+        }
     }
 }
 
@@ -109,10 +130,9 @@ pub struct MappedMemory {
 
 impl MappedMemory {
     pub fn open(path: &str) -> Result<Self, String> {
-        let file = File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
-        let mmap = unsafe { Mmap::map(&file) }
-            .map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
+        let file = File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
 
         if mmap.len() < 4 {
             return Err("File too small for header".into());
@@ -153,11 +173,19 @@ impl MappedMemory {
             u32::from_le_bytes(dim_buf) as usize
         };
 
-        Ok(MappedMemory { dim, num_entries, word_count: (dim + 63) / 64, _mmap: mmap, offsets })
+        Ok(MappedMemory {
+            dim,
+            num_entries,
+            word_count: (dim + 63) / 64,
+            _mmap: mmap,
+            offsets,
+        })
     }
 
     pub fn entry_vector(&self, idx: usize) -> Option<Hypervector> {
-        if idx >= self.num_entries { return None; }
+        if idx >= self.num_entries {
+            return None;
+        }
         let pos = self.offsets[idx];
         let mmap = &self._mmap;
 

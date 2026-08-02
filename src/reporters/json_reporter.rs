@@ -1,5 +1,5 @@
-use super::{Reporter, FileAnalysisResult, WorkspaceStats};
-use serde::{Serialize, Deserialize};
+use super::{FileAnalysisResult, Reporter, WorkspaceStats};
+use serde::{Deserialize, Serialize};
 
 pub struct JsonReporter;
 
@@ -79,6 +79,7 @@ impl Reporter for JsonReporter {
             files,
         };
 
-        serde_json::to_string_pretty(&report).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+        serde_json::to_string_pretty(&report)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
     }
 }

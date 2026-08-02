@@ -1,7 +1,7 @@
-use crate::core::hypervector::Hypervector;
-use super::token_builder::TokenBuilder;
 use super::TokenRole;
 use super::deterministic_vector;
+use super::token_builder::TokenBuilder;
+use crate::core::hypervector::Hypervector;
 use std::collections::{HashMap, HashSet};
 
 pub struct TokenVocabulary {
@@ -62,7 +62,8 @@ impl TokenVocabulary {
     }
 
     pub fn nearest(&self, query: &Hypervector) -> Option<(u32, String, f64)> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .map(|e| (e.id, e.text.clone(), query.similarity(&e.vector)))
             .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
     }
@@ -70,13 +71,17 @@ impl TokenVocabulary {
     pub fn nearest_beam(&self, query: &Hypervector, beam: usize) -> Vec<(u32, String, f64)> {
         use rayon::prelude::*;
         let step = (self.entries.len() + beam - 1) / beam;
-        let mut all: Vec<_> = self.entries.par_chunks(step)
+        let mut all: Vec<_> = self
+            .entries
+            .par_chunks(step)
             .flat_map(|chunk| {
                 let mut best: Option<(u32, String, f64)> = None;
                 for e in chunk {
                     let sim = query.similarity(&e.vector);
                     best = match best {
-                        Some((_, _, best_sim)) if sim > best_sim => Some((e.id, e.text.clone(), sim)),
+                        Some((_, _, best_sim)) if sim > best_sim => {
+                            Some((e.id, e.text.clone(), sim))
+                        }
                         Some(b) => Some(b),
                         None => Some((e.id, e.text.clone(), sim)),
                     };
@@ -89,15 +94,22 @@ impl TokenVocabulary {
         all
     }
 
-    pub fn nearest_in_set(&self, query: &Hypervector, ids: &HashSet<u32>) -> Option<(u32, String, f64)> {
-        self.entries.iter()
+    pub fn nearest_in_set(
+        &self,
+        query: &Hypervector,
+        ids: &HashSet<u32>,
+    ) -> Option<(u32, String, f64)> {
+        self.entries
+            .iter()
             .filter(|e| ids.contains(&e.id))
             .map(|e| (e.id, e.text.clone(), query.similarity(&e.vector)))
             .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
     }
 
     pub fn nearest_n(&self, query: &Hypervector, n: usize) -> Vec<(u32, String, f64)> {
-        let mut results: Vec<_> = self.entries.iter()
+        let mut results: Vec<_> = self
+            .entries
+            .iter()
             .map(|e| (e.id, e.text.clone(), query.similarity(&e.vector)))
             .collect();
         results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
@@ -106,21 +118,30 @@ impl TokenVocabulary {
     }
 
     pub fn search_by_text(&self, text: &str) -> Option<(u32, f64)> {
-        self.entries.iter()
+        self.entries
+            .iter()
             .find(|e| e.text == text)
             .map(|e| (e.id, 1.0))
     }
 
     pub fn search_by_id(&self, id: u32) -> Option<&str> {
-        self.by_id.get(&id)
+        self.by_id
+            .get(&id)
             .and_then(|&idx| self.entries.get(idx))
             .map(|e| e.text.as_str())
     }
 
-    pub fn size(&self) -> usize { self.entries.len() }
-    pub fn dim(&self) -> usize { self.dim }
+    pub fn size(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
 
     pub fn get_vector(&self, id: u32) -> Option<&Hypervector> {
-        self.by_id.get(&id).and_then(|&idx| self.entries.get(idx)).map(|e| &e.vector)
+        self.by_id
+            .get(&id)
+            .and_then(|&idx| self.entries.get(idx))
+            .map(|e| &e.vector)
     }
 }

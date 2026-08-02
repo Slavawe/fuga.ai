@@ -2,10 +2,15 @@
 // Usage: fuga-cube-viz [cube_path] > cube_data.json
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "fuga_code_cube.bin".to_string());
+    let path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "fuga_code_cube.bin".to_string());
     let cube = match fuga::WaveCube::<3, 4>::load_bin(&path) {
         Ok(c) => c,
-        Err(e) => { eprintln!("Cube load error: {}", e); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("Cube load error: {}", e);
+            std::process::exit(1);
+        }
     };
 
     let mut cells = Vec::with_capacity(64);

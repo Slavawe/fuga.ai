@@ -1,7 +1,3 @@
-
-
-
-
 use super::hypervector::Hypervector;
 use rand::RngCore;
 use std::io::Read;
@@ -59,7 +55,9 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         let mut coords = [0; N];
         coords[0] = x;
         coords[1] = y;
-        if N >= 3 { coords[2] = z; }
+        if N >= 3 {
+            coords[2] = z;
+        }
         self.cube[self.idx(&coords)].clone()
     }
 
@@ -67,7 +65,9 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         let mut coords = [0; N];
         coords[0] = x;
         coords[1] = y;
-        if N >= 3 { coords[2] = z; }
+        if N >= 3 {
+            coords[2] = z;
+        }
         let i = self.idx(&coords);
         self.cube[i] = hv.clone();
     }
@@ -82,9 +82,13 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
     }
 
     pub fn wave_flow(&mut self, axis: usize, shift: isize) {
-        if shift == 0 { return; }
+        if shift == 0 {
+            return;
+        }
         let s = ((shift % S as isize) + S as isize) as usize % S;
-        if s == 0 { return; }
+        if s == 0 {
+            return;
+        }
         let total = Self::TOTAL_CELLS;
         let block = {
             let mut b = 1;
@@ -111,10 +115,18 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         self.cube = new_cube;
     }
 
-    pub fn wave_flow_x(&mut self, shift: isize) { self.wave_flow(0, shift) }
-    pub fn wave_flow_y(&mut self, shift: isize) { self.wave_flow(1, shift) }
-    pub fn wave_flow_z(&mut self, shift: isize) { self.wave_flow(2, shift) }
-    pub fn wave_flow_w(&mut self, shift: isize) { self.wave_flow(3, shift) }
+    pub fn wave_flow_x(&mut self, shift: isize) {
+        self.wave_flow(0, shift)
+    }
+    pub fn wave_flow_y(&mut self, shift: isize) {
+        self.wave_flow(1, shift)
+    }
+    pub fn wave_flow_z(&mut self, shift: isize) {
+        self.wave_flow(2, shift)
+    }
+    pub fn wave_flow_w(&mut self, shift: isize) {
+        self.wave_flow(3, shift)
+    }
 
     pub fn absorb_from_triangle(
         &mut self,
@@ -124,8 +136,18 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
     ) {
         let ms = S / 2;
         self.write_cell(0, 0, 0, &self.cell(0, 0, 0).bind(triangle_syntax));
-        self.write_cell(S - 1, ms, ms, &self.cell(S - 1, ms, ms).bind(triangle_semantics));
-        self.write_cell(ms, ms, S - 1, &self.cell(ms, ms, S - 1).bind(triangle_chaos));
+        self.write_cell(
+            S - 1,
+            ms,
+            ms,
+            &self.cell(S - 1, ms, ms).bind(triangle_semantics),
+        );
+        self.write_cell(
+            ms,
+            ms,
+            S - 1,
+            &self.cell(ms, ms, S - 1).bind(triangle_chaos),
+        );
         self.wave_flow_x(1);
         self.wave_flow_y(1);
         self.wave_flow_z(1);
@@ -133,13 +155,18 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
 
     pub fn global_entropy(&self) -> f64 {
         let total_bits = Self::TOTAL_CELLS * self.dim;
-        let ones: u64 = self.cube.iter().map(|hv| hv.entropy() * hv.dim as f64).sum::<f64>() as u64;
+        let ones: u64 = self
+            .cube
+            .iter()
+            .map(|hv| hv.entropy() * hv.dim as f64)
+            .sum::<f64>() as u64;
         ones as f64 / total_bits as f64
     }
 
-
     pub fn coherence(&self) -> f64 {
-        if N < 3 { return 0.0; }
+        if N < 3 {
+            return 0.0;
+        }
         let mut sum = 0.0;
         let mut count = 0;
         let mut i = 0;
@@ -153,17 +180,11 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         sum / count as f64
     }
 
-
     pub fn save_bin(&self, path: &str) -> Result<(), String> {
         use std::io::Write;
-        let header: Vec<u32> = vec![
-            1u32,
-            S as u32,
-            N as u32,
-            self.dim as u32,
-        ];
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let header: Vec<u32> = vec![1u32, S as u32, N as u32, self.dim as u32];
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
         let header_bytes: Vec<u8> = header.iter().flat_map(|v| v.to_le_bytes()).collect();
         f.write_all(&header_bytes)
             .map_err(|e| format!("Failed to write header: {}", e))?;
@@ -176,8 +197,8 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
     }
 
     pub fn load_bin(path: &str) -> Result<Self, String> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let file =
+            std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
         let data = &mmap[..];
@@ -196,17 +217,27 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         };
 
         if file_side != S {
-            return Err(format!("Cube side mismatch: file has S={}, expected S={}", file_side, S));
+            return Err(format!(
+                "Cube side mismatch: file has S={}, expected S={}",
+                file_side, S
+            ));
         }
         if file_ndim != N {
-            return Err(format!("Cube ndim mismatch: file has N={}, expected N={}", file_ndim, N));
+            return Err(format!(
+                "Cube ndim mismatch: file has N={}, expected N={}",
+                file_ndim, N
+            ));
         }
 
         let wc = (dim + 63) / 64;
         let data_len = data.len() - 16;
         let cell_count = data_len / (wc * 8);
         if cell_count != Self::TOTAL_CELLS {
-            return Err(format!("Cube data size mismatch: {} cells, expected {}", cell_count, Self::TOTAL_CELLS));
+            return Err(format!(
+                "Cube data size mismatch: {} cells, expected {}",
+                cell_count,
+                Self::TOTAL_CELLS
+            ));
         }
 
         let mut cube = Vec::with_capacity(cell_count);
@@ -214,7 +245,8 @@ impl<const N: usize, const S: usize> WaveCube<N, S> {
         for _ in 0..cell_count {
             let mut words = vec![0u64; wc];
             for i in 0..wc {
-                words[i] = u64::from_le_bytes(data[off+i*8..off+(i+1)*8].try_into().unwrap());
+                words[i] =
+                    u64::from_le_bytes(data[off + i * 8..off + (i + 1) * 8].try_into().unwrap());
             }
             off += wc * 8;
             cube.push(Hypervector { dim, words });
@@ -231,8 +263,7 @@ impl<const S: usize> WaveCube<3, S> {
 }
 
 pub fn peek_cube_header(path: &str) -> Result<(usize, usize, usize), String> {
-    let mut f = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
     let mut buf = [0u8; 16];
     f.read_exact(&mut buf)
         .map_err(|e| format!("Failed to read header: {}", e))?;
@@ -255,9 +286,9 @@ fn popcount_chunks(words: &[u64]) -> u64 {
     let remainder = chunks.remainder();
     for chunk in chunks {
         total += chunk[0].count_ones() as u64
-               + chunk[1].count_ones() as u64
-               + chunk[2].count_ones() as u64
-               + chunk[3].count_ones() as u64;
+            + chunk[1].count_ones() as u64
+            + chunk[2].count_ones() as u64
+            + chunk[3].count_ones() as u64;
     }
     for &w in remainder {
         total += w.count_ones() as u64;
@@ -272,16 +303,15 @@ fn popcount_xor_pair(a: &[u64], b: &[u64], n: usize) -> u64 {
     let mut total: u64 = 0;
     for i in (0..a_main.len()).step_by(4) {
         total += (a_main[i] ^ b_main[i]).count_ones() as u64
-               + (a_main[i+1] ^ b_main[i+1]).count_ones() as u64
-               + (a_main[i+2] ^ b_main[i+2]).count_ones() as u64
-               + (a_main[i+3] ^ b_main[i+3]).count_ones() as u64;
+            + (a_main[i + 1] ^ b_main[i + 1]).count_ones() as u64
+            + (a_main[i + 2] ^ b_main[i + 2]).count_ones() as u64
+            + (a_main[i + 3] ^ b_main[i + 3]).count_ones() as u64;
     }
     for i in 0..a_rem.len() {
         total += (a_rem[i] ^ b_rem[i]).count_ones() as u64;
     }
     total
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,5 @@
-pub mod json_reporter;
 pub mod html_reporter;
+pub mod json_reporter;
 pub mod markdown_reporter;
 pub mod workspace;
 
@@ -109,7 +109,7 @@ impl WorkspaceStats {
     }
 }
 
-pub use json_reporter::JsonReporter;
 pub use html_reporter::HtmlReporter;
+pub use json_reporter::JsonReporter;
 pub use markdown_reporter::MarkdownReporter;
-pub use workspace::{WorkspaceScanner, ScanMode};
+pub use workspace::{ScanMode, WorkspaceScanner};

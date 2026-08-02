@@ -1,4 +1,4 @@
-use crate::multi::language::{LanguageId, parse_source, collect_function_names};
+use crate::multi::language::{LanguageId, collect_function_names, parse_source};
 
 pub struct CodeTranslator;
 
@@ -7,20 +7,27 @@ impl CodeTranslator {
         Self
     }
 
-    pub fn translate(&self, source: &str, from: LanguageId, to: LanguageId) -> Result<String, String> {
+    pub fn translate(
+        &self,
+        source: &str,
+        from: LanguageId,
+        to: LanguageId,
+    ) -> Result<String, String> {
         match (from, to) {
             (LanguageId::C, LanguageId::Rust) => self.c_to_rust(source),
             (LanguageId::Cpp, LanguageId::Rust) => self.c_to_rust(source),
             (LanguageId::Python, LanguageId::Rust) => self.python_to_rust(source),
             (LanguageId::Go, LanguageId::Rust) => self.go_to_rust(source),
             (LanguageId::Rust, LanguageId::C) => self.rust_to_c(source),
-            (from_lang, to_lang) => Err(format!("Translation from {:?} to {:?} is not yet supported", from_lang, to_lang)),
+            (from_lang, to_lang) => Err(format!(
+                "Translation from {:?} to {:?} is not yet supported",
+                from_lang, to_lang
+            )),
         }
     }
 
     fn c_to_rust(&self, source: &str) -> Result<String, String> {
-        let tree = parse_source(source, LanguageId::C)
-            .ok_or("Failed to parse C source")?;
+        let tree = parse_source(source, LanguageId::C).ok_or("Failed to parse C source")?;
 
         let functions = collect_function_names(&tree, source, LanguageId::C);
         if functions.is_empty() {
@@ -106,8 +113,16 @@ impl CodeTranslator {
         }
 
         let rust_return = self.c_type_to_rust(return_type);
-        let rust_params: Vec<String> = params.iter().map(|(n, t)| format!("{}: {}", n, t)).collect();
-        let rust_sig = format!("fn {}({}) -> {} {{", name, rust_params.join(", "), rust_return);
+        let rust_params: Vec<String> = params
+            .iter()
+            .map(|(n, t)| format!("{}: {}", n, t))
+            .collect();
+        let rust_sig = format!(
+            "fn {}({}) -> {} {{",
+            name,
+            rust_params.join(", "),
+            rust_return
+        );
 
         let body = if rust_return == "()" {
             &source[body_start..body_end]
@@ -239,9 +254,7 @@ impl CodeTranslator {
                     format!("    eprintln!({});", args)
                 }
             } else if trimmed.starts_with("fprintf(") {
-                let inner = trimmed
-                    .trim_start_matches("fprintf(")
-                    .trim_end_matches(';');
+                let inner = trimmed.trim_start_matches("fprintf(").trim_end_matches(';');
                 let close = inner.rfind(')').unwrap_or(inner.len());
                 let inner = &inner[..close];
                 if let Some(comma) = inner.find(',') {
@@ -264,7 +277,15 @@ impl CodeTranslator {
                 let l = trimmed.replace("nullptr", "None").replace("NULL", "None");
                 let l = l.trim_end_matches(';');
                 format!("    {};", l)
-            } else if trimmed.starts_with("int ") || trimmed.starts_with("float ") || trimmed.starts_with("double ") || trimmed.starts_with("char ") || trimmed.starts_with("size_t") || trimmed.starts_with("uint") || trimmed.starts_with("bool ") || trimmed.starts_with("auto ") {
+            } else if trimmed.starts_with("int ")
+                || trimmed.starts_with("float ")
+                || trimmed.starts_with("double ")
+                || trimmed.starts_with("char ")
+                || trimmed.starts_with("size_t")
+                || trimmed.starts_with("uint")
+                || trimmed.starts_with("bool ")
+                || trimmed.starts_with("auto ")
+            {
                 let without_type = trimmed.splitn(2, ' ').nth(1).unwrap_or("");
                 format!("    let mut {}", without_type)
             } else if trimmed.starts_with("const ") {
@@ -295,7 +316,10 @@ impl CodeTranslator {
                 format!("    {};", l)
             } else if trimmed.starts_with("GGML_") {
                 format!("    // {} (FFI call)", trimmed)
-            } else if trimmed.starts_with("static ") || trimmed.starts_with("struct ") || trimmed.starts_with("enum ") {
+            } else if trimmed.starts_with("static ")
+                || trimmed.starts_with("struct ")
+                || trimmed.starts_with("enum ")
+            {
                 format!("    // C++ type: {}", trimmed)
             } else {
                 let l = trimmed.trim_end_matches(';');
@@ -308,8 +332,8 @@ impl CodeTranslator {
     }
 
     fn python_to_rust(&self, source: &str) -> Result<String, String> {
-        let tree = parse_source(source, LanguageId::Python)
-            .ok_or("Failed to parse Python source")?;
+        let tree =
+            parse_source(source, LanguageId::Python).ok_or("Failed to parse Python source")?;
 
         let _functions = collect_function_names(&tree, source, LanguageId::Python);
         let mut output = String::new();
@@ -355,7 +379,10 @@ impl CodeTranslator {
                             let mut tp_cursor = param.walk();
                             for tp_child in param.children(&mut tp_cursor) {
                                 if tp_child.kind() == "identifier" {
-                                    params.push((source[tp_child.byte_range()].to_string(), String::new()));
+                                    params.push((
+                                        source[tp_child.byte_range()].to_string(),
+                                        String::new(),
+                                    ));
                                 }
                             }
                         }
@@ -369,7 +396,8 @@ impl CodeTranslator {
             }
         }
 
-        let rust_params: Vec<String> = params.into_iter()
+        let rust_params: Vec<String> = params
+            .into_iter()
             .map(|(n, _)| format!("{}: /* type */", n))
             .collect();
 
@@ -394,7 +422,10 @@ impl CodeTranslator {
                 format!("    // inner function: {}", trimmed)
             } else if trimmed.starts_with("if ") {
                 let cond = trimmed.trim_start_matches("if ").trim_end_matches(':');
-                let cond_rust = cond.replace(" and ", " && ").replace(" or ", " || ").replace(" not ", " !");
+                let cond_rust = cond
+                    .replace(" and ", " && ")
+                    .replace(" or ", " || ")
+                    .replace(" not ", " !");
                 format!("    if {} {{", cond_rust)
             } else if trimmed.starts_with("elif ") {
                 let cond = trimmed.trim_start_matches("elif ").trim_end_matches(':');
@@ -428,8 +459,7 @@ impl CodeTranslator {
     }
 
     fn go_to_rust(&self, source: &str) -> Result<String, String> {
-        let tree = parse_source(source, LanguageId::Go)
-            .ok_or("Failed to parse Go source")?;
+        let tree = parse_source(source, LanguageId::Go).ok_or("Failed to parse Go source")?;
         let _functions = collect_function_names(&tree, source, LanguageId::Go);
         let mut output = String::new();
         output.push_str("// Auto-translated from Go to Rust\n");
@@ -447,7 +477,10 @@ impl CodeTranslator {
                     }
                 }
                 if !name.is_empty() {
-                    output.push_str(&format!("fn {}() {{\n    // translated from Go\n}}\n\n", name));
+                    output.push_str(&format!(
+                        "fn {}() {{\n    // translated from Go\n}}\n\n",
+                        name
+                    ));
                 }
             }
         }
@@ -455,15 +488,17 @@ impl CodeTranslator {
     }
 
     fn rust_to_c(&self, source: &str) -> Result<String, String> {
-        let tree = parse_source(source, LanguageId::Rust)
-            .ok_or("Failed to parse Rust source")?;
+        let tree = parse_source(source, LanguageId::Rust).ok_or("Failed to parse Rust source")?;
         let functions = collect_function_names(&tree, source, LanguageId::Rust);
         let mut output = String::new();
         output.push_str("// Auto-translated from Rust to C\n");
         output.push_str("// Review and verify before use\n\n");
 
         for fn_name in &functions {
-            output.push_str(&format!("void {}(/* params */) {{\n    // translated from Rust\n}}\n\n", fn_name));
+            output.push_str(&format!(
+                "void {}(/* params */) {{\n    // translated from Rust\n}}\n\n",
+                fn_name
+            ));
         }
 
         if output.len() < 80 {
@@ -478,8 +513,15 @@ impl CodeTranslator {
         let mut depth = 0;
         let mut end = 0;
         for (i, c) in rest.char_indices() {
-            if c == '(' { depth += 1; }
-            else if c == ')' { depth -= 1; if depth == 0 { end = i; break; } }
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
         }
         if end > 0 {
             rest[1..end].to_string()

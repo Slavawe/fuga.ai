@@ -31,7 +31,9 @@ fn hash_basis(h: u64, dim: usize) -> Hypervector {
     let mut x = (h ^ 0x9E3779B97F4A7C15).wrapping_mul(0x5851F42D4C957F2D) as usize;
     let mut placed = 0u32;
     while placed < BASIS_ONES {
-        x = x.wrapping_mul(0x5851F42D4C957F2D).wrapping_add(0x14057B7EF767814F);
+        x = x
+            .wrapping_mul(0x5851F42D4C957F2D)
+            .wrapping_add(0x14057B7EF767814F);
         let bit = x % dim;
         hv.words[bit / 64] |= 1u64 << (bit % 64);
         placed += 1;
@@ -61,6 +63,40 @@ pub fn encode_bytes_nopos(bytes: &[u8], dim: usize) -> Hypervector {
     encode_bytes_impl(bytes, dim, false)
 }
 
+/// nopos encoder that drops n-grams shorter than `min_gram` bytes. Kept
+/// separate from the crystal path so the compact 1..=3-gram encoding (and all
+/// stored phases) stays untouched. The Tri-Anchor framework uses this variant
+/// because 1–2 byte grams (spaces, "a", "th") carry huge corpus-wide stopword
+/// crosstalk — they always land in the top-MAX_GRAMS content hashes and give
+/// any two unrelated phrases ~20% spurious overlap. Requiring >=3-byte grams
+/// cuts that floor in half while preserving real word-level overlap.
+pub fn encode_bytes_nopos_min3(bytes: &[u8], dim: usize) -> Hypervector {
+    encode_bytes_impl_min(bytes, dim, 3)
+}
+
+fn encode_bytes_impl_min(bytes: &[u8], dim: usize, min_gram: usize) -> Hypervector {
+    let mut acc = Hypervector::new(dim);
+    if bytes.is_empty() {
+        return acc;
+    }
+    let n = bytes.len();
+    let mut grams: Vec<(u64, usize)> = Vec::new();
+    for i in 0..n {
+        for w in min_gram..=NGRAM_MAX {
+            if i + w > n {
+                break;
+            }
+            grams.push((fnv1a(&bytes[i..i + w]), i));
+        }
+    }
+    grams.sort_by_key(|g| g.0);
+    grams.dedup_by_key(|g| g.0);
+    for &(hc, _s) in grams.iter().take(MAX_GRAMS) {
+        acc = acc.bind(&hash_basis(hc, dim));
+    }
+    acc
+}
+
 fn encode_bytes_impl(bytes: &[u8], dim: usize, positional: bool) -> Hypervector {
     let mut acc = Hypervector::new(dim);
     if bytes.is_empty() {
@@ -70,7 +106,9 @@ fn encode_bytes_impl(bytes: &[u8], dim: usize, positional: bool) -> Hypervector 
     let mut grams: Vec<(u64, usize)> = Vec::new(); // (content hash, start)
     for i in 0..n {
         for w in 1..=NGRAM_MAX {
-            if i + w > n { break; }
+            if i + w > n {
+                break;
+            }
             grams.push((fnv1a(&bytes[i..i + w]), i));
         }
     }
@@ -113,17 +151,27 @@ impl TokenBridge {
         let qones = query.words.iter().map(|w| w.count_ones()).sum::<u32>() as f64;
         let mut scored: Vec<(usize, f64)> = Vec::with_capacity(self.tokens.len());
         for (i, hv) in self.hvs.iter().enumerate() {
-            if self.tokens[i].len() < 2 { continue; }
-            let overlap: u32 = (0..qw).map(|w| (query.words[w] & hv.words[w]).count_ones()).sum();
+            if self.tokens[i].len() < 2 {
+                continue;
+            }
+            let overlap: u32 = (0..qw)
+                .map(|w| (query.words[w] & hv.words[w]).count_ones())
+                .sum();
             let tones = hv.words.iter().map(|w| w.count_ones()).sum::<u32>() as f64;
             let denom = (qones * tones).sqrt();
-            let res = if denom <= 0.0 { 0.0 } else { overlap as f64 / denom };
+            let res = if denom <= 0.0 {
+                0.0
+            } else {
+                overlap as f64 / denom
+            };
             if res > 0.0 {
                 scored.push((i, res));
             }
         }
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().take(top_k)
+        scored
+            .into_iter()
+            .take(top_k)
             .map(|(i, res)| (self.tokens[i].clone(), res))
             .collect()
     }

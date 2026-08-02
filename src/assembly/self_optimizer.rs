@@ -66,11 +66,16 @@ impl SelfOptimizer {
     pub fn diagnose(&mut self, tm: &TemporalMemory, cell_fatigue: &[u32]) -> &SystemDiagnosis {
         let total_segs: usize = tm.cells.iter().map(|c| c.segments.len()).sum();
         let active = tm.cells.len();
-        let stuck = cell_fatigue.iter().filter(|&&f| f > self.config.max_cell_fatigue / 2).count();
+        let stuck = cell_fatigue
+            .iter()
+            .filter(|&&f| f > self.config.max_cell_fatigue / 2)
+            .count();
         let max_fat = cell_fatigue.iter().max().copied().unwrap_or(0);
         let mean_fat = if !cell_fatigue.is_empty() {
             cell_fatigue.iter().sum::<u32>() as f64 / cell_fatigue.len() as f64
-        } else { 0.0 };
+        } else {
+            0.0
+        };
 
         let n = tm.cells.len().min(64);
         let mut bit_counts = vec![0u64; 64];
@@ -82,20 +87,33 @@ impl SelfOptimizer {
         let total_bits: u64 = bit_counts.iter().sum();
         let entropy = if n > 0 && total_bits > 0 {
             let mean = total_bits as f64 / n as f64;
-            let var: f64 = bit_counts.iter()
+            let var: f64 = bit_counts
+                .iter()
                 .map(|&c| (c as f64 - mean).powi(2))
-                .sum::<f64>() / bit_counts.len() as f64;
+                .sum::<f64>()
+                / bit_counts.len() as f64;
             let std_dev = var.sqrt();
-            if mean > 0.0 { (std_dev / mean).clamp(0.0, 1.0) } else { 1.0 }
-        } else { 1.0 };
+            if mean > 0.0 {
+                (std_dev / mean).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
 
         let diagnosis_text = if max_fat > self.config.max_cell_fatigue {
-            format!("WTA_LOCK: fatigue_max={} stuck={}/{}", max_fat, stuck, active)
+            format!(
+                "WTA_LOCK: fatigue_max={} stuck={}/{}",
+                max_fat, stuck, active
+            )
         } else if entropy < 0.3 {
             format!("LOW_ENTROPY: entropy={:.3} cells={}", entropy, active)
         } else {
-            format!("NOMINAL: cells={} segs={} fatigue={:.1}/{:.1} entropy={:.2}",
-                active, total_segs, mean_fat, max_fat as f64, entropy)
+            format!(
+                "NOMINAL: cells={} segs={} fatigue={:.1}/{:.1} entropy={:.2}",
+                active, total_segs, mean_fat, max_fat as f64, entropy
+            )
         };
 
         let d = SystemDiagnosis {
@@ -111,7 +129,9 @@ impl SelfOptimizer {
         };
         self.diagnosis = d.clone();
         self.history.push(d.clone());
-        if self.history.len() > 100 { self.history.remove(0); }
+        if self.history.len() > 100 {
+            self.history.remove(0);
+        }
         &self.diagnosis
     }
 
@@ -138,7 +158,9 @@ impl SelfOptimizer {
     }
 
     pub fn read_buffer_entropy(&self, buffer: &[crate::core::hypervector::Hypervector]) -> f64 {
-        if buffer.len() < 2 { return 0.5; }
+        if buffer.len() < 2 {
+            return 0.5;
+        }
         let mut diffs = Vec::new();
         for pair in buffer.windows(2) {
             let d = pair[0].hamming_distance(&pair[1]) as f64 / pair[0].dim as f64;
@@ -150,7 +172,9 @@ impl SelfOptimizer {
 
     pub fn summary(&self) -> String {
         let d = &self.diagnosis;
-        format!("[SELF-OPT] {} | fatigue={:.1}/{} entropy={:.2} adjustments={}",
-            d.diagnosis_text, d.fatigue_mean, d.fatigue_max, d.entropy, self.adjustment_count)
+        format!(
+            "[SELF-OPT] {} | fatigue={:.1}/{} entropy={:.2} adjustments={}",
+            d.diagnosis_text, d.fatigue_mean, d.fatigue_max, d.entropy, self.adjustment_count
+        )
     }
 }

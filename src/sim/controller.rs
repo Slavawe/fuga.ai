@@ -1,5 +1,5 @@
-use crate::core::wave_cube::WaveCube;
 use crate::core::hypervector::Hypervector;
+use crate::core::wave_cube::WaveCube;
 
 pub struct CubicController<const S: usize> {
     pub cube: WaveCube<3, S>,
@@ -89,7 +89,8 @@ impl<const S: usize> CubicController<S> {
         }
         let recent: Vec<f64> = self.phase_history.iter().rev().take(10).copied().collect();
         let mean: f64 = recent.iter().sum::<f64>() / recent.len() as f64;
-        let variance: f64 = recent.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / recent.len() as f64;
+        let variance: f64 =
+            recent.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / recent.len() as f64;
         (1.0 - variance.sqrt()).max(0.0)
     }
 }

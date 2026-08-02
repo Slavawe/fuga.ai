@@ -1,5 +1,5 @@
-pub mod plant;
 pub mod controller;
+pub mod plant;
 
-pub use plant::*;
 pub use controller::*;
+pub use plant::*;

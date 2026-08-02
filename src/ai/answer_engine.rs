@@ -1,8 +1,8 @@
-use crate::core::wave_cube::WaveCube;
-use crate::core::hypervector::Hypervector;
-use crate::weaver::pattern_matcher::TokenInfo;
-use crate::ai::memory_store::{MemoryStore, MemoryEntry};
 use crate::ai::FugaAI;
+use crate::ai::memory_store::{MemoryEntry, MemoryStore};
+use crate::core::hypervector::Hypervector;
+use crate::core::wave_cube::WaveCube;
+use crate::weaver::pattern_matcher::TokenInfo;
 use std::path::Path;
 
 pub struct AnswerEngine<const N: usize, const S: usize> {
@@ -41,10 +41,14 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
     pub fn search(&self, query: &str) -> AnswerResult {
         let route = self.route_query(query);
 
-        let tokens: Vec<TokenInfo> = query.split_whitespace().enumerate().map(|(_, w)| TokenInfo {
-            id: crate::weaver::token_id(&w),
-            text: w.to_string(),
-        }).collect();
+        let tokens: Vec<TokenInfo> = query
+            .split_whitespace()
+            .enumerate()
+            .map(|(_, w)| TokenInfo {
+                id: crate::weaver::token_id(&w),
+                text: w.to_string(),
+            })
+            .collect();
 
         let mut ai = FugaAI::<N, S>::new(self.dim, 3);
         ai.cube = self.cube.clone();
@@ -72,7 +76,8 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
 
         let query_owned = query.to_string();
         let mut seen = std::collections::HashSet::new();
-        let hits: Vec<AnswerHit> = all_hits.into_iter()
+        let hits: Vec<AnswerHit> = all_hits
+            .into_iter()
             .filter(|(_, doc, text)| {
                 let key = format!("{}::{}", doc, text);
                 seen.insert(key)
@@ -84,14 +89,31 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
                 } else {
                     None
                 };
-                let func_match = text.split(';').find(|part| {
-                    query_owned.split_whitespace().any(|w| part.to_lowercase().contains(&w.to_lowercase()))
-                }).unwrap_or("").trim().to_string();
-                AnswerHit { source_doc: doc, similarity: sim, text: func_match, snippet }
+                let func_match = text
+                    .split(';')
+                    .find(|part| {
+                        query_owned
+                            .split_whitespace()
+                            .any(|w| part.to_lowercase().contains(&w.to_lowercase()))
+                    })
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                AnswerHit {
+                    source_doc: doc,
+                    similarity: sim,
+                    text: func_match,
+                    snippet,
+                }
             })
             .collect();
 
-        AnswerResult { query: query_owned, route, hits, cube_entropy: entropy }
+        AnswerResult {
+            query: query_owned,
+            route,
+            hits,
+            cube_entropy: entropy,
+        }
     }
 
     pub fn search_with_prompts(&self, query: &str, prompt_names: &[String]) -> AnswerResult {
@@ -104,10 +126,14 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
 
         let route = self.route_query(query);
 
-        let tokens: Vec<TokenInfo> = query.split_whitespace().enumerate().map(|(_, w)| TokenInfo {
-            id: crate::weaver::token_id(&w),
-            text: w.to_string(),
-        }).collect();
+        let tokens: Vec<TokenInfo> = query
+            .split_whitespace()
+            .enumerate()
+            .map(|(_, w)| TokenInfo {
+                id: crate::weaver::token_id(&w),
+                text: w.to_string(),
+            })
+            .collect();
 
         let mut ai = FugaAI::<N, S>::new(self.dim, 3);
         ai.cube = self.cube.clone();
@@ -134,26 +160,41 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
 
         let query_owned = query.to_string();
         let mut seen = std::collections::HashSet::new();
-        let hits: Vec<AnswerHit> = all_hits.into_iter()
+        let hits: Vec<AnswerHit> = all_hits
+            .into_iter()
             .filter(|(_, doc, text)| {
                 let key = format!("{}::{}", doc, text);
                 seen.insert(key)
             })
             .take(10)
-            .map(|(sim, doc, text)| {
-                AnswerHit { source_doc: doc, similarity: sim, text, snippet: None }
+            .map(|(sim, doc, text)| AnswerHit {
+                source_doc: doc,
+                similarity: sim,
+                text,
+                snippet: None,
             })
             .collect();
 
-        AnswerResult { query: query_owned, route, hits, cube_entropy: entropy }
+        AnswerResult {
+            query: query_owned,
+            route,
+            hits,
+            cube_entropy: entropy,
+        }
     }
 
     fn route_query(&self, query: &str) -> String {
-        let code_keywords = ["fn ", "func ", "def ", "struct ", "class ", "impl ",
-            "int ", "void ", "char ", "return ", "static ", "pub ", "const ",
-            "let ", "mut ", "->", "=>", "::", "#include", "import "];
+        let code_keywords = [
+            "fn ", "func ", "def ", "struct ", "class ", "impl ", "int ", "void ", "char ",
+            "return ", "static ", "pub ", "const ", "let ", "mut ", "->", "=>", "::", "#include",
+            "import ",
+        ];
         let has_code = code_keywords.iter().any(|kw| query.contains(kw));
-        if has_code { "CodeLogic".to_string() } else { "GeneralLanguage".to_string() }
+        if has_code {
+            "CodeLogic".to_string()
+        } else {
+            "GeneralLanguage".to_string()
+        }
     }
 
     pub fn format_summary(&self, result: &AnswerResult) -> String {
@@ -171,7 +212,10 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
         }
 
         let top = &result.hits[0];
-        out.push_str(&format!("Top match: {} (sim={:.3})\n", top.source_doc, top.similarity));
+        out.push_str(&format!(
+            "Top match: {} (sim={:.3})\n",
+            top.source_doc, top.similarity
+        ));
         if let Some(ref snippet) = top.snippet {
             out.push_str("```\n");
             out.push_str(snippet);
@@ -223,7 +267,10 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
             .unwrap_or(std::borrow::Cow::Borrowed("?"));
 
         out.push_str(&format!("**Module:** `{}` ({})\n", file_name, parent));
-        out.push_str(&format!("**Resonance:** {:.3} (phase lock)\n", top.similarity));
+        out.push_str(&format!(
+            "**Resonance:** {:.3} (phase lock)\n",
+            top.similarity
+        ));
 
         if let Some(ref snippet) = top.snippet {
             let lang_hint = match Path::new(&top.source_doc)
@@ -239,7 +286,10 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
                 Some("cpp") | Some("cc") | Some("hpp") => "cpp",
                 _ => "",
             };
-            out.push_str(&format!("**Key fragment:**\n```{}\n{}\n```\n", lang_hint, snippet));
+            out.push_str(&format!(
+                "**Key fragment:**\n```{}\n{}\n```\n",
+                lang_hint, snippet
+            ));
         }
 
         if result.hits.len() > 1 {
@@ -253,14 +303,22 @@ impl<const N: usize, const S: usize> AnswerEngine<N, S> {
             }
         }
 
-        out.push_str(&format!("\n*Status: phase-locked at entropy {:.4}*\n", result.cube_entropy));
+        out.push_str(&format!(
+            "\n*Status: phase-locked at entropy {:.4}*\n",
+            result.cube_entropy
+        ));
         out
     }
 }
 
-fn search_memory_by_words<'a>(memory: &'a MemoryStore, query: &str, top_k: usize) -> Vec<(usize, f64, &'a MemoryEntry)> {
+fn search_memory_by_words<'a>(
+    memory: &'a MemoryStore,
+    query: &str,
+    top_k: usize,
+) -> Vec<(usize, f64, &'a MemoryEntry)> {
     let query_lower = query.to_lowercase();
-    let words: Vec<&str> = query_lower.split_whitespace()
+    let words: Vec<&str> = query_lower
+        .split_whitespace()
         .filter(|w| w.len() > 2)
         .collect();
 
@@ -268,7 +326,10 @@ fn search_memory_by_words<'a>(memory: &'a MemoryStore, query: &str, top_k: usize
         return memory.search_by_text(query, top_k);
     }
 
-    let mut scores: Vec<(usize, f64, usize)> = memory.all_entries().iter().enumerate()
+    let mut scores: Vec<(usize, f64, usize)> = memory
+        .all_entries()
+        .iter()
+        .enumerate()
         .map(|(i, e)| {
             let source_lower = e.source_doc.to_lowercase();
             let fname = std::path::Path::new(&e.source_doc)
@@ -277,8 +338,10 @@ fn search_memory_by_words<'a>(memory: &'a MemoryStore, query: &str, top_k: usize
                 .unwrap_or("")
                 .to_lowercase();
             let mut match_count = 0;
-            let is_source = source_lower.ends_with(".c") || source_lower.ends_with(".rs")
-                || source_lower.ends_with(".go") || source_lower.ends_with(".py");
+            let is_source = source_lower.ends_with(".c")
+                || source_lower.ends_with(".rs")
+                || source_lower.ends_with(".go")
+                || source_lower.ends_with(".py");
             for w in &words {
                 if fname.contains(w) {
                     match_count += 5;
@@ -294,22 +357,31 @@ fn search_memory_by_words<'a>(memory: &'a MemoryStore, query: &str, top_k: usize
             if is_source {
                 match_count += 2;
             }
-            (i, match_count as f64 / (words.len() as f64 * 11.0 + 2.0), match_count)
+            (
+                i,
+                match_count as f64 / (words.len() as f64 * 11.0 + 2.0),
+                match_count,
+            )
         })
         .collect();
 
     scores.sort_by(|a, b| b.2.cmp(&a.2));
     scores.truncate(top_k);
-    let mut results: Vec<(usize, f64, &MemoryEntry)> = scores.into_iter()
+    let mut results: Vec<(usize, f64, &MemoryEntry)> = scores
+        .into_iter()
         .filter(|(_, _, total)| *total > 0)
         .map(|(i, s, _)| (i, s.min(1.0), &memory.all_entries()[i]))
         .collect();
     results.sort_by(|a, b| {
         b.1.partial_cmp(&a.1).unwrap().then_with(|| {
-            let a_src = a.2.source_doc.ends_with(".c") || a.2.source_doc.ends_with(".rs")
-                || a.2.source_doc.ends_with(".go") || a.2.source_doc.ends_with(".py");
-            let b_src = b.2.source_doc.ends_with(".c") || b.2.source_doc.ends_with(".rs")
-                || b.2.source_doc.ends_with(".go") || b.2.source_doc.ends_with(".py");
+            let a_src = a.2.source_doc.ends_with(".c")
+                || a.2.source_doc.ends_with(".rs")
+                || a.2.source_doc.ends_with(".go")
+                || a.2.source_doc.ends_with(".py");
+            let b_src = b.2.source_doc.ends_with(".c")
+                || b.2.source_doc.ends_with(".rs")
+                || b.2.source_doc.ends_with(".go")
+                || b.2.source_doc.ends_with(".py");
             b_src.cmp(&a_src)
         })
     });
@@ -321,7 +393,10 @@ fn extract_relevant_snippet(file_path: &str, query_text: &str) -> Option<String>
 
     let lang = lang_from_extension(file_path);
     let query_lower = query_text.to_lowercase();
-    let query_words: Vec<&str> = query_lower.split_whitespace().filter(|w| w.len() > 1).collect();
+    let query_words: Vec<&str> = query_lower
+        .split_whitespace()
+        .filter(|w| w.len() > 1)
+        .collect();
     if query_words.is_empty() {
         return None;
     }
@@ -339,8 +414,10 @@ fn extract_relevant_snippet(file_path: &str, query_text: &str) -> Option<String>
     for (i, l) in lines.iter().enumerate() {
         let lower = l.to_lowercase();
         let score: usize = query_words.iter().map(|kw| lower.matches(kw).count()).sum();
-        let is_comment = lower.trim_start().starts_with("//") || lower.trim_start().starts_with("/*")
-            || lower.trim_start().starts_with("#") || lower.trim_start().starts_with('*');
+        let is_comment = lower.trim_start().starts_with("//")
+            || lower.trim_start().starts_with("/*")
+            || lower.trim_start().starts_with("#")
+            || lower.trim_start().starts_with('*');
         let adjusted = if is_comment { score / 2 } else { score * 2 };
         if adjusted > best_score {
             best_score = adjusted;
@@ -374,7 +451,11 @@ fn extract_relevant_snippet(file_path: &str, query_text: &str) -> Option<String>
         let truncated: String = snippet.chars().take(2000).collect();
         return Some(format!("{}...\n--- (truncated) ---", truncated));
     }
-    if snippet.trim().is_empty() { None } else { Some(snippet) }
+    if snippet.trim().is_empty() {
+        None
+    } else {
+        Some(snippet)
+    }
 }
 
 fn lang_from_extension(path: &str) -> Option<crate::multi::LanguageId> {
@@ -382,7 +463,11 @@ fn lang_from_extension(path: &str) -> Option<crate::multi::LanguageId> {
     crate::multi::LanguageId::from_extension(ext)
 }
 
-fn extract_ast_node(content: &str, lang: crate::multi::LanguageId, query_words: &[&str]) -> Option<String> {
+fn extract_ast_node(
+    content: &str,
+    lang: crate::multi::LanguageId,
+    query_words: &[&str],
+) -> Option<String> {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&lang.tree_sitter_language()).ok()?;
     let tree = parser.parse(content, None)?;
@@ -391,12 +476,21 @@ fn extract_ast_node(content: &str, lang: crate::multi::LanguageId, query_words: 
     let func_kinds = lang.function_kinds();
     let struct_kinds: &[&str] = match lang {
         crate::multi::LanguageId::Rust => &["struct_item", "impl_item", "trait_item", "enum_item"],
-        crate::multi::LanguageId::C | crate::multi::LanguageId::Cpp => &["struct_specifier", "enum_specifier"],
+        crate::multi::LanguageId::C | crate::multi::LanguageId::Cpp => {
+            &["struct_specifier", "enum_specifier"]
+        }
         _ => &["class_declaration", "struct_specifier"],
     };
 
     let mut candidates: Vec<(String, usize)> = Vec::new();
-    collect_ast_nodes_recursive(root, content, func_kinds, struct_kinds, query_words, &mut candidates);
+    collect_ast_nodes_recursive(
+        root,
+        content,
+        func_kinds,
+        struct_kinds,
+        query_words,
+        &mut candidates,
+    );
 
     if candidates.is_empty() {
         return None;
@@ -410,7 +504,11 @@ fn extract_ast_node(content: &str, lang: crate::multi::LanguageId, query_words: 
     let display: String = lines[..display_lines].join("\n");
 
     if display.len() > 2000 {
-        Some(format!("{}...\n--- (truncated, {} lines) ---", &display[..2000], lines.len()))
+        Some(format!(
+            "{}...\n--- (truncated, {} lines) ---",
+            &display[..2000],
+            lines.len()
+        ))
     } else {
         Some(display)
     }
@@ -438,7 +536,14 @@ fn collect_ast_nodes_recursive(
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_ast_nodes_recursive(child, source, func_kinds, struct_kinds, query_words, candidates);
+        collect_ast_nodes_recursive(
+            child,
+            source,
+            func_kinds,
+            struct_kinds,
+            query_words,
+            candidates,
+        );
     }
 }
 

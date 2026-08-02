@@ -48,17 +48,11 @@ pub fn hypervector_to_byte_payload(hv: &Hypervector) -> Vec<u8> {
 pub fn build_radiotap_frame(payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(128 + payload.len());
 
-    frame.extend_from_slice(&[
-        0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ]);
+    frame.extend_from_slice(&[0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]);
 
     frame.extend_from_slice(&[
-        0x08, 0x00,
-        0x00, 0x00,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0x46, 0x75, 0x67, 0x61, 0x00, 0x01,
-        0x46, 0x75, 0x67, 0x61, 0x00, 0x01,
-        0x00, 0x00,
+        0x08, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x46, 0x75, 0x67, 0x61, 0x00,
+        0x01, 0x46, 0x75, 0x67, 0x61, 0x00, 0x01, 0x00, 0x00,
     ]);
 
     frame.extend_from_slice(payload);
@@ -67,10 +61,14 @@ pub fn build_radiotap_frame(payload: &[u8]) -> Vec<u8> {
 }
 
 pub fn decode_radiotap_frame(frame: &[u8]) -> Option<Vec<u8>> {
-    if frame.len() < 30 { return None; }
+    if frame.len() < 30 {
+        return None;
+    }
     let radiotap_len = u16::from_le_bytes([frame[2], frame[3]]) as usize;
     let data_start = radiotap_len + 24;
-    if data_start >= frame.len() { return None; }
+    if data_start >= frame.len() {
+        return None;
+    }
     Some(frame[data_start..].to_vec())
 }
 

@@ -1,4 +1,4 @@
-use super::{Reporter, FileAnalysisResult, WorkspaceStats};
+use super::{FileAnalysisResult, Reporter, WorkspaceStats};
 
 pub struct HtmlReporter;
 
@@ -23,7 +23,10 @@ impl Reporter for HtmlReporter {
         // Header
         html.push_str("<div class=\"header\">\n");
         html.push_str("<h1>🎵 Fuga 1.0 — Analysis Report</h1>\n");
-        html.push_str(&format!("<p class=\"subtitle\">Generated: {}</p>\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
+        html.push_str(&format!(
+            "<p class=\"subtitle\">Generated: {}</p>\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ));
         html.push_str("</div>\n");
 
         // Summary
@@ -40,7 +43,11 @@ impl Reporter for HtmlReporter {
         html.push_str("</div>\n");
 
         if let Some((path, score)) = &stats.worst_file {
-            html.push_str(&format!("<p class=\"worst-file\">⚠️ Worst file: <code>{}</code> (safety: {:.1}%)</p>\n", path, score * 100.0));
+            html.push_str(&format!(
+                "<p class=\"worst-file\">⚠️ Worst file: <code>{}</code> (safety: {:.1}%)</p>\n",
+                path,
+                score * 100.0
+            ));
         }
 
         html.push_str("</div>\n");
@@ -57,7 +64,13 @@ impl Reporter for HtmlReporter {
 
             let result = &file_result.result;
             let safety = result.safety_score();
-            let safety_class = if safety > 0.8 { "good" } else if safety > 0.5 { "warning" } else { "bad" };
+            let safety_class = if safety > 0.8 {
+                "good"
+            } else if safety > 0.5 {
+                "warning"
+            } else {
+                "bad"
+            };
 
             html.push_str(&format!("<div class=\"file {}\">\n", safety_class));
             html.push_str(&format!("<h3>{}</h3>\n", file_result.file_path));
@@ -75,8 +88,10 @@ impl Reporter for HtmlReporter {
             if !violations.is_empty() {
                 html.push_str("<ul class=\"violations\">\n");
                 for v in &violations {
-                    html.push_str(&format!("<li><span class=\"sev-{}\">{}</span>: {}</li>\n", 
-                        v.severity, v.kind, v.message));
+                    html.push_str(&format!(
+                        "<li><span class=\"sev-{}\">{}</span>: {}</li>\n",
+                        v.severity, v.kind, v.message
+                    ));
                 }
                 html.push_str("</ul>\n");
             }
@@ -85,7 +100,10 @@ impl Reporter for HtmlReporter {
             // Layer 2: Semantics
             html.push_str("<div class=\"layer\">\n");
             html.push_str("<h4>Layer 2: Semantics & VSA</h4>\n");
-            html.push_str(&format!("<p>Coherence: {:.1}%</p>\n", result.coherence() * 100.0));
+            html.push_str(&format!(
+                "<p>Coherence: {:.1}%</p>\n",
+                result.coherence() * 100.0
+            ));
             html.push_str(&format!("<p>Anomalies: {}</p>\n", result.anomalies_count()));
             html.push_str("</div>\n");
 
@@ -97,8 +115,12 @@ impl Reporter for HtmlReporter {
             if !attacks.is_empty() {
                 html.push_str("<ul class=\"attacks\">\n");
                 for a in &attacks {
-                    html.push_str(&format!("<li>{} (priority: {:.0}%): {}</li>\n", 
-                        a.kind, a.priority * 100.0, a.description));
+                    html.push_str(&format!(
+                        "<li>{} (priority: {:.0}%): {}</li>\n",
+                        a.kind,
+                        a.priority * 100.0,
+                        a.description
+                    ));
                 }
                 html.push_str("</ul>\n");
             }
@@ -109,9 +131,15 @@ impl Reporter for HtmlReporter {
                 html.push_str("<div class=\"synthesis\">\n");
                 html.push_str("<h4>Fuga Synthesis</h4>\n");
                 if result.bug_detected() {
-                    html.push_str(&format!("<p class=\"bug-detected\">🐛 BUG DETECTED (confidence: {:.1}%)</p>\n", result.bug_confidence() * 100.0));
+                    html.push_str(&format!(
+                        "<p class=\"bug-detected\">🐛 BUG DETECTED (confidence: {:.1}%)</p>\n",
+                        result.bug_confidence() * 100.0
+                    ));
                 } else {
-                    html.push_str(&format!("<p class=\"clean\">✅ CLEAN (score: {:.1}%)</p>\n", result.bug_confidence() * 100.0));
+                    html.push_str(&format!(
+                        "<p class=\"clean\">✅ CLEAN (score: {:.1}%)</p>\n",
+                        result.bug_confidence() * 100.0
+                    ));
                 }
                 let desc = result.counterpoint_description();
                 if !desc.is_empty() {

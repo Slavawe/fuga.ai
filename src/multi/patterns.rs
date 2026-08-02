@@ -40,22 +40,22 @@ pub enum ViolationPattern {
     DivisionByZero,
     ArrayIndexOutOfBounds,
     IntegerOverflow,
-    
+
     // Control flow
     InfiniteLoop,
     MissingBreak,
     DeepRecursion,
-    
+
     // Memory
     UseAfterFree,
     DoubleFree,
     UninitializedMemory,
     BufferOverflow,
-    
+
     // Concurrency
     RaceCondition,
     DeadlockRisk,
-    
+
     // Security
     SqlInjection,
     CommandInjection,
@@ -63,7 +63,7 @@ pub enum ViolationPattern {
     PathTraversal,
     HardcodedSecret,
     WeakRandomness,
-    
+
     // Quality
     PanicInDrop,
     UnusedMustUseResult,
@@ -73,7 +73,9 @@ pub enum ViolationPattern {
 
 impl ViolationPattern {
     /// Все паттерны для итерации
-    pub fn iter_all() -> &'static [ViolationPattern] { ALL_PATTERNS }
+    pub fn iter_all() -> &'static [ViolationPattern] {
+        ALL_PATTERNS
+    }
 
     /// Возвращает tree-sitter query для конкретного языка
     pub fn query(&self, lang: LanguageId) -> Option<&'static str> {
@@ -128,7 +130,7 @@ lazy_static::lazy_static! {
         let mut m = HashMap::new();
 
         // ===== RUST =====
-        m.insert((ViolationPattern::UnsafeBlock, LanguageId::Rust), 
+        m.insert((ViolationPattern::UnsafeBlock, LanguageId::Rust),
             "(unsafe_block) @violation");
         m.insert((ViolationPattern::UnwrapOrExpect, LanguageId::Rust),
             "(call_expression
@@ -176,7 +178,7 @@ lazy_static::lazy_static! {
             )");
 
         // ===== C / C++ =====
-        m.insert((ViolationPattern::UnsafeBlock, LanguageId::C), 
+        m.insert((ViolationPattern::UnsafeBlock, LanguageId::C),
             "// C has no explicit unsafe, but we check for risky patterns
             (call_expression
                 function: (identifier) @func
@@ -334,7 +336,7 @@ lazy_static::lazy_static! {
                     value: (string) @violation
                 )
             )");
-        m.insert((ViolationPattern::UnsafeBlock, LanguageId::TypeScript), 
+        m.insert((ViolationPattern::UnsafeBlock, LanguageId::TypeScript),
             "// TypeScript: look for eval, Function constructor
             (call_expression
                 function: (identifier) @func

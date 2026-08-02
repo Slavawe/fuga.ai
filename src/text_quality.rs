@@ -75,9 +75,16 @@ impl TextQualityFilter {
 
         let sentence_coherence = compute_sentence_coherence(&sentences);
 
-        let has_cap_start = sentences.iter()
+        let has_cap_start = sentences
+            .iter()
             .filter(|s| !s.trim().is_empty())
-            .filter(|s| s.trim().chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+            .filter(|s| {
+                s.trim()
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+            })
             .count();
         let cap_ratio = if good_sentences > 0 {
             has_cap_start as f64 / good_sentences as f64
@@ -119,15 +126,25 @@ impl TextQualityFilter {
             0.0
         };
 
-        let cap_bonus = if cap_ratio > 0.6 { 0.1 } else if cap_ratio > 0.3 { 0.05 } else { 0.0 };
+        let cap_bonus = if cap_ratio > 0.6 {
+            0.1
+        } else if cap_ratio > 0.3 {
+            0.05
+        } else {
+            0.0
+        };
         let coherence_bonus = (sentence_coherence * 0.2).min(0.2);
 
-        let semantic_reward = ((1.0 - collage_risk) * 0.4 + sentence_coherence * 0.3
-            + cap_bonus + coherence_bonus).min(1.0);
+        let semantic_reward =
+            ((1.0 - collage_risk) * 0.4 + sentence_coherence * 0.3 + cap_bonus + coherence_bonus)
+                .min(1.0);
 
-        let raw_weight = (((1.0f64 - collage_penalty) * (1.0f64 - noise_penalty)
-            * (1.0f64 - violation_penalty) * (1.0f64 - tt_penalty))
-            .clamp(0.0, 1.0)) * safety;
+        let raw_weight = (((1.0f64 - collage_penalty)
+            * (1.0f64 - noise_penalty)
+            * (1.0f64 - violation_penalty)
+            * (1.0f64 - tt_penalty))
+            .clamp(0.0, 1.0))
+            * safety;
 
         let weight = if raw_weight > 0.0 {
             match source_type {
@@ -142,8 +159,14 @@ impl TextQualityFilter {
 
         let summary = format!(
             "{}: sentences={} safe={:.2} collage={:.2} coherence={:.2} reward={:.2} v={} → w={:.2}",
-            source_type.name(), sentence_count, safety, collage_risk,
-            sentence_coherence, semantic_reward, violations, weight,
+            source_type.name(),
+            sentence_count,
+            safety,
+            collage_risk,
+            sentence_coherence,
+            semantic_reward,
+            violations,
+            weight,
         );
 
         TextQualityScore {
@@ -159,27 +182,47 @@ impl TextQualityFilter {
         }
     }
 
-    pub fn scan_directory(&mut self, dir: &str, recursive: bool) -> Result<Vec<(String, TextQualityScore)>, String> {
+    pub fn scan_directory(
+        &mut self,
+        dir: &str,
+        recursive: bool,
+    ) -> Result<Vec<(String, TextQualityScore)>, String> {
         use walkdir::WalkDir;
         let mut results = Vec::new();
         let walker = if recursive {
             WalkDir::new(dir).follow_links(true).into_iter()
         } else {
-            WalkDir::new(dir).follow_links(true).max_depth(1).into_iter()
+            WalkDir::new(dir)
+                .follow_links(true)
+                .max_depth(1)
+                .into_iter()
         };
 
         for entry in walker.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if !path.is_file() { continue; }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-            let is_text = matches!(ext.as_str(), "txt" | "jsonl" | "csv" | "srt" | "md" | "html" | "xml" | "text");
-            if !is_text { continue; }
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let is_text = matches!(
+                ext.as_str(),
+                "txt" | "jsonl" | "csv" | "srt" | "md" | "html" | "xml" | "text"
+            );
+            if !is_text {
+                continue;
+            }
 
             let source = match std::fs::read_to_string(path) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if source.len() < 20 { continue; }
+            if source.len() < 20 {
+                continue;
+            }
 
             let path_str = path.to_string_lossy().to_string();
             let source_type = detect_source_type(&path_str, &source);
@@ -233,7 +276,9 @@ fn compute_collage_risk(words: &[&str]) -> f64 {
 
     let mut word_freq: HashMap<&str, usize> = HashMap::new();
     for w in words {
-        let w = w.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase();
+        let w = w
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase();
         if !w.is_empty() {
             *word_freq.entry(Box::leak(w.into_boxed_str())).or_insert(0) += 1;
         }
@@ -248,13 +293,21 @@ fn compute_collage_risk(words: &[&str]) -> f64 {
     let repeat_ratio = top_repeat as f64 / word_freq.len() as f64;
 
     let max_freq = *word_freq.values().max().unwrap_or(&1) as f64;
-    let max_ratio = if words.len() > 1 { max_freq / total } else { 0.0 };
+    let max_ratio = if words.len() > 1 {
+        max_freq / total
+    } else {
+        0.0
+    };
 
     let mut bigram_repeat = 0;
     let mut bigrams: HashMap<(String, String), usize> = HashMap::new();
     for pair in words.windows(2) {
-        let a = pair[0].trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase();
-        let b = pair[1].trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase();
+        let a = pair[0]
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase();
+        let b = pair[1]
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase();
         if !a.is_empty() && !b.is_empty() {
             *bigrams.entry((a, b)).or_insert(0) += 1;
         }
@@ -291,7 +344,11 @@ fn compute_char_entropy(text: &str) -> f64 {
 }
 
 fn compute_sentence_coherence(sentences: &[String]) -> f64 {
-    let non_empty: Vec<&str> = sentences.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let non_empty: Vec<&str> = sentences
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
     if non_empty.len() < 2 {
         return 0.5;
     }
@@ -321,9 +378,14 @@ fn calculate_text_safety(text: &str, words: &[&str], _sentences: &[String]) -> f
     let mut safety = 1.0;
 
     let toxic_patterns = [
-        "http://", "https://", "www.",
-        "<script", "<?php", "javascript:",
-        "\x00", "\r\n\r\n",
+        "http://",
+        "https://",
+        "www.",
+        "<script",
+        "<?php",
+        "javascript:",
+        "\x00",
+        "\r\n\r\n",
     ];
     for pat in &toxic_patterns {
         if text.contains(pat) {
@@ -331,17 +393,20 @@ fn calculate_text_safety(text: &str, words: &[&str], _sentences: &[String]) -> f
         }
     }
 
-    let gibberish_chars = words.iter().filter(|w| {
-        let w = w.trim_matches(|c: char| c.is_ascii_punctuation());
-        if w.len() > 15 && w.chars().all(|c| c.is_alphabetic()) {
-            return true;
-        }
-        let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
-        if w.len() > 3 && alpha == 0 {
-            return true;
-        }
-        false
-    }).count();
+    let gibberish_chars = words
+        .iter()
+        .filter(|w| {
+            let w = w.trim_matches(|c: char| c.is_ascii_punctuation());
+            if w.len() > 15 && w.chars().all(|c| c.is_alphabetic()) {
+                return true;
+            }
+            let alpha = w.chars().filter(|c| c.is_alphabetic()).count();
+            if w.len() > 3 && alpha == 0 {
+                return true;
+            }
+            false
+        })
+        .count();
 
     if gibberish_chars > words.len() / 3 {
         safety *= 0.3;
@@ -349,12 +414,17 @@ fn calculate_text_safety(text: &str, words: &[&str], _sentences: &[String]) -> f
         safety *= 0.6;
     }
 
-    let repeated_chars = words.iter().filter(|w| {
-        let w = w.trim_matches(|c: char| c.is_ascii_punctuation());
-        if w.len() < 3 { return false; }
-        let chars: Vec<char> = w.chars().collect();
-        chars.windows(3).any(|c| c[0] == c[1] && c[1] == c[2])
-    }).count();
+    let repeated_chars = words
+        .iter()
+        .filter(|w| {
+            let w = w.trim_matches(|c: char| c.is_ascii_punctuation());
+            if w.len() < 3 {
+                return false;
+            }
+            let chars: Vec<char> = w.chars().collect();
+            chars.windows(3).any(|c| c[0] == c[1] && c[1] == c[2])
+        })
+        .count();
     if repeated_chars > words.len() / 4 {
         safety *= 0.5;
     }
@@ -371,23 +441,36 @@ fn detect_source_type(path: &str, content: &str) -> TextSourceType {
         + content.matches(" - ").count()
         + content.matches('»').count()
         + content.matches('«').count();
-    let quote_lines = content.lines()
-        .filter(|l| l.trim().starts_with('"') || l.trim().starts_with('—') || l.trim().starts_with('-'))
+    let quote_lines = content
+        .lines()
+        .filter(|l| {
+            l.trim().starts_with('"') || l.trim().starts_with('—') || l.trim().starts_with('-')
+        })
         .count();
     let _colons = content.matches(':').count();
 
-    if (dialogue_markers > 5 || quote_lines > 3) && (dialogue_markers + quote_lines) as f64 > content.lines().count() as f64 * 0.3 {
+    if (dialogue_markers > 5 || quote_lines > 3)
+        && (dialogue_markers + quote_lines) as f64 > content.lines().count() as f64 * 0.3
+    {
         return TextSourceType::Dialogue;
     }
 
     let path_lower = path.to_lowercase();
-    if path_lower.contains("subtitle") || path_lower.contains("srt") || path_lower.contains("dialog") {
+    if path_lower.contains("subtitle")
+        || path_lower.contains("srt")
+        || path_lower.contains("dialog")
+    {
         return TextSourceType::Dialogue;
     }
-    if path_lower.contains("forum") || path_lower.contains("reddit") || path_lower.contains("habr") || path_lower.contains("stack") {
+    if path_lower.contains("forum")
+        || path_lower.contains("reddit")
+        || path_lower.contains("habr")
+        || path_lower.contains("stack")
+    {
         return TextSourceType::Forum;
     }
-    if path_lower.contains("poem") || path_lower.contains("poetry") || path_lower.contains("стих") {
+    if path_lower.contains("poem") || path_lower.contains("poetry") || path_lower.contains("стих")
+    {
         return TextSourceType::Poetry;
     }
 
@@ -397,7 +480,8 @@ fn detect_source_type(path: &str, content: &str) -> TextSourceType {
 pub fn extract_dialogue_pairs(content: &str) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
     let mut context = String::new();
-    let lines: Vec<&str> = content.lines()
+    let lines: Vec<&str> = content
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
@@ -405,25 +489,40 @@ pub fn extract_dialogue_pairs(content: &str) -> Vec<(String, String)> {
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
-        let is_speech = line.starts_with('"') || line.starts_with('—') || line.starts_with('-')
-            || line.starts_with('«') || line.starts_with('»')
+        let is_speech = line.starts_with('"')
+            || line.starts_with('—')
+            || line.starts_with('-')
+            || line.starts_with('«')
+            || line.starts_with('»')
             || line.contains(':') && line.len() < 200;
 
         if is_speech {
             if !context.is_empty() && context.len() < 500 {
-                let response = line.trim_matches('"').trim()
-                    .trim_start_matches('—').trim()
-                    .trim_start_matches('-').trim()
-                    .trim_start_matches('«').trim_end_matches('»').trim()
+                let response = line
+                    .trim_matches('"')
+                    .trim()
+                    .trim_start_matches('—')
+                    .trim()
+                    .trim_start_matches('-')
+                    .trim()
+                    .trim_start_matches('«')
+                    .trim_end_matches('»')
+                    .trim()
                     .to_string();
                 if !response.is_empty() && response.len() > 3 {
                     pairs.push((context.clone(), response));
                 }
             }
-            let clean = line.trim_matches('"').trim()
-                .trim_start_matches('—').trim()
-                .trim_start_matches('-').trim()
-                .trim_start_matches('«').trim_end_matches('»').trim()
+            let clean = line
+                .trim_matches('"')
+                .trim()
+                .trim_start_matches('—')
+                .trim()
+                .trim_start_matches('-')
+                .trim()
+                .trim_start_matches('«')
+                .trim_end_matches('»')
+                .trim()
                 .to_string();
             if !clean.is_empty() {
                 context = clean;
@@ -441,18 +540,36 @@ pub fn extract_dialogue_pairs(content: &str) -> Vec<(String, String)> {
 pub fn summarize_text_quality(results: &[(String, TextQualityScore)]) -> String {
     let total = results.len();
     let high = results.iter().filter(|(_, s)| s.weight >= 0.8).count();
-    let medium = results.iter().filter(|(_, s)| s.weight >= 0.4 && s.weight < 0.8).count();
-    let low = results.iter().filter(|(_, s)| s.weight > 0.0 && s.weight < 0.4).count();
+    let medium = results
+        .iter()
+        .filter(|(_, s)| s.weight >= 0.4 && s.weight < 0.8)
+        .count();
+    let low = results
+        .iter()
+        .filter(|(_, s)| s.weight > 0.0 && s.weight < 0.4)
+        .count();
     let blocked = results.iter().filter(|(_, s)| s.weight == 0.0).count();
 
     let avg_weight: f64 = results.iter().map(|(_, s)| s.weight).sum::<f64>() / total.max(1) as f64;
-    let avg_coherence: f64 = results.iter().map(|(_, s)| s.coherence).sum::<f64>() / total.max(1) as f64;
-    let avg_collage: f64 = results.iter().map(|(_, s)| s.collage_risk).sum::<f64>() / total.max(1) as f64;
-    let avg_reward: f64 = results.iter().map(|(_, s)| s.semantic_reward).sum::<f64>() / total.max(1) as f64;
+    let avg_coherence: f64 =
+        results.iter().map(|(_, s)| s.coherence).sum::<f64>() / total.max(1) as f64;
+    let avg_collage: f64 =
+        results.iter().map(|(_, s)| s.collage_risk).sum::<f64>() / total.max(1) as f64;
+    let avg_reward: f64 =
+        results.iter().map(|(_, s)| s.semantic_reward).sum::<f64>() / total.max(1) as f64;
 
-    let dialogue_count = results.iter().filter(|(_, s)| s.source_type == TextSourceType::Dialogue).count();
-    let narrative_count = results.iter().filter(|(_, s)| s.source_type == TextSourceType::Narrative).count();
-    let forum_count = results.iter().filter(|(_, s)| s.source_type == TextSourceType::Forum).count();
+    let dialogue_count = results
+        .iter()
+        .filter(|(_, s)| s.source_type == TextSourceType::Dialogue)
+        .count();
+    let narrative_count = results
+        .iter()
+        .filter(|(_, s)| s.source_type == TextSourceType::Narrative)
+        .count();
+    let forum_count = results
+        .iter()
+        .filter(|(_, s)| s.source_type == TextSourceType::Forum)
+        .count();
 
     let mut out = String::new();
     out.push_str(&format!("Text files:  {}\n", total));
@@ -462,7 +579,11 @@ pub fn summarize_text_quality(results: &[(String, TextQualityScore)]) -> String 
     out.push_str(&format!("  High (w≥0.8):   {}\n", high));
     out.push_str(&format!("  Med (0.4≤w<0.8): {}\n", medium));
     out.push_str(&format!("  Low (0<w<0.4):  {}\n", low));
-    out.push_str(&format!("  Blocked (w=0):  {} ({:.0}%)\n", blocked, blocked as f64 / total.max(1) as f64 * 100.0));
+    out.push_str(&format!(
+        "  Blocked (w=0):  {} ({:.0}%)\n",
+        blocked,
+        blocked as f64 / total.max(1) as f64 * 100.0
+    ));
     out.push_str(&format!("Avg weight:    {:.3}\n", avg_weight));
     out.push_str(&format!("Avg coherence: {:.3}\n", avg_coherence));
     out.push_str(&format!("Avg collage:   {:.3}\n", avg_collage));

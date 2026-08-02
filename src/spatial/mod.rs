@@ -1,7 +1,7 @@
+pub mod controller;
+pub mod room;
 pub mod sensor;
 pub mod world;
-pub mod room;
-pub mod controller;
 
 pub struct SpatialObservation {
     pub depth_map: Vec<f64>,

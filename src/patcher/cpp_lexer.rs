@@ -9,7 +9,9 @@ pub fn parse_cpp_file(source: &str) -> Vec<CppChunk> {
     let mut chunks = Vec::new();
     for block in source.split("\n\n") {
         let trimmed = block.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let is_simd = trimmed.contains("AVX")
             || trimmed.contains("NEON")
             || trimmed.contains("_mm")

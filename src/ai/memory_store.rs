@@ -1,8 +1,6 @@
-
-
+use crate::ai::hnsw::VsaIndex;
 use crate::core::hypervector::Hypervector;
 use crate::weaver::super_token::SuperToken;
-use crate::ai::hnsw::VsaIndex;
 use std::collections::{HashMap, HashSet};
 
 pub const NUM_ATTRACTORS: usize = 64;
@@ -21,7 +19,9 @@ impl AttractorIndex {
         let mut clusters = vec![Vec::new(); NUM_ATTRACTORS];
 
         for (i, entry) in entries.iter().enumerate() {
-            let best = attractors.iter().enumerate()
+            let best = attractors
+                .iter()
+                .enumerate()
                 .map(|(ai, a)| (ai, entry.vector.similarity(a)))
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                 .map(|(ai, _)| ai)
@@ -30,8 +30,11 @@ impl AttractorIndex {
         }
 
         for ai in 0..NUM_ATTRACTORS {
-            if clusters[ai].is_empty() { continue; }
-            let ref_vecs: Vec<&Hypervector> = clusters[ai].iter()
+            if clusters[ai].is_empty() {
+                continue;
+            }
+            let ref_vecs: Vec<&Hypervector> = clusters[ai]
+                .iter()
                 .map(|&idx| &entries[idx as usize].vector)
                 .collect();
             let centroid = ref_vecs[0].bundle(&ref_vecs[1..]);
@@ -41,7 +44,9 @@ impl AttractorIndex {
         let mut reassign = vec![Vec::new(); NUM_ATTRACTORS];
         for ci in 0..NUM_ATTRACTORS {
             for &ei in &clusters[ci] {
-                let best = attractors.iter().enumerate()
+                let best = attractors
+                    .iter()
+                    .enumerate()
                     .map(|(ai, a)| (ai, entries[ei as usize].vector.similarity(a)))
                     .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
                     .map(|(ai, _)| ai)
@@ -50,11 +55,23 @@ impl AttractorIndex {
             }
         }
 
-        Self { attractors, clusters: reassign }
+        Self {
+            attractors,
+            clusters: reassign,
+        }
     }
 
-    pub fn search(&self, query: &Hypervector, top_k: usize, entries: &[MemoryEntry], top_a: usize) -> Vec<(usize, f64)> {
-        let mut attractor_scores: Vec<(usize, f64)> = self.attractors.iter().enumerate()
+    pub fn search(
+        &self,
+        query: &Hypervector,
+        top_k: usize,
+        entries: &[MemoryEntry],
+        top_a: usize,
+    ) -> Vec<(usize, f64)> {
+        let mut attractor_scores: Vec<(usize, f64)> = self
+            .attractors
+            .iter()
+            .enumerate()
             .map(|(i, a)| (i, query.similarity(a)))
             .collect();
         attractor_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -64,7 +81,9 @@ impl AttractorIndex {
 
         for &(ai, _) in attractor_scores.iter().take(top_a) {
             for &ei in &self.clusters[ai] {
-                if seen[ei as usize] { continue; }
+                if seen[ei as usize] {
+                    continue;
+                }
                 seen[ei as usize] = true;
                 let sim = query.similarity(&entries[ei as usize].vector);
                 candidates.push((ei as usize, sim));
@@ -73,10 +92,10 @@ impl AttractorIndex {
 
         let total_searched = candidates.len();
         if total_searched < top_k && entries.len() > total_searched {
-            let need = top_k.saturating_sub(total_searched).min(entries.len() - total_searched);
-            let mut pool: Vec<usize> = (0..entries.len())
-                .filter(|i| !seen[*i])
-                .collect();
+            let need = top_k
+                .saturating_sub(total_searched)
+                .min(entries.len() - total_searched);
+            let mut pool: Vec<usize> = (0..entries.len()).filter(|i| !seen[*i]).collect();
             fastrand::shuffle(&mut pool);
             for &idx in pool.iter().take(need) {
                 let sim = query.similarity(&entries[idx].vector);
@@ -89,8 +108,6 @@ impl AttractorIndex {
         candidates
     }
 }
-
-
 
 #[derive(Clone)]
 pub struct MemoryEntry {
@@ -110,13 +127,23 @@ pub struct MemoryStore {
 
 impl Default for MemoryStore {
     fn default() -> Self {
-        Self { entries: Vec::new(), text_index: None, vsa_idx: None, attractor_idx: None }
+        Self {
+            entries: Vec::new(),
+            text_index: None,
+            vsa_idx: None,
+            attractor_idx: None,
+        }
     }
 }
 
 impl MemoryStore {
     pub fn new() -> Self {
-        Self { entries: Vec::new(), text_index: None, vsa_idx: None, attractor_idx: None }
+        Self {
+            entries: Vec::new(),
+            text_index: None,
+            vsa_idx: None,
+            attractor_idx: None,
+        }
     }
 
     pub fn store(&mut self, st: &SuperToken, text: &str, source_doc: &str, role_hint: &str) {
@@ -131,7 +158,13 @@ impl MemoryStore {
         });
     }
 
-    pub fn store_raw(&mut self, vector: &Hypervector, text: &str, source_doc: &str, role_hint: &str) {
+    pub fn store_raw(
+        &mut self,
+        vector: &Hypervector,
+        text: &str,
+        source_doc: &str,
+        role_hint: &str,
+    ) {
         self.text_index = None;
         self.vsa_idx = None;
         self.attractor_idx = None;
@@ -148,7 +181,9 @@ impl MemoryStore {
         for (i, e) in self.entries.iter().enumerate() {
             let idx = i as u32;
             for w in e.text.split_whitespace() {
-                if w.len() <= 2 { continue; }
+                if w.len() <= 2 {
+                    continue;
+                }
                 let key = w.to_lowercase();
                 index.entry(key).or_default().push(idx);
             }
@@ -160,7 +195,12 @@ impl MemoryStore {
         self.search_with_prompts(query, &[], top_k)
     }
 
-    pub fn search_with_prompts(&self, query: &Hypervector, prompts: &[&Hypervector], top_k: usize) -> Vec<(usize, f64, &MemoryEntry)> {
+    pub fn search_with_prompts(
+        &self,
+        query: &Hypervector,
+        prompts: &[&Hypervector],
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry)> {
         let modulated = if prompts.is_empty() {
             query.clone()
         } else {
@@ -173,7 +213,8 @@ impl MemoryStore {
         if let Some(ref vsa) = self.vsa_idx {
             let results = vsa.search(&modulated, top_k);
             if !results.is_empty() {
-                return results.into_iter()
+                return results
+                    .into_iter()
                     .map(|(i, s)| (i, s, &self.entries[i]))
                     .collect();
             }
@@ -183,7 +224,10 @@ impl MemoryStore {
         let results: Vec<(usize, f64)> = if let Some(gpu_hits) = gpu_results {
             gpu_hits.into_iter().take(top_k).collect()
         } else {
-            let mut scores: Vec<(usize, f64)> = self.entries.iter().enumerate()
+            let mut scores: Vec<(usize, f64)> = self
+                .entries
+                .iter()
+                .enumerate()
                 .map(|(i, e)| {
                     let partial = modulated.partial_similarity(&e.vector, 8);
                     if partial >= 0.53 {
@@ -196,17 +240,25 @@ impl MemoryStore {
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
             scores.into_iter().take(top_k).collect()
         };
-        results.into_iter()
+        results
+            .into_iter()
             .map(|(i, s)| (i, s, &self.entries[i]))
             .collect()
     }
 
-    pub fn search_by_text(&self, query_text: &str, top_k: usize) -> Vec<(usize, f64, &MemoryEntry)> {
-        let words: Vec<String> = query_text.split_whitespace()
+    pub fn search_by_text(
+        &self,
+        query_text: &str,
+        top_k: usize,
+    ) -> Vec<(usize, f64, &MemoryEntry)> {
+        let words: Vec<String> = query_text
+            .split_whitespace()
             .filter(|w| w.len() > 2)
             .map(|w| w.to_lowercase())
             .collect();
-        if words.is_empty() { return vec![]; }
+        if words.is_empty() {
+            return vec![];
+        }
 
         if let Some(ref index) = self.text_index {
             let mut candidate_scores: HashMap<u32, f64> = HashMap::new();
@@ -217,18 +269,24 @@ impl MemoryStore {
                     }
                 }
             }
-            if candidate_scores.is_empty() { return vec![]; }
+            if candidate_scores.is_empty() {
+                return vec![];
+            }
             let max_score = words.len() as f64;
             let mut scores: Vec<(u32, f64)> = candidate_scores.into_iter().collect();
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
             scores.truncate(top_k);
-            return scores.into_iter()
+            return scores
+                .into_iter()
                 .map(|(i, s)| (i as usize, s / max_score, &self.entries[i as usize]))
                 .collect();
         }
 
         let _query_lower = query_text.to_lowercase();
-        let mut scores: Vec<(usize, f64)> = self.entries.iter().enumerate()
+        let mut scores: Vec<(usize, f64)> = self
+            .entries
+            .iter()
+            .enumerate()
             .map(|(i, e)| {
                 let lower = e.text.to_lowercase();
                 let matches = words.iter().filter(|w| lower.contains(w.as_str())).count();
@@ -238,7 +296,8 @@ impl MemoryStore {
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let max_score = words.len() as f64;
         scores.truncate(top_k);
-        scores.into_iter()
+        scores
+            .into_iter()
             .filter(|(_, s)| *s > 0.0)
             .map(|(i, s)| (i, s / max_score, &self.entries[i]))
             .collect()
@@ -254,13 +313,18 @@ impl MemoryStore {
         let mut context = String::new();
 
         for &(idx, sim, entry) in &nearest {
-            if seen.contains(&entry.text.as_str()) { continue; }
+            if seen.contains(&entry.text.as_str()) {
+                continue;
+            }
             seen.insert(entry.text.as_str());
 
             if !context.is_empty() {
                 context.push('\n');
             }
-            context.push_str(&format!("[{} sim={:.3}] {}", entry.source_doc, sim, entry.text));
+            context.push_str(&format!(
+                "[{} sim={:.3}] {}",
+                entry.source_doc, sim, entry.text
+            ));
 
             for delta in 1..=window {
                 if idx >= delta {
@@ -284,7 +348,9 @@ impl MemoryStore {
         context
     }
 
-    pub fn size(&self) -> usize { self.entries.len() }
+    pub fn size(&self) -> usize {
+        self.entries.len()
+    }
 
     pub fn all_entries(&self) -> &[MemoryEntry] {
         &self.entries
@@ -292,8 +358,8 @@ impl MemoryStore {
 
     pub fn save_bin(&self, path: &str) -> Result<(), String> {
         use std::io::Write;
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
         let count = self.entries.len() as u32;
         f.write_all(&count.to_le_bytes())
             .map_err(|e| format!("Failed to write count: {}", e))?;
@@ -301,7 +367,10 @@ impl MemoryStore {
             let dim = entry.vector.dim as u32;
             f.write_all(&dim.to_le_bytes())
                 .map_err(|e| format!("Failed to write dim: {}", e))?;
-            let word_bytes: Vec<u8> = entry.vector.words.iter()
+            let word_bytes: Vec<u8> = entry
+                .vector
+                .words
+                .iter()
                 .flat_map(|w| w.to_le_bytes())
                 .collect();
             f.write_all(&word_bytes)
@@ -337,8 +406,8 @@ impl MemoryStore {
             Some(ref idx) => idx,
             None => return Err("No text index to save".to_string()),
         };
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
         let count = index.len() as u32;
         f.write_all(&count.to_le_bytes())
             .map_err(|e| format!("Failed to write index count: {}", e))?;
@@ -366,21 +435,21 @@ impl MemoryStore {
         let data = &mmap[..];
         let mut pos = 0usize;
 
-        let count = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+        let count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         let mut index = HashMap::with_capacity(count);
         for _ in 0..count {
-            let word_len = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let word_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
-            let word = String::from_utf8(data[pos..pos+word_len].to_vec())
+            let word = String::from_utf8(data[pos..pos + word_len].to_vec())
                 .map_err(|e| format!("UTF-8 error in index: {}", e))?;
             pos += word_len;
 
-            let entry_count = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let entry_count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
             let mut entries = Vec::with_capacity(entry_count);
             for _ in 0..entry_count {
-                let eid = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap());
+                let eid = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
                 pos += 4;
                 entries.push(eid);
             }
@@ -391,12 +460,22 @@ impl MemoryStore {
     }
 
     pub fn build_vsa_index(&mut self) {
-        if self.entries.len() < 2 { return; }
-        eprintln!("  Building VSA-LSH index for {} vectors...", self.entries.len());
+        if self.entries.len() < 2 {
+            return;
+        }
+        eprintln!(
+            "  Building VSA-LSH index for {} vectors...",
+            self.entries.len()
+        );
         let start = std::time::Instant::now();
         let hv: Vec<Hypervector> = self.entries.iter().map(|e| e.vector.clone()).collect();
         let idx = VsaIndex::build(&hv);
-        eprintln!("  VSA-LSH built in {:.2}s ({} buckets x {} tables)", start.elapsed().as_secs_f64(), 1 << crate::ai::hnsw::HASH_BITS, crate::ai::hnsw::NUM_TABLES);
+        eprintln!(
+            "  VSA-LSH built in {:.2}s ({} buckets x {} tables)",
+            start.elapsed().as_secs_f64(),
+            1 << crate::ai::hnsw::HASH_BITS,
+            crate::ai::hnsw::NUM_TABLES
+        );
         self.vsa_idx = Some(idx);
     }
 
@@ -408,69 +487,96 @@ impl MemoryStore {
     }
 
     pub fn load_vsa_index(&mut self, path: &str) -> Result<(), String> {
-        let dim = if self.entries.is_empty() { 8192 } else { self.entries[0].vector.dim };
+        let dim = if self.entries.is_empty() {
+            8192
+        } else {
+            self.entries[0].vector.dim
+        };
         let idx = VsaIndex::load(path, dim)?;
         if idx.size() != self.entries.len() {
-            return Err(format!("VSA index size {} != entries {}", idx.size(), self.entries.len()));
+            return Err(format!(
+                "VSA index size {} != entries {}",
+                idx.size(),
+                self.entries.len()
+            ));
         }
         self.vsa_idx = Some(idx);
         Ok(())
     }
 
     pub fn load_bin(path: &str) -> Result<Self, String> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+        let file =
+            std::fs::File::open(path).map_err(|e| format!("Failed to open {}: {}", path, e))?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }
             .map_err(|e| format!("Failed to mmap {}: {}", path, e))?;
         let data = &mmap[..];
         let mut pos = 0usize;
 
-        let count = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+        let count = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
         pos += 4;
         let mut entries = Vec::with_capacity(count);
 
         for _ in 0..count {
-            let dim = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let dim = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
             let wc = (dim + 63) / 64;
             let vec_bytes = wc * 8;
             let mut words = vec![0u64; wc];
             for i in 0..wc {
-                words[i] = u64::from_le_bytes(data[pos+i*8..pos+(i+1)*8].try_into().unwrap());
+                words[i] =
+                    u64::from_le_bytes(data[pos + i * 8..pos + (i + 1) * 8].try_into().unwrap());
             }
             pos += vec_bytes;
             let vector = Hypervector { dim, words };
 
-            let text_len = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let text_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
-            let text = String::from_utf8(data[pos..pos+text_len].to_vec())
+            let text = String::from_utf8(data[pos..pos + text_len].to_vec())
                 .map_err(|e| format!("UTF-8 error: {}", e))?;
             pos += text_len;
 
-            let doc_len = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let doc_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
-            let source_doc = String::from_utf8(data[pos..pos+doc_len].to_vec())
+            let source_doc = String::from_utf8(data[pos..pos + doc_len].to_vec())
                 .map_err(|e| format!("UTF-8 error: {}", e))?;
             pos += doc_len;
 
-            let role_len = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap()) as usize;
+            let role_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
             pos += 4;
-            let role_hint = String::from_utf8(data[pos..pos+role_len].to_vec())
+            let role_hint = String::from_utf8(data[pos..pos + role_len].to_vec())
                 .map_err(|e| format!("UTF-8 error: {}", e))?;
             pos += role_len;
 
-            entries.push(MemoryEntry { vector, text, source_doc, role_hint });
+            entries.push(MemoryEntry {
+                vector,
+                text,
+                source_doc,
+                role_hint,
+            });
         }
-        Ok(Self { entries, text_index: None, vsa_idx: None, attractor_idx: None })
+        Ok(Self {
+            entries,
+            text_index: None,
+            vsa_idx: None,
+            attractor_idx: None,
+        })
     }
 
     pub fn build_attractor_index(&mut self) {
-        if self.entries.len() < NUM_ATTRACTORS { return; }
+        if self.entries.len() < NUM_ATTRACTORS {
+            return;
+        }
         let dim = self.entries[0].vector.dim;
-        eprintln!("  Building Attractor index ({} clusters)...", NUM_ATTRACTORS);
+        eprintln!(
+            "  Building Attractor index ({} clusters)...",
+            NUM_ATTRACTORS
+        );
         let start = std::time::Instant::now();
         let idx = AttractorIndex::build(&self.entries, dim);
-        eprintln!("  Attractor index built in {:.2}s", start.elapsed().as_secs_f64());
+        eprintln!(
+            "  Attractor index built in {:.2}s",
+            start.elapsed().as_secs_f64()
+        );
         self.attractor_idx = Some(idx);
     }
 
@@ -480,8 +586,8 @@ impl MemoryStore {
             Some(ref idx) => idx,
             None => return Err("No attractor index to save".to_string()),
         };
-        let mut f = std::fs::File::create(path)
-            .map_err(|e| format!("Failed to create {}: {}", path, e))?;
+        let mut f =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create {}: {}", path, e))?;
         for a in &idx.attractors {
             let dim = a.dim as u32;
             f.write_all(&dim.to_le_bytes()).map_err(|e| e.to_string())?;
@@ -490,7 +596,8 @@ impl MemoryStore {
             }
         }
         for cluster in &idx.clusters {
-            f.write_all(&(cluster.len() as u32).to_le_bytes()).map_err(|e| e.to_string())?;
+            f.write_all(&(cluster.len() as u32).to_le_bytes())
+                .map_err(|e| e.to_string())?;
             for &eid in cluster {
                 f.write_all(&eid.to_le_bytes()).map_err(|e| e.to_string())?;
             }
@@ -502,7 +609,11 @@ impl MemoryStore {
         use std::io::Read;
         let mut f = std::fs::File::open(path)
             .map_err(|e| format!("Failed to open attractor index {}: {}", path, e))?;
-        let dim = if self.entries.is_empty() { 8192 } else { self.entries[0].vector.dim };
+        let dim = if self.entries.is_empty() {
+            8192
+        } else {
+            self.entries[0].vector.dim
+        };
         let _wc = (dim + 63) / 64;
         let mut attractors = Vec::with_capacity(NUM_ATTRACTORS);
         for _ in 0..NUM_ATTRACTORS {
@@ -533,7 +644,10 @@ impl MemoryStore {
             }
             clusters.push(cluster);
         }
-        self.attractor_idx = Some(AttractorIndex { attractors, clusters });
+        self.attractor_idx = Some(AttractorIndex {
+            attractors,
+            clusters,
+        });
         Ok(())
     }
 }
@@ -567,7 +681,10 @@ impl MemoryStore {
             file.write_all(&dim.to_le_bytes())
                 .map_err(|e| format!("Failed to write dim: {}", e))?;
 
-            let word_bytes: Vec<u8> = entry.vector.words.iter()
+            let word_bytes: Vec<u8> = entry
+                .vector
+                .words
+                .iter()
                 .flat_map(|w| w.to_le_bytes())
                 .collect();
             file.write_all(&word_bytes)
@@ -601,8 +718,7 @@ impl MemoryStore {
             .map_err(|e| format!("Seek to start failed: {}", e))?;
         file.write_all(&new_count.to_le_bytes())
             .map_err(|e| format!("Failed to write new count: {}", e))?;
-        file.flush()
-            .map_err(|e| format!("Flush failed: {}", e))?;
+        file.flush().map_err(|e| format!("Flush failed: {}", e))?;
 
         Ok(new_entries.len())
     }

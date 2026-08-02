@@ -8,27 +8,51 @@ fn pad_to(n: usize, align: usize) -> usize {
 
 pub fn read_gguf_version(path: &str) -> Option<u64> {
     let data = std::fs::read(path).ok()?;
-    if data.len() < 24 { return None; }
-    if u32::from_le_bytes(data[0..4].try_into().ok()?) != GGUF_MAGIC { return None; }
+    if data.len() < 24 {
+        return None;
+    }
+    if u32::from_le_bytes(data[0..4].try_into().ok()?) != GGUF_MAGIC {
+        return None;
+    }
     let kv_count = u64::from_le_bytes(data[16..24].try_into().ok()?);
     let mut off = 24usize;
     for _ in 0..kv_count {
-        if off + 8 > data.len() { return None; }
-        let klen = u64::from_le_bytes(data[off..off+8].try_into().ok()?) as usize;
+        if off + 8 > data.len() {
+            return None;
+        }
+        let klen = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
         off += 8;
-        if off + klen > data.len() { return None; }
-        let key = String::from_utf8_lossy(&data[off..off+klen]);
+        if off + klen > data.len() {
+            return None;
+        }
+        let key = String::from_utf8_lossy(&data[off..off + klen]);
         off += klen;
-        if off + 4 > data.len() { return None; }
-        let vtype = u32::from_le_bytes(data[off..off+4].try_into().ok()?);
+        if off + 4 > data.len() {
+            return None;
+        }
+        let vtype = u32::from_le_bytes(data[off..off + 4].try_into().ok()?);
         off += 4;
         if key == "fuga.generation" && vtype == 10 {
-            return Some(u64::from_le_bytes(data[off..off+8].try_into().ok()?));
+            return Some(u64::from_le_bytes(data[off..off + 8].try_into().ok()?));
         }
         // skip value
         match vtype {
-            8 => { if off + 8 <= data.len() { let slen = u64::from_le_bytes(data[off..off+8].try_into().ok()?) as usize; off += 8 + slen; } }
-            9 => { if off + 12 <= data.len() { let elem_type = u32::from_le_bytes(data[off..off+4].try_into().ok()?); off += 4; let count = u64::from_le_bytes(data[off..off+8].try_into().ok()?) as usize; off += 8 + if elem_type == 0 { count } else { 0 }; } else { off += 12; } }
+            8 => {
+                if off + 8 <= data.len() {
+                    let slen = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+                    off += 8 + slen;
+                }
+            }
+            9 => {
+                if off + 12 <= data.len() {
+                    let elem_type = u32::from_le_bytes(data[off..off + 4].try_into().ok()?);
+                    off += 4;
+                    let count = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+                    off += 8 + if elem_type == 0 { count } else { 0 };
+                } else {
+                    off += 12;
+                }
+            }
             10 | 11 => off += 8,
             12 => off += 8,
             _ => off += 4,
@@ -52,22 +76,36 @@ pub fn export_gguf(path: &str) -> Result<(), String> {
 
     // version string = "1.0.0"
     let ver_str = format!("1.0.0");
-    kv.push(("fuga.version".into(), {
-        let mut v = Vec::new();
-        v.extend_from_slice(&(ver_str.len() as u64).to_le_bytes());
-        v.extend_from_slice(ver_str.as_bytes());
-        v
-    }, 8));
+    kv.push((
+        "fuga.version".into(),
+        {
+            let mut v = Vec::new();
+            v.extend_from_slice(&(ver_str.len() as u64).to_le_bytes());
+            v.extend_from_slice(ver_str.as_bytes());
+            v
+        },
+        8,
+    ));
     // generation counter
     kv.push(("fuga.generation".into(), new_gen.to_le_bytes().to_vec(), 10));
     // timestamp
-    let ts = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
-    kv.push(("fuga.timestamp".into(), {
-        let mut v = Vec::new();
-        v.extend_from_slice(&(ts.len() as u64).to_le_bytes());
-        v.extend_from_slice(ts.as_bytes());
-        v
-    }, 8));
+    let ts = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+    kv.push((
+        "fuga.timestamp".into(),
+        {
+            let mut v = Vec::new();
+            v.extend_from_slice(&(ts.len() as u64).to_le_bytes());
+            v.extend_from_slice(ts.as_bytes());
+            v
+        },
+        8,
+    ));
     kv.push(("fuga.dim".into(), 8192u64.to_le_bytes().to_vec(), 10));
 
     // read and store eval result if available
@@ -75,12 +113,16 @@ pub fn export_gguf(path: &str) -> Result<(), String> {
         for line in e.lines() {
             if line.starts_with("eval:") {
                 let eval_str = line[5..].trim();
-                kv.push(("fuga.eval".into(), {
-                    let mut v = Vec::new();
-                    v.extend_from_slice(&(eval_str.len() as u64).to_le_bytes());
-                    v.extend_from_slice(eval_str.as_bytes());
-                    v
-                }, 8));
+                kv.push((
+                    "fuga.eval".into(),
+                    {
+                        let mut v = Vec::new();
+                        v.extend_from_slice(&(eval_str.len() as u64).to_le_bytes());
+                        v.extend_from_slice(eval_str.as_bytes());
+                        v
+                    },
+                    8,
+                ));
                 break;
             }
         }
@@ -136,47 +178,70 @@ pub fn snapshot(path: &str, tag: &str) -> Result<(), String> {
 
 pub fn inspect_gguf(path: &str) -> Result<(), String> {
     let data = std::fs::read(path).map_err(|e| format!("read {}: {}", path, e))?;
-    if data.len() < 20 { return Err("too short".into()); }
+    if data.len() < 20 {
+        return Err("too short".into());
+    }
     let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
-    if magic != GGUF_MAGIC { return Err("bad magic".into()); }
+    if magic != GGUF_MAGIC {
+        return Err("bad magic".into());
+    }
     let version = u32::from_le_bytes(data[4..8].try_into().unwrap());
     let _tensor_count = u64::from_le_bytes(data[8..16].try_into().unwrap());
     let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
     println!("  GGUF version={} kv_count={}", version, kv_count);
     let mut off = 24usize;
     for _ in 0..kv_count {
-        if off + 8 > data.len() { break; }
-        let klen = u64::from_le_bytes(data[off..off+8].try_into().unwrap()) as usize;
+        if off + 8 > data.len() {
+            break;
+        }
+        let klen = u64::from_le_bytes(data[off..off + 8].try_into().unwrap()) as usize;
         off += 8;
-        if off + klen > data.len() { break; }
-        let key = String::from_utf8_lossy(&data[off..off+klen]).to_string();
+        if off + klen > data.len() {
+            break;
+        }
+        let key = String::from_utf8_lossy(&data[off..off + klen]).to_string();
         off += klen;
-        if off + 4 > data.len() { break; }
-        let vtype = u32::from_le_bytes(data[off..off+4].try_into().unwrap());
+        if off + 4 > data.len() {
+            break;
+        }
+        let vtype = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
         off += 4;
         match vtype {
             8 => {
-                if off + 8 > data.len() { break; }
-                let slen = u64::from_le_bytes(data[off..off+8].try_into().unwrap()) as usize;
+                if off + 8 > data.len() {
+                    break;
+                }
+                let slen = u64::from_le_bytes(data[off..off + 8].try_into().unwrap()) as usize;
                 off += 8;
-                let s = if off + slen <= data.len() { String::from_utf8_lossy(&data[off..off+slen]).to_string() } else { "(truncated)".into() };
+                let s = if off + slen <= data.len() {
+                    String::from_utf8_lossy(&data[off..off + slen]).to_string()
+                } else {
+                    "(truncated)".into()
+                };
                 println!("    {} (string) = {}", key, s);
                 off += slen;
             }
             9 => {
-                if off + 4 > data.len() { break; }
-                let elem_type = u32::from_le_bytes(data[off..off+4].try_into().unwrap());
+                if off + 4 > data.len() {
+                    break;
+                }
+                let elem_type = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
                 off += 4;
-                if off + 8 > data.len() { break; }
-                let count = u64::from_le_bytes(data[off..off+8].try_into().unwrap()) as usize;
+                if off + 8 > data.len() {
+                    break;
+                }
+                let count = u64::from_le_bytes(data[off..off + 8].try_into().unwrap()) as usize;
                 off += 8;
                 let total_bytes = if elem_type == 0 { count } else { 0 };
-                println!("    {} (array[{}] of type {}  ~{} bytes)", key, count, elem_type, total_bytes);
+                println!(
+                    "    {} (array[{}] of type {}  ~{} bytes)",
+                    key, count, elem_type, total_bytes
+                );
                 off += total_bytes;
             }
             10 => {
                 if off + 8 <= data.len() {
-                    let v = u64::from_le_bytes(data[off..off+8].try_into().unwrap());
+                    let v = u64::from_le_bytes(data[off..off + 8].try_into().unwrap());
                     println!("    {} (uint64) = {}", key, v);
                     off += 8;
                 }

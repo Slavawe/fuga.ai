@@ -1,6 +1,6 @@
+use fuga::Hypervector;
 use fuga::ai::jepa::JepaPredictor;
 use fuga::ai::memory_store::MemoryStore;
-use fuga::Hypervector;
 use std::env;
 
 const MEM_PATH: &str = "fuga_knowledge_mem.bin";
@@ -30,8 +30,11 @@ fn main() {
     let mut seqs: Vec<Vec<Hypervector>> = Vec::new();
     for _ in 0..n_seqs {
         let rv = Hypervector::random(dim);
-        let nearby: Vec<Hypervector> = mem.search(&rv, cl + 1)
-            .into_iter().map(|(_, _, e)| e.vector.clone()).collect();
+        let nearby: Vec<Hypervector> = mem
+            .search(&rv, cl + 1)
+            .into_iter()
+            .map(|(_, _, e)| e.vector.clone())
+            .collect();
         if nearby.len() >= cl + 1 {
             seqs.push(nearby);
         }
@@ -42,7 +45,11 @@ fn main() {
         std::process::exit(1);
     }
 
-    eprintln!("Training JEPA on {} sequences, {} epochs...", seqs.len(), epochs);
+    eprintln!(
+        "Training JEPA on {} sequences, {} epochs...",
+        seqs.len(),
+        epochs
+    );
     let loss = jepa.train_on_sequences(&seqs, epochs);
     eprintln!("Loss: {:.4}", loss);
 
