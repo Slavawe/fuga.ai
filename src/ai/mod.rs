@@ -53,6 +53,7 @@ pub use sdr_store::SdrStore;
 pub mod crystal;
 pub mod self_mirror;
 pub mod temporal_predictor;
+pub mod tm_generate;
 pub mod transpile;
 pub use anomaly::{
     AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,

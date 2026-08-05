@@ -97,6 +97,7 @@ pub use ai::{
     },
     sparsify,
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
+    tm_generate::tm_generate,
     transpile::{
         Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,
         WeightSketch, binarize_tensor, hf_resolve_url, is_repo_id, kind_for_name, list_hf_shards,

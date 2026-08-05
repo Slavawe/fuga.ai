@@ -91,6 +91,9 @@ fn main() {
         "readout" => {
             run_readout_entry(&args);
         }
+        "tm-gen" => {
+            run_tm_gen_entry(&args);
+        }
         "solve" => {
             run_solve_entry(&args);
         }
@@ -1632,6 +1635,82 @@ fn run_readout<const N: usize, const S: usize>(
     println!();
     if !out.concepts.is_empty() {
         println!("  Readout: {}", out.concepts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(" "));
+    }
+}
+
+fn run_tm_gen_entry(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Error: missing query");
+        print_usage(&args[0]);
+        process::exit(1);
+    }
+    let query = args[2..]
+        .iter()
+        .take_while(|a| !a.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cube_path = parse_flag_value(args, 3, "--cube").unwrap_or("fuga_cube.bin");
+    let steps = parse_flag_value(args, 3, "--steps")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+    let window = parse_flag_value(args, 3, "--window")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    let debug = args.iter().any(|a| a == "--debug");
+
+    let tm_path = cube_path.replace(".bin", "_tm.bin");
+    let Some(tm) = fuga::TemporalMemory::load(&tm_path) else {
+        eprintln!("Failed to load temporal memory: {}", tm_path);
+        return;
+    };
+    if debug {
+        let cells: usize = tm.cells.len();
+        let synapses: usize = tm.cells.iter().map(|c| c.segments.iter().map(|s| s.synapses.len()).sum::<usize>()).sum();
+        println!("[debug] tm={} cells, {} synapses, ctx", cells, synapses);
+        let toks: Vec<&str> = query.split_whitespace().collect();
+        for t in toks.iter().rev().take(5) {
+            let pc = tm.predict_structure(&[*t]).popcount();
+            println!("[debug] predict_structure([{:?}]) popcount={}", t, pc);
+        }
+    }
+
+    // Кандидаты для декода: слова запроса + слова ближайшей памяти.
+    let mem_path = cube_path.replace(".bin", "_mem.bin");
+    let mut cands: Vec<String> = query
+        .split_whitespace()
+        .map(|s| s.to_lowercase())
+        .filter(|w| w.len() >= 2)
+        .collect();
+    if let Ok(memory) = fuga::MemoryStore::load_bin(&mem_path) {
+        let hits = memory.search_by_text(&query, 10);
+        for (_i, _s, e) in &hits {
+            for w in e.text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+                let wl = w.to_lowercase();
+                if wl.len() >= 2 && !cands.contains(&wl) {
+                    cands.push(wl);
+                }
+            }
+        }
+    }
+    if cands.len() > 3000 {
+        cands.truncate(3000);
+    }
+
+    let seed: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).collect();
+    let out = fuga::tm_generate(&tm, &seed, steps, &cands, window);
+
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║  Temporal-Memory Sequential Generator       ║");
+    println!("╚══════════════════════════════════════════════╝");
+    println!("  Query:   {:?}", query);
+    println!("  Steps:   {} (generated {})", steps, out.len());
+    println!("  Cand:    {} words", cands.len());
+    println!();
+    if out.is_empty() {
+        println!("  (нет временных предсказаний — память не дала следующего токена)");
+    } else {
+        println!("  Sequence: {}", out.join(" "));
     }
 }
 
