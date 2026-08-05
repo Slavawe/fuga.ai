@@ -966,28 +966,35 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
 
     let qual = CodeQualityFilter::new(cube_dim);
 
-    // H-JEPA sequential generator (self-mirror checkpoint): trained TM + JEPA
-    // pair, optional. Feeds a generation tier into the mask's chat cascade.
+    // H-JEPA sequential generator: предпочитаем корпус-обученную пару
+    // (fuga_stack_tm.bin + fuga_hjepa.bin), иначе self-mirror чекпоинт.
     let jepa = {
-        let tm_path = "fuga_mirror_tm.bin";
-        let jepa_path = "fuga_mirror_jepa.bin";
-        if std::path::Path::new(tm_path).exists() && std::path::Path::new(jepa_path).exists() {
-            match (
-                fuga::TemporalMemory::load(tm_path),
-                fuga::HierarchicalJEPA::load(jepa_path),
-            ) {
-                (Some(tm), Ok(hj)) => {
-                    println!("  H-JEPA: loaded {} / {}", tm_path, jepa_path);
-                    Some(fuga::TemporalPredictor::new(tm, hj))
-                }
-                _ => {
-                    println!("  H-JEPA: skipped (tm/jepa load failed)");
-                    None
+        let candidates = [
+            ("fuga_stack_tm.bin", "fuga_hjepa.bin"),
+            ("fuga_mirror_tm.bin", "fuga_mirror_jepa.bin"),
+        ];
+        let mut loaded = None;
+        for (tm_path, jepa_path) in candidates {
+            if std::path::Path::new(tm_path).exists() && std::path::Path::new(jepa_path).exists() {
+                match (
+                    fuga::TemporalMemory::load(tm_path),
+                    fuga::HierarchicalJEPA::load(jepa_path),
+                ) {
+                    (Some(tm), Ok(hj)) => {
+                        println!("  H-JEPA: loaded {} / {}", tm_path, jepa_path);
+                        loaded = Some(fuga::TemporalPredictor::new(tm, hj));
+                        break;
+                    }
+                    _ => {}
                 }
             }
-        } else {
-            println!("  H-JEPA: skipped (no mirror checkpoints)");
-            None
+        }
+        match loaded {
+            Some(tp) => Some(tp),
+            None => {
+                println!("  H-JEPA: skipped (no checkpoints)");
+                None
+            }
         }
     };
 

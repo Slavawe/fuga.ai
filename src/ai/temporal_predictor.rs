@@ -300,10 +300,11 @@ impl TemporalPredictor {
             .collect()
     }
 
-    /// H-JEPA sequential generation for the mask: seed the buffer by feeding
-    /// each seed word (building the temporal context the levels predict from),
-    /// roll out `steps` latent Hypervectors with `predict_sequence`, then decode
-    /// each latent to the nearest vocabulary word. Repeats are suppressed.
+    /// H-JEPA sequential generation for the mask: seed the buffer with the raw
+    /// SDR Hypervector of each seed word (the same space [`Self::word_vocab`]
+    /// and `feed_learn_hv_only` use), roll out `steps` latent Hypervectors with
+    /// `predict_sequence`, then decode each latent to the nearest vocabulary
+    /// word. Repeats are suppressed.
     pub fn generate_words(
         &mut self,
         seed: &str,
@@ -312,7 +313,12 @@ impl TemporalPredictor {
         min_sim: f64,
     ) -> Vec<String> {
         for w in seed.split_whitespace() {
-            self.feed(w);
+            let sdr = encode_text(w);
+            let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+            self.buffer.push(hv);
+            if self.buffer.len() > self.buf_capacity {
+                self.buffer.remove(0);
+            }
         }
         // A short seed may leave the buffer shorter than the level-0 context
         // window; pad with the last encoded token so the roll-out still runs.

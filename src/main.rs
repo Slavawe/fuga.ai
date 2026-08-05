@@ -97,6 +97,9 @@ fn main() {
         "hjepa" => {
             run_hjepa_gen_entry(&args);
         }
+        "jepa-train" => {
+            run_jepa_train_entry(&args);
+        }
         "solve" => {
             run_solve_entry(&args);
         }
@@ -1718,6 +1721,93 @@ fn run_tm_gen_entry(args: &[String]) {
     }
 }
 
+fn run_jepa_train_entry(args: &[String]) {
+    let tm_path = parse_flag_value(args, 2, "--tm").unwrap_or("fuga_stack_tm.bin");
+    let corpus_path = parse_flag_value(args, 2, "--corpus").unwrap_or("training_stack.jsonl");
+    let out_path = parse_flag_value(args, 2, "--out").unwrap_or("fuga_hjepa.bin");
+    let dim = parse_flag_value(args, 2, "--dim")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8192);
+    let limit = parse_flag_value(args, 2, "--limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(usize::MAX);
+
+    // feed_learn_hv_only учит JEPA в пространстве сырых word-SDR и TM не
+    // трогает — тяжёлый чекпоинт грузим только если явно запрошен.
+    let tm = match parse_flag_value(args, 2, "--tm") {
+        Some(p) => match fuga::TemporalMemory::load(&p) {
+            Some(t) => t,
+            None => {
+                eprintln!("No temporal memory at {}", p);
+                return;
+            }
+        },
+        None => fuga::TemporalMemory::new(32, 3),
+    };
+    let hjepa = fuga::HierarchicalJEPA::new(dim);
+    let mut tp = fuga::TemporalPredictor::new(tm, hjepa);
+    println!("═══ H-JEPA corpus training ═══");
+    println!("  TM:     {} ({} cells)", tm_path, tp.tm.cells.len());
+    println!("  JEPA:   dim={}", dim);
+    println!("  Corpus: {}", corpus_path);
+
+    let docs = match fuga::load_corpus(&corpus_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to load corpus: {}", e);
+            return;
+        }
+    };
+    println!("  Docs:   {} ({})", docs.len(), docs.len().min(limit));
+
+    let mut builder = TokenBuilder::new();
+    let _ = builder.load_configs_from_dir("tikones");
+    let flat_vocab = builder.build_flat_vocab();
+
+    let mut n_tokens = 0usize;
+    let mut n_learns = 0usize;
+    let t0 = std::time::Instant::now();
+    let n = docs.len().min(limit);
+    for (di, doc) in docs.iter().enumerate() {
+        if di >= n {
+            break;
+        }
+        for ch in &doc.chapters {
+            let heading = ch.heading.as_deref().unwrap_or("");
+            for para in &ch.paragraphs {
+                let combined = format!("{}: {}", heading, para);
+                let tokens = fuga::tokenize_corpus_text(&combined, &flat_vocab);
+                for t in &tokens {
+                    n_tokens += 1;
+                    let errs = tp.feed_learn_hv_only(&t.text);
+                    if errs.iter().any(|e| *e < 1.0) {
+                        n_learns += 1;
+                    }
+                    if n_learns > 0 && n_learns % 20000 == 0 {
+                        println!(
+                            "  [{}] tokens={} learns={} err=({:.3},{:.3},{:.3})",
+                            di + 1,
+                            n_tokens,
+                            n_learns,
+                            errs[0],
+                            errs.get(1).copied().unwrap_or(1.0),
+                            errs.get(2).copied().unwrap_or(1.0)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    println!("\n  Tokens fed: {} · learns: {}", n_tokens, n_learns);
+    println!("  Elapsed: {:.1}s", t0.elapsed().as_secs_f64());
+
+    match tp.hjepa.save(&out_path) {
+        Ok(()) => println!("✓ H-JEPA -> {}", out_path),
+        Err(e) => println!("  Save failed: {}", e),
+    }
+    println!("{}", tp.stats());
+}
+
 fn run_hjepa_gen_entry(args: &[String]) {
     if args.len() < 3 {
         eprintln!("Error: missing query");
@@ -1737,8 +1827,16 @@ fn run_hjepa_gen_entry(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.5);
 
-    let tm_path = "fuga_mirror_tm.bin";
-    let jepa_path = "fuga_mirror_jepa.bin";
+    let tm_path = "fuga_stack_tm.bin";
+    let jepa_path = "fuga_hjepa.bin";
+    // Корпус-обученная пара (fuga_stack) — предпочтительна; mirror — фолбэк.
+    let (tm_path, jepa_path) = if std::path::Path::new(tm_path).exists()
+        && std::path::Path::new(jepa_path).exists()
+    {
+        (tm_path, jepa_path)
+    } else {
+        ("fuga_mirror_tm.bin", "fuga_mirror_jepa.bin")
+    };
     let Some(tm) = fuga::TemporalMemory::load(tm_path) else {
         eprintln!("No {}", tm_path);
         return;
