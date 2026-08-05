@@ -18,6 +18,7 @@ struct WebState<const N: usize, const S: usize> {
     speech: FugaText,
     qual: CodeQualityFilter,
     dim: usize,
+    jepa: Option<fuga::TemporalPredictor>,
 }
 
 fn run_microwave(mw_path: &str, mode: &str, code: &str) -> String {
@@ -626,8 +627,48 @@ fn handle_openai_chat<const N: usize, const S: usize>(
     }
 }
 
-fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> String {
-    let mut builder = TokenBuilder::new();
+/// H-JEPA continuation tier: seed the self-mirror TemporalPredictor with the
+/// query, roll out a latent sequence, and decode each latent to the nearest
+/// vocabulary word (query words + words from retrieved memory). Returns "" when
+/// the checkpoint is absent or the roll-out is too weak to decode anything.
+fn answer_from_jepa<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    query: &str,
+) -> String {
+    let Some(tp) = state.jepa.as_mut() else {
+        return String::new();
+    };
+
+    let mut words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|w| w.len() >= 2)
+        .map(|w| w.to_lowercase())
+        .collect();
+
+    let hits = state.omni.ai.memory.search_by_text(query, 6);
+    for (_score, _src, e) in &hits {
+        for w in e.text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
+            if w.len() >= 2 {
+                words.push(w.to_lowercase());
+            }
+        }
+    }
+    if words.len() > 800 {
+        words.truncate(800);
+    }
+
+    let vocab = tp.word_vocab(&words);
+    let seq = tp.generate_words(query, 24, &vocab, 0.5);
+    let text = seq.join(" ");
+    let trimmed = text.trim();
+    if trimmed.len() < 2 {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> String {    let mut builder = TokenBuilder::new();
     let _ = builder.load_configs_from_dir("tikones");
     let flat_vocab = builder.build_flat_vocab();
     let tokens = tokenize_corpus_text(query, &flat_vocab);
@@ -646,7 +687,7 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
     // содержимым, а не шаблоном.
     let conv = {
         // Цитатный retrieval по текстовому индексу (с бустом по имени файла)
-        // — лучший источник; далее moe и flat как фолбэки.
+        // — лучший источник; далее moe, flat и H-JEPA как фолбэки.
         let mem = answer_from_memory(&mut state.omni.ai, query);
         if !mem.is_empty() {
             mem
@@ -660,7 +701,12 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
                 if !flat.is_empty() {
                     flat
                 } else {
-                    speech::conversational_reply(query, domain, sys_vec)
+                    let hjepa_text = answer_from_jepa(state, query);
+                    if !hjepa_text.is_empty() {
+                        hjepa_text
+                    } else {
+                        speech::conversational_reply(query, domain, sys_vec)
+                    }
                 }
             }
         }
@@ -920,11 +966,37 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
 
     let qual = CodeQualityFilter::new(cube_dim);
 
+    // H-JEPA sequential generator (self-mirror checkpoint): trained TM + JEPA
+    // pair, optional. Feeds a generation tier into the mask's chat cascade.
+    let jepa = {
+        let tm_path = "fuga_mirror_tm.bin";
+        let jepa_path = "fuga_mirror_jepa.bin";
+        if std::path::Path::new(tm_path).exists() && std::path::Path::new(jepa_path).exists() {
+            match (
+                fuga::TemporalMemory::load(tm_path),
+                fuga::HierarchicalJEPA::load(jepa_path),
+            ) {
+                (Some(tm), Ok(hj)) => {
+                    println!("  H-JEPA: loaded {} / {}", tm_path, jepa_path);
+                    Some(fuga::TemporalPredictor::new(tm, hj))
+                }
+                _ => {
+                    println!("  H-JEPA: skipped (tm/jepa load failed)");
+                    None
+                }
+            }
+        } else {
+            println!("  H-JEPA: skipped (no mirror checkpoints)");
+            None
+        }
+    };
+
     let state = Arc::new(Mutex::new(WebState {
         omni,
         speech: FugaText::new(),
         qual,
         dim: cube_dim,
+        jepa,
     }));
 
     let server =

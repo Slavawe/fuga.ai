@@ -94,6 +94,9 @@ fn main() {
         "tm-gen" => {
             run_tm_gen_entry(&args);
         }
+        "hjepa" => {
+            run_hjepa_gen_entry(&args);
+        }
         "solve" => {
             run_solve_entry(&args);
         }
@@ -1712,6 +1715,74 @@ fn run_tm_gen_entry(args: &[String]) {
         println!("  (нет временных предсказаний — память не дала следующего токена)");
     } else {
         println!("  Sequence: {}", out.join(" "));
+    }
+}
+
+fn run_hjepa_gen_entry(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Error: missing query");
+        print_usage(&args[0]);
+        process::exit(1);
+    }
+    let query = args[2..]
+        .iter()
+        .take_while(|a| !a.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let steps = parse_flag_value(args, 3, "--steps")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+    let min_sim = parse_flag_value(args, 3, "--min-sim")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.5);
+
+    let tm_path = "fuga_mirror_tm.bin";
+    let jepa_path = "fuga_mirror_jepa.bin";
+    let Some(tm) = fuga::TemporalMemory::load(tm_path) else {
+        eprintln!("No {}", tm_path);
+        return;
+    };
+    let hjepa = match fuga::HierarchicalJEPA::load(jepa_path) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("No {} ({})", jepa_path, e);
+            return;
+        }
+    };
+    let mut tp = fuga::TemporalPredictor::new(tm, hjepa);
+
+    let mut words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|w| w.len() >= 2)
+        .map(|w| w.to_lowercase())
+        .collect();
+    const KEYWORDS: &[&str] = &[
+        "tokio", "async", "await", "runtime", "task", "spawn", "stream", "tcp", "net", "io",
+        "read", "write", "buffer", "channel", "mutex", "future", "poll", "fn", "use",
+        "let", "mut", "impl", "struct", "trait", "result", "error", "ok", "code", "main",
+        "join", "select", "timeout", "sleep", "interval", "socket", "connection", "handler",
+    ];
+    for k in KEYWORDS {
+        words.push(k.to_string());
+    }
+    if words.len() > 800 {
+        words.truncate(800);
+    }
+    let vocab = tp.word_vocab(&words);
+    let seq = tp.generate_words(&query, steps, &vocab, min_sim);
+
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║  H-JEPA Latent Sequence Generator           ║");
+    println!("╚══════════════════════════════════════════════╝");
+    println!("  Query:  {:?}", query);
+    println!("  Steps:  {} (decoded {})", steps, seq.len());
+    println!("  Vocab:  {} words", vocab.len());
+    println!();
+    if seq.is_empty() {
+        println!("  (латентный ролл-аут не декодировался ни в одно слово)");
+    } else {
+        println!("  Sequence: {}", seq.join(" "));
     }
 }
 

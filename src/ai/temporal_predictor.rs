@@ -282,6 +282,76 @@ impl TemporalPredictor {
         self.hjepa.predict_sequence(&ctx, steps)
     }
 
+    /// Build a decode vocabulary mapping words to their Hypervectors in the
+    /// same SDR→HV space the buffer feeds into the H-JEPA (raw word SDRs are
+    /// the space the levels learned over), so predicted latents can be decoded
+    /// back to tokens by nearest-neighbour similarity.
+    pub fn word_vocab(&self, words: &[String]) -> Vec<(String, Hypervector)> {
+        let mut seen = std::collections::HashSet::new();
+        words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .filter(|w| w.len() >= 2 && seen.insert(w.clone()))
+            .map(|w| {
+                let sdr = encode_text(&w);
+                let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
+                (w, hv)
+            })
+            .collect()
+    }
+
+    /// H-JEPA sequential generation for the mask: seed the buffer by feeding
+    /// each seed word (building the temporal context the levels predict from),
+    /// roll out `steps` latent Hypervectors with `predict_sequence`, then decode
+    /// each latent to the nearest vocabulary word. Repeats are suppressed.
+    pub fn generate_words(
+        &mut self,
+        seed: &str,
+        steps: usize,
+        vocab: &[(String, Hypervector)],
+        min_sim: f64,
+    ) -> Vec<String> {
+        for w in seed.split_whitespace() {
+            self.feed(w);
+        }
+        // A short seed may leave the buffer shorter than the level-0 context
+        // window; pad with the last encoded token so the roll-out still runs.
+        let ctx0 = self.hjepa.levels[0].context_len;
+        while self.buffer.len() < ctx0 {
+            let pad = self
+                .buffer
+                .last()
+                .cloned()
+                .unwrap_or_else(|| sdr_to_hypervector(&SdrVector::zero(), self.hjepa.dim));
+            self.buffer.push(pad);
+        }
+        if self.buffer.len() < ctx0 {
+            return Vec::new();
+        }
+        let ctx: Vec<&Hypervector> = self.buffer.iter().collect();
+        let seq = self.hjepa.predict_sequence(&ctx, steps);
+
+        let mut out: Vec<String> = Vec::new();
+        for hv in &seq {
+            let mut best: Option<(usize, f64)> = None;
+            for (i, (_, v)) in vocab.iter().enumerate() {
+                let sim = hv.similarity(v);
+                match best {
+                    Some((_, bs)) if sim > bs => best = Some((i, sim)),
+                    None => best = Some((i, sim)),
+                    _ => {}
+                }
+            }
+            if let Some((i, sim)) = best {
+                if sim >= min_sim && out.last().map(|l: &String| l != &vocab[i].0).unwrap_or(true)
+                {
+                    out.push(vocab[i].0.clone());
+                }
+            }
+        }
+        out
+    }
+
     pub fn feed_learn_hv_only(&mut self, text: &str) -> Vec<f64> {
         let sdr = encode_text(text);
         let hv = sdr_to_hypervector(&sdr, self.hjepa.dim);
