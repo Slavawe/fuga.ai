@@ -4,6 +4,7 @@ pub mod answer_engine;
 pub mod autonomous_mind;
 pub mod codegen;
 pub mod core;
+pub mod decoder;
 pub mod hierarchical_jepa;
 pub mod hnsw;
 pub mod htm_temporal;
@@ -33,6 +34,7 @@ pub use agent::{
 pub use answer_engine::{AnswerEngine, AnswerHit, AnswerResult};
 pub use codegen::CodegenResult;
 pub use core::{AIOutput, FugaAI};
+pub use decoder::{DecoderOut, logit_lens};
 pub use hierarchical_jepa::HierarchicalJEPA;
 pub use htm_temporal::{DendriteSegment, Synapse, TemporalCell, TemporalMemory, TrainStats};
 pub use latent_jepa::LATENT_DIM;

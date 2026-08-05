@@ -78,12 +78,12 @@ pub use sim::{Boiler, CubicController, Heater, Phase, Pipe, Valve};
 pub use ai::{
     AIOutput, ActOptions, AgentBrain, AgentPaths, AgentTick, AnomalyDetector, AnomalyEvent,
     AnomalyReflector, AnswerEngine, AnswerHit, AnswerResult, AttentionCell, CodegenResult,
-    CorrectionSignal, DendriteSegment, DynamicRouter, Episode, ExpertConfig, FugaAI,
+    CorrectionSignal, DecoderOut, DendriteSegment, DynamicRouter, Episode, ExpertConfig, FugaAI,
     HierarchicalJEPA, JepaPredictor, LatentPredictor, LatentVector, MemoryEntry, MemoryStore,
     MoEStore, Outcome, PainAvoidance,
     PromptVectors, ResonanceAttention, SDR_DENSITY, SDR_DIM, SDR_WORDS, SafeOutcome, SdrIndex,
     SdrStore, SdrVector, StyloProfile, Synapse, TargetExpert, TemporalCell, TemporalMemory,
-    ThinkOutcome, act_and_observe, act_and_observe_at,
+    ThinkOutcome, act_and_observe, act_and_observe_at, logit_lens,
     crystal::{
         ANCHOR_FLOOR, ANCHOR_RESONANCE_MIN, ANCHOR_TOTAL_MIN, ANCHOR_WEIGHT_FACT,
         ANCHOR_WEIGHT_INTENT, ANCHOR_WEIGHT_LOGIC, CrystalEntry, CrystalHit, DEFAULT_DIM,

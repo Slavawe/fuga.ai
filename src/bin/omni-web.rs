@@ -284,21 +284,53 @@ fn detect_lang_from_prompt(prompt: &str) -> &'static str {
     }
 }
 
+fn extract_fn_name(prompt: &str) -> String {
+    let lower = prompt.to_lowercase();
+    let stop = [
+        "которая", "который", "которые", "которую", "что", "для", "код",
+        "функцию", "функции", "функция", "функций", "rust", "python",
+    ];
+    for kw in ["функцию", "функции", "функция", "function"] {
+        if let Some(pos) = lower.find(kw) {
+            let rest = &prompt[pos + kw.len()..];
+            for w in rest.split(|c: char| !c.is_alphanumeric() && c != '_') {
+                let w = w.trim();
+                if !w.is_empty() && !stop.contains(&w.to_lowercase().as_str()) {
+                    return w.to_lowercase();
+                }
+            }
+        }
+    }
+    "generated".to_string()
+}
+
+fn strip_code_prefix(mut s: &str) -> &str {
+    if let Some(i) = s.find("Code: code_") {
+        let rest = &s[i + "Code: code_".len()..];
+        s = match rest.find(": ") {
+            Some(j) => rest[j + 2..].trim_start(),
+            None => rest,
+        };
+    }
+    s
+}
+
 fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
     let lang = detect_lang_from_prompt(prompt);
     let mut lines: Vec<String> = Vec::new();
     for (_, text) in hits {
         for line in text.lines() {
-            let l = line.trim();
+            let l = strip_code_prefix(line.trim());
             if !l.is_empty() && l.len() > 8 && !lines.contains(&l.to_string()) {
                 lines.push(l.to_string());
             }
         }
     }
 
+    let fname = extract_fn_name(prompt);
     let mut out = match lang {
         "rust" => {
-            let mut s = String::from("fn generated() {\n");
+            let mut s = format!("fn {}() {{\n", fname);
             for l in &lines {
                 if l.contains("fn ") || l.contains("struct ") || l.contains("impl ") {
                     s.push_str("    ");
@@ -310,7 +342,7 @@ fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
             s
         }
         "python" => {
-            let mut s = String::from("def generated():\n");
+            let mut s = format!("def {}():\n", fname);
             for l in &lines {
                 if !l.starts_with("def ") && !l.starts_with("import ") {
                     s.push_str("    ");
@@ -321,7 +353,7 @@ fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
             s
         }
         "go" => {
-            let mut s = String::from("func Generated() {\n");
+            let mut s = format!("func {}() {{\n", fname);
             for l in &lines {
                 if l.contains("func ") || l.contains("var ") || l.contains("type ") {
                     s.push_str("\t");
@@ -942,6 +974,35 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     "domains": domains,
                 });
                 Response::from_string(j.to_string()).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
+            }
+            ("POST", "/api/readout") => {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap_or(0);
+                let query: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::json!({"query": ""}));
+                let text = query.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let beam = query
+                    .get("beam")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(12)
+                    .min(40) as usize;
+                let resp = {
+                    let mut st = state.lock().unwrap();
+                    if text.is_empty() {
+                        serde_json::json!({"concepts": [], "thought_cells": 0, "entropy": ""})
+                    } else {
+                        let out = fuga::logit_lens::<N, S>(&mut st.omni.ai, text, beam, 6);
+                        serde_json::json!({
+                            "query": text,
+                            "concepts": out.concepts.iter().map(|(t, s)| serde_json::json!({"word": t, "sim": format!("{:.4}", s)})).collect::<Vec<_>>(),
+                            "thought_cells": out.thought_cells,
+                            "entropy": format!("{:.4}", out.entropy),
+                        })
+                    }
+                };
+                Response::from_string(resp.to_string()).with_header(
                     Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
                 )
             }

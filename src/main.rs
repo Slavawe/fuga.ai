@@ -88,6 +88,9 @@ fn main() {
         "ask" => {
             run_ask_entry(&args);
         }
+        "readout" => {
+            run_readout_entry(&args);
+        }
         "solve" => {
             run_solve_entry(&args);
         }
@@ -1583,6 +1586,89 @@ fn run_ask_entry(args: &[String]) {
         (4, 8) => run_ask::<4, 8>(question, cube_path, explain, summary, &prompts),
         (5, 2) => run_ask::<5, 2>(question, cube_path, explain, summary, &prompts),
         (5, 4) => run_ask::<5, 4>(question, cube_path, explain, summary, &prompts),
+        _ => eprintln!("Unsupported cube dimensions: {}×{}", side_len, ndim),
+    }
+}
+
+fn run_readout<const N: usize, const S: usize>(
+    query: &str,
+    cube_path: &str,
+    beam: usize,
+    cells_k: usize,
+) {
+    let cube = match WaveCube::<N, S>::load_bin(cube_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load cube: {}", e);
+            return;
+        }
+    };
+    let mem_path = cube_path.replace(".bin", "_mem.bin");
+    let memory = match fuga::MemoryStore::load_bin(&mem_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to load memory: {}", e);
+            return;
+        }
+    };
+
+    let mut ai = FugaAI::<N, S>::new(cube.dim, 3);
+    ai.cube = cube;
+    ai.memory = memory;
+
+    let out = fuga::logit_lens(&mut ai, query, beam, cells_k);
+
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║  VSA Logit-Lens Decoder (readout of cube)   ║");
+    println!("╚══════════════════════════════════════════════╝");
+    println!("  Query:        {:?}", query);
+    println!("  Thought cells: {}", out.thought_cells);
+    println!("  Cube entropy: {:.4}", out.entropy);
+    println!();
+    println!("  CONCEPT BEAM (W_unembed projection):");
+    for (i, (text, sim)) in out.concepts.iter().enumerate() {
+        println!("    {:>2}. {:<24} sim={:.4}", i + 1, text, sim);
+    }
+    println!();
+    if !out.concepts.is_empty() {
+        println!("  Readout: {}", out.concepts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(" "));
+    }
+}
+
+fn run_readout_entry(args: &[String]) {
+    if args.len() < 3 {
+        eprintln!("Error: missing query");
+        print_usage(&args[0]);
+        process::exit(1);
+    }
+    let query = args[2..]
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cube_path = parse_flag_value(args, 3, "--cube").unwrap_or("fuga_cube.bin");
+    let beam = parse_flag_value(args, 3, "--beam")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+    let cells = parse_flag_value(args, 3, "--cells")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(6);
+
+    let (ndim, side_len, _dim) = match peek_cube_header(cube_path) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("{}", e);
+            return;
+        }
+    };
+    match (ndim, side_len) {
+        (3, 4) => run_readout::<3, 4>(&query, cube_path, beam, cells),
+        (4, 4) => run_readout::<4, 4>(&query, cube_path, beam, cells),
+        (3, 8) => run_readout::<3, 8>(&query, cube_path, beam, cells),
+        (4, 8) => run_readout::<4, 8>(&query, cube_path, beam, cells),
+        (5, 2) => run_readout::<5, 2>(&query, cube_path, beam, cells),
+        (5, 4) => run_readout::<5, 4>(&query, cube_path, beam, cells),
         _ => eprintln!("Unsupported cube dimensions: {}×{}", side_len, ndim),
     }
 }
