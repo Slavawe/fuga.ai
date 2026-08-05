@@ -265,14 +265,23 @@ impl MemoryStore {
             for w in &words {
                 if let Some(entries) = index.get(w) {
                     for &eid in entries {
-                        *candidate_scores.entry(eid).or_insert(0.0) += 1.0;
+                        // +1 за совпадение слова в тексте, +2 за совпадение
+                        // слова в имени файла-источника (сильный сигнал).
+                        let e = &self.entries[eid as usize];
+                        let fname = std::path::Path::new(&e.source_doc)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        let boost = if fname.contains(w.as_str()) { 2.0 } else { 0.0 };
+                        *candidate_scores.entry(eid).or_insert(0.0) += 1.0 + boost;
                     }
                 }
             }
             if candidate_scores.is_empty() {
                 return vec![];
             }
-            let max_score = words.len() as f64;
+            let max_score = 3.0 * words.len() as f64;
             let mut scores: Vec<(u32, f64)> = candidate_scores.into_iter().collect();
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
             scores.truncate(top_k);

@@ -349,6 +349,108 @@ fn take_lines(text: &str, n: usize) -> String {
     parts.join(" ")
 }
 
+// Компактный ответ по обученной памяти: топ-записи по векторной близости,
+// с обрезкой до читаемого размера и пометкой источника.
+fn answer_from_memory<const N: usize, const S: usize>(
+    ai: &mut FugaAI<N, S>,
+    query: &str,
+) -> String {
+    let mut all: Vec<(f64, String, String)> = Vec::new();
+    let direct = ai.memory.search_by_text(query, 12);
+    for (_idx, sim, e) in &direct {
+        all.push((*sim, e.source_doc.clone(), e.text.clone()));
+    }
+    if all.len() < 4 {
+        let tokens: Vec<TokenInfo> = query
+            .split_whitespace()
+            .enumerate()
+            .map(|(_, w)| TokenInfo {
+                id: w.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32)),
+                text: w.to_string(),
+            })
+            .collect();
+        let output = ai.think(&tokens);
+        for st in &output.super_tokens {
+            let results = ai.memory.search(&st.vector, 8);
+            for (_idx, sim, e) in &results {
+                all.push((*sim, e.source_doc.clone(), e.text.clone()));
+            }
+        }
+    }
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let q = query.to_lowercase();
+    let wants_code = q.contains("код")
+        || q.contains("коди")
+        || q.contains("function")
+        || q.contains("fn ")
+        || q.contains("generate")
+        || q.contains("write ")
+        || q.contains("напиши")
+        || q.contains("сгенерируй")
+        || q.contains("создай")
+        || q.contains("реализуй")
+        || q.contains("переведи")
+        || q.contains("скрипт")
+        || q.contains("import")
+        || q.contains("class ")
+        || q.contains("rust")
+        || q.contains("tokio")
+        || q.contains("hyper")
+        || q.contains("python")
+        || q.contains("http")
+        || q.contains("async")
+        || q.contains("api")
+        || q.contains("функци");
+    let mut seen = std::collections::HashSet::new();
+    let mut chosen: Vec<(String, String)> = Vec::new();
+    for (_sim, doc, text) in all {
+        let t = text.trim();
+        if t.len() < 20 {
+            continue;
+        }
+        // Корпусные записи кода ("Code: code_<lang>: ...") не даём в ответ
+        // на прозаический вопрос — иначе маск отвечает чужим дампом.
+        if t.starts_with("Code: code_") && !wants_code {
+            continue;
+        }
+        if !seen.insert(doc.clone()) {
+            continue;
+        }
+        chosen.push((truncate_snippet(&text, 300), doc));
+        if chosen.len() >= 3 {
+            break;
+        }
+    }
+    if chosen.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, (snippet, doc)) in chosen.iter().enumerate() {
+        let label = source_label(doc);
+        if i > 0 {
+            out.push_str("\n\n");
+        }
+        out.push_str(&format!("[{}] {}", label, snippet));
+    }
+    out
+}
+
+fn truncate_snippet(text: &str, max: usize) -> String {
+    let t = text.trim();
+    if t.chars().count() <= max {
+        return t.to_string();
+    }
+    let cut: String = t.chars().take(max).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn source_label(doc: &str) -> &str {
+    std::path::Path::new(doc)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(doc)
+}
+
 fn answer_from_flat<const N: usize, const S: usize>(ai: &mut FugaAI<N, S>, query: &str) -> String {
     let tokens: Vec<TokenInfo> = query
         .split_whitespace()
@@ -416,6 +518,7 @@ fn handle_openai_chat<const N: usize, const S: usize>(
     };
 
     let chat_body = serde_json::json!({"message": query}).to_string();
+    let _ = chat_body; // ответ строится полностью из handle_chat ниже
     let full = handle_chat::<N, S>(state, &query);
     let v: serde_json::Value = serde_json::from_str(&full).unwrap_or_default();
 
@@ -430,10 +533,20 @@ fn handle_openai_chat<const N: usize, const S: usize>(
         .and_then(|c| c.as_str())
         .unwrap_or("")
         .to_string();
+    let generated_code = v
+        .get("generated_code")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
     let mut content = conversation;
     if !omni_text.trim().is_empty() {
         content.push_str("\n\n");
         content.push_str(&omni_text);
+    }
+    if !generated_code.trim().is_empty() {
+        content.push_str("\n\n```\n");
+        content.push_str(&generated_code);
+        content.push_str("\n```\n");
     }
 
     let _ = temperature; // VSA-температура пока задаётся внутри handle_chat
@@ -491,9 +604,21 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
     let result = state.omni.query(query, &tokens);
     let omni_text = omni::render_omni_result(&result);
 
-    let conv =
-        if domain == "general" || domain == "text" || domain == "dialogue" || domain == "narrative"
-        {
+    let sys_vec: &[f64] = match &result.domain_result {
+        omni::OmniDomainResult::Physics(a) => &a.system_vector,
+        _ => &[],
+    };
+
+    // Для ЛЮБОГО домена сначала пробуем вытащить ответ из обученной памяти
+    // (MoE → VSA-flat → цитатный retrieval → шаблон), чтобы маск отвечал
+    // содержимым, а не шаблоном.
+    let conv = {
+        // Цитатный retrieval по текстовому индексу (с бустом по имени файла)
+        // — лучший источник; далее moe и flat как фолбэки.
+        let mem = answer_from_memory(&mut state.omni.ai, query);
+        if !mem.is_empty() {
+            mem
+        } else {
             let moe_text = state.omni.ai.answer_from_moe(query);
             let answer = take_lines(&moe_text, 3);
             if !answer.is_empty() {
@@ -503,19 +628,11 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
                 if !flat.is_empty() {
                     flat
                 } else {
-                    speech::conversational_reply(query, domain, &[])
+                    speech::conversational_reply(query, domain, sys_vec)
                 }
             }
-        } else {
-            speech::conversational_reply(
-                query,
-                domain,
-                match &result.domain_result {
-                    omni::OmniDomainResult::Physics(a) => &a.system_vector,
-                    _ => &[],
-                },
-            )
-        };
+        }
+    };
 
     let sv = match &result.domain_result {
         omni::OmniDomainResult::Physics(a) => format!(
@@ -530,18 +647,36 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
     };
 
     let is_code_request = query.contains("write ")
+        || query.contains("write a ")
         || query.contains("generate ")
+        || query.contains("generate a ")
         || query.contains("create ")
         || query.contains("implement ")
         || query.contains("make ")
         || query.contains("code for ")
+        || query.contains("sample")
+        || query.contains("snippet")
         || query.contains("fn ")
         || query.contains("function")
         || query.contains("программа")
+        || query.contains("программу")
         || query.contains("код ")
+        || query.contains("функцию")
         || query.contains("функция")
         || query.contains("напиши")
-        || query.contains("создай");
+        || query.contains("напишите")
+        || query.contains("создай")
+        || query.contains("создайте")
+        || query.contains("сгенерируй")
+        || query.contains("сгенерируйте")
+        || query.contains("реализуй")
+        || query.contains("реализуйте")
+        || query.contains("скрипт")
+        || query.contains("translate")
+        || query.contains("переведи")
+        || query.contains("переведи на")
+        || query.contains("refactor")
+        || query.contains("рефакторинг");
 
     let generated_code = if is_code_request {
         let body = serde_json::json!({"prompt": query}).to_string();
