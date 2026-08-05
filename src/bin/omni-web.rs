@@ -717,6 +717,40 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
                 )
             }
+            ("POST", "/api/retrieve") => {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap_or(0);
+                let query: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::json!({"query": ""}));
+                let text = query.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let k = query
+                    .get("top_k")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(8)
+                    .min(25) as usize;
+                let st = state.lock().unwrap();
+                let results: Vec<serde_json::Value> = if text.is_empty() {
+                    vec![]
+                } else {
+                    st.omni
+                        .ai
+                        .memory
+                        .search_by_text(text, k)
+                        .into_iter()
+                        .map(|(_, s, e)| {
+                            serde_json::json!({
+                                "score": format!("{:.4}", s),
+                                "source": e.source_doc,
+                                "text": e.text.chars().take(1200).collect::<String>(),
+                            })
+                        })
+                        .collect()
+                };
+                let resp = serde_json::json!({"query": text, "results": results});
+                Response::from_string(resp.to_string()).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
+            }
             ("POST", "/api/speak") => {
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body).unwrap_or(0);
@@ -774,7 +808,7 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
 }
 
 fn main() {
-    let cube_path = env::var("FUGA_CUBE_PATH").unwrap_or_else(|_| "omni_cube_repos.bin".into());
+    let cube_path = env::var("FUGA_CUBE_PATH").unwrap_or_else(|_| "fuga_stack.bin".into());
     let port: u16 = env::var("FUGA_WEB_PORT")
         .unwrap_or_else(|_| "8080".into())
         .parse()

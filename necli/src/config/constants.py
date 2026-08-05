@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+import os
+
+from .settings import get
+
+TARGET_MODEL: str = os.getenv("NECLI_MODEL", get("model", "Claude Opus 4.6"))
+
+# Канонический набор игнорируемых директорий для всех обходов ФС:
+# tree, grep_files, fs_watcher snapshot, project_stats.
+IGNORE_DIRS: frozenset[str] = frozenset({
+    ".git", ".hg", ".svn",
+    "__pycache__", "node_modules", "bower_components", "vendor",
+    ".venv", "venv", "env", ".env",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "dist", "build", "target", ".next", ".nuxt",
+    ".tox", ".nox", ".cache",
+    ".idea", ".vscode",
+    ".eggs",
+    ".data", "logs",
+})
+
+
+def is_ignored_dir(name: str) -> bool:
+    """True если директорию с таким именем нужно игнорировать.
+
+    Покрывает явные имена из IGNORE_DIRS, а также шаблон *.egg-info.
+    """
+    if name in IGNORE_DIRS:
+        return True
+    return bool(name.endswith(".egg-info"))
+
+
+# Канонический набор read-only инструментов (доступен в plan-mode,
+# безопасно запускать параллельно). Используется в:
+#   - tools/registry.py (PLANNING_TOOLS / READ_ONLY_TOOLS)
+#   - apis/tool_schemas.py (_PLANNING_TOOL_NAMES — фильтр схем)
+# Алиас "read" обрабатывается отдельно в is_tool_allowed.
+# LSP-инструменты семантически read-only (навигация/диагностика, ничего не
+# пишут) — поэтому доступны и в plan-режиме главного агента, и plan-субагентам.
+READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    "read", "grep",
+    "lsp_references", "lsp_diagnostics",
+    "memory_list", "memory_read",
+    "fuga_query",
+})

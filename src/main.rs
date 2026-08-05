@@ -202,6 +202,9 @@ fn main() {
         "train-unified" => {
             run_train_unified(&args);
         }
+        "train-stack" => {
+            run_train_stack(&args);
+        }
         "omni" => {
             run_omni(&args);
         }
@@ -2653,6 +2656,136 @@ fn run_train_unified(args: &[String]) {
     println!("  Entropy:   {:.4}", ai.cube.global_entropy());
     println!("  Coherence: {:.4}", ai.cube.coherence());
     println!("  Memory:    {} entries", ai.memory.size());
+}
+
+fn run_train_stack(args: &[String]) {
+    let corpus_path = args
+        .get(2)
+        .map(|s| s.as_str())
+        .unwrap_or("training_stack.jsonl");
+    let dim = parse_dim(&args, 3).unwrap_or(8192);
+    let save_path = args
+        .iter()
+        .position(|a| a == "--save")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "fuga_stack.bin".to_string());
+    let tm_cap = parse_int(&args, "--tm-cap").unwrap_or(8192);
+    let ctx = parse_int(&args, "--ctx").unwrap_or(4);
+    let tm_per_doc = parse_int(&args, "--tm-per-doc").unwrap_or(512);
+    let lr = args
+        .iter()
+        .position(|a| a == "--lr")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.1);
+    let ndim = parse_int(&args, "--ndim").unwrap_or(5);
+    let side = parse_int(&args, "--side").unwrap_or(4);
+    if !(3..=5).contains(&ndim) || !(2..=8).contains(&side) {
+        eprintln!("Unsupported ndim/side: {}/{}", ndim, side);
+        return;
+    }
+    println!("╔═══════════════════════════════════════════════════════════════╗");
+    println!("║  Fuga 2.0 Unified Training Stack — TM · SDR · VSA · H-JEPA   ║");
+    println!("╚═══════════════════════════════════════════════════════════════╝");
+    println!(
+        "  Corpus:     {} | Cube: {}^{} dim={}",
+        corpus_path, side, ndim, dim
+    );
+    println!(
+        "  TM: cap={} ctx={} lr={} | Save: {}",
+        tm_cap, ctx, lr, save_path
+    );
+
+    let docs = match fuga::load_corpus(corpus_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to load corpus: {}", e);
+            return;
+        }
+    };
+    println!("  Loaded {} documents\n", docs.len());
+
+    let mut ai = FugaAI::<5, 4>::new(dim, 3);
+    let mut tm = fuga::TemporalMemory::new(tm_cap, ctx);
+    let mut builder = TokenBuilder::new();
+    let _ = builder.load_configs_from_dir("tikones");
+    let flat_vocab = builder.build_flat_vocab();
+
+    let mut paras = 0usize;
+    let mut seq_count = 0usize;
+    let t0 = std::time::Instant::now();
+    for (di, doc) in docs.iter().enumerate() {
+        let mut doc_seqs = 0usize;
+        for ch in &doc.chapters {
+            let heading = ch.heading.as_deref().unwrap_or("");
+            for para in &ch.paragraphs {
+                let combined = format!("{}: {}", heading, para);
+                let tokens = fuga::tokenize_corpus_text(&combined, &flat_vocab);
+                // VSA: WaveCube + MemoryStore absorb — full coverage of every doc.
+                ai.absorb_with_source(&tokens, doc.title.as_deref().unwrap_or("untitled"));
+                // TM/HTM + SDR + H-JEPA: sliding-window structure learning, capped per doc
+                // so total synapse growth stays bounded for the full unified corpus.
+                if doc_seqs < tm_per_doc {
+                    let refs: Vec<&str> = tokens.iter().map(|t| t.text.as_str()).collect();
+                    let mut w: Vec<&str> = Vec::with_capacity(ctx);
+                    for i in 0..refs.len() {
+                        w.push(refs[i]);
+                        if w.len() > ctx {
+                            w.remove(0);
+                        }
+                        if i + 1 < refs.len() {
+                            tm.learn_structure_lr(&w, refs[i + 1], lr);
+                            doc_seqs += 1;
+                            seq_count += 1;
+                            if doc_seqs >= tm_per_doc {
+                                break;
+                            }
+                        }
+                    }
+                }
+                paras += 1;
+            }
+        }
+        if (di + 1) % 500 == 0 || di + 1 == docs.len() {
+            print!(
+                "\r  [{}/{}] docs · {} paras · TM cells={} seqs={} · mem={} entropy={:.4}",
+                di + 1,
+                docs.len(),
+                paras,
+                tm.cells.len(),
+                seq_count,
+                ai.memory.size(),
+                ai.cube.global_entropy()
+            );
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+    }
+    println!();
+
+    let mem_path = save_path.replace(".bin", "_mem.bin");
+    let tm_path = save_path.replace(".bin", "_tm.bin");
+    if let Err(e) = ai.cube.save_bin(&save_path) {
+        eprintln!("Cube save failed: {}", e);
+    } else {
+        println!("✓ VSA cube -> {}", save_path);
+    }
+    if let Err(e) = ai.memory.save_bin(&mem_path) {
+        eprintln!("Memory save failed: {}", e);
+    } else {
+        println!("✓ VSA memory -> {} ({} entries)", mem_path, ai.memory.size());
+    }
+    tm.save(&tm_path);
+    println!("✓ TM/HTM (+SDR cells, +H-JEPA latent W) -> {}", tm_path);
+
+    println!("\n=== Unified Training Stack Complete ===");
+    println!("  Docs: {} | Paras: {} | TM sequences: {}", docs.len(), paras, seq_count);
+    println!("  TM cells: {} | {}", tm.cells.len(), tm.stats());
+    println!("  Entropy:   {:.4}", ai.cube.global_entropy());
+    println!("  Coherence: {:.4}", ai.cube.coherence());
+    println!("  Memory:    {} entries", ai.memory.size());
+    println!("  Time:      {:.1}s", t0.elapsed().as_secs_f64());
 }
 
 fn train_code_source(ai: &mut FugaAI<5, 4>, dir: &str) {
