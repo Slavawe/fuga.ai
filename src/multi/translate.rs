@@ -19,6 +19,7 @@ impl CodeTranslator {
             (LanguageId::Python, LanguageId::Rust) => self.python_to_rust(source),
             (LanguageId::Go, LanguageId::Rust) => self.go_to_rust(source),
             (LanguageId::Rust, LanguageId::C) => self.rust_to_c(source),
+            (LanguageId::Rust, LanguageId::Python) => self.rust_to_python(source),
             (from_lang, to_lang) => Err(format!(
                 "Translation from {:?} to {:?} is not yet supported",
                 from_lang, to_lang
@@ -487,6 +488,127 @@ impl CodeTranslator {
         Ok(output)
     }
 
+    fn rust_to_python(&self, source: &str) -> Result<String, String> {
+        let tree = parse_source(source, LanguageId::Rust).ok_or("Failed to parse Rust source")?;
+        let mut output = String::new();
+        output.push_str("# Auto-translated from Rust to Python\n");
+        output.push_str("# Review and verify before use\n\n");
+
+        let root = tree.root_node();
+        let mut fns: Vec<tree_sitter::Node> = Vec::new();
+        collect_fn_items(root, &mut fns);
+        let mut translated = 0usize;
+        for child in fns {
+            let mut fc = child.walk();
+            let mut name = String::from("fn");
+            let mut params: Vec<(String, String)> = Vec::new();
+            let mut ret_type: Option<String> = None;
+            let mut in_ret = false;
+            for sc in child.children(&mut fc) {
+                match sc.kind() {
+                    "identifier" => name = source[sc.byte_range()].to_string(),
+                    "parameters" => {
+                        params = self.translate_params(sc, source);
+                    }
+                    "->" => in_ret = true,
+                    "primitive_type" | "type_identifier" | "generic_type"
+                    | "scoped_type_identifier" | "array_type" | "reference_type" | "pointer_type"
+                        if in_ret =>
+                    {
+                        ret_type = Some(self.map_rust_type(source[sc.byte_range()].trim()));
+                        in_ret = false;
+                    }
+                    _ => {}
+                }
+            }
+            let mut sig = format!("def {}(", name);
+            sig.push_str(
+                &params
+                    .iter()
+                    .map(|(n, t)| format!("{}: {}", n, t))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            sig.push(')');
+            if let Some(rt) = ret_type {
+                sig.push_str(&format!(" -> {}", rt));
+            }
+            sig.push_str(":\n    ...  # translated from Rust\n\n");
+            output.push_str(&sig);
+            translated += 1;
+        }
+
+        if translated == 0 {
+            return Err("No functions found in Rust source".to_string());
+        }
+        Ok(output)
+    }
+
+    fn translate_params(&self, params_node: tree_sitter::Node, source: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut c = params_node.walk();
+        for p in params_node.children(&mut c) {
+            let kind = p.kind();
+            // Rust: pattern (identifier/self) + type_identifier / generics / reference_type
+            let mut id = String::new();
+            let mut ty = String::from("Any");
+            let mut pc = p.walk();
+            for cc in p.children(&mut pc) {
+                match cc.kind() {
+                    "identifier" => id = source[cc.byte_range()].to_string(),
+                    "self" => id = "self".to_string(),
+                    "type_identifier" | "primitive_type" => {
+                        ty = self.map_rust_type(source[cc.byte_range()].trim());
+                    }
+                    "reference_type" | "pointer_type" | "generic_type" | "scoped_type_identifier"
+                    | "array_type" => {
+                        let txt = source[cc.byte_range()].trim().to_string();
+                        let mapped = self.map_rust_type(&txt);
+                        if !mapped.starts_with("&") {
+                            ty = mapped;
+                        }
+                    }
+                    "mutable_specifier" => {}
+                    _ => {}
+                }
+            }
+            if kind == "self_parameter" || id == "self" {
+                out.push(("self".to_string(), "Any".to_string()));
+            } else if !id.is_empty() {
+                out.push((id, ty));
+            }
+        }
+        out
+    }
+
+    fn map_rust_type(&self, t: &str) -> String {
+        let t = t.trim();
+        let t = t.trim_start_matches("->").trim();
+        let core = t
+            .trim_start_matches("&")
+            .trim_start_matches("mut ")
+            .trim()
+            .trim_start_matches("Option<")
+            .trim_end_matches('>');
+        let base = match core {
+            "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "usize"
+            | "isize" => "int",
+            "f32" | "f64" => "float",
+            "String" | "str" => "str",
+            "bool" => "bool",
+            "Vec" | "VecDeque" | "LinkedList" | "&[T]" | "[T]" => "list",
+            "HashMap" | "BTreeMap" | "map" => "dict",
+            "HashSet" | "BTreeSet" | "set" => "set",
+            "Result" => "Any",
+            other if !other.is_empty() => "Any",
+            _ => "Any",
+        };
+        if t.contains("Option") {
+            return format!("{} | None", base);
+        }
+        base.to_string()
+    }
+
     fn rust_to_c(&self, source: &str) -> Result<String, String> {
         let tree = parse_source(source, LanguageId::Rust).ok_or("Failed to parse Rust source")?;
         let functions = collect_function_names(&tree, source, LanguageId::Rust);
@@ -527,6 +649,17 @@ impl CodeTranslator {
             rest[1..end].to_string()
         } else {
             rest.to_string()
+        }
+    }
+}
+
+fn collect_fn_items<'a>(node: tree_sitter::Node<'a>, out: &mut Vec<tree_sitter::Node<'a>>) {
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        if child.kind() == "function_item" {
+            out.push(child);
+        } else {
+            collect_fn_items(child, out);
         }
     }
 }
@@ -572,5 +705,26 @@ def greet(name):
         let translator = CodeTranslator::new();
         let result = translator.translate("fn x() {}", LanguageId::Rust, LanguageId::Go);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_translate_rust_to_python() {
+        let translator = CodeTranslator::new();
+        let source = r#"
+pub fn add(a: i32, b: u64) -> f64 {
+    (a as f64) + (b as f64)
+}
+
+impl Counter {
+    pub fn new(limit: usize) -> Self {
+        Counter { limit }
+    }
+}
+"#;
+        let result = translator.translate(source, LanguageId::Rust, LanguageId::Python);
+        assert!(result.is_ok(), "Translation failed: {:?}", result.err());
+        let output = result.unwrap();
+        assert!(output.contains("def add(a: int, b: int) -> float:"));
+        assert!(output.contains("def new(limit: int) -> Any:"));
     }
 }
