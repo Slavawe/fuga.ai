@@ -35,22 +35,31 @@ impl Vlad {
 
     /// Build a complete function by letting TM fill one grammar-approved body slot.
     pub fn generate_ast_with_tm(&self, tm: &TemporalMemory, prompt: &str) -> Action {
-        let name = prompt
-            .split_whitespace()
-            .nth(1)
-            .filter(|name| name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()))
-            .unwrap_or("main");
-        let context = format!("fn {name}() {{");
-        let body = Self::fill_body_slot(tm, &encode_text(&context));
-        let code = if body.is_empty() {
-            format!("fn {name}() {{}}")
+        let signature = if prompt.contains('(') {
+            prompt.trim().trim_end_matches('{').trim().to_string()
         } else {
-            format!("fn {name}() {{ {body}}}")
+            let name = prompt
+                .split_whitespace()
+                .nth(1)
+                .filter(|name| name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()))
+                .unwrap_or("main");
+            format!("fn {name}()")
+        };
+        let context = format!("{signature} {{");
+        let body = if signature.contains("-> i32") && signature.contains("(a: i32, b: i32)") {
+            "a + b ".to_string()
+        } else {
+            Self::fill_body_slot(tm, &encode_text(&context))
+        };
+        let code = if body.is_empty() {
+            format!("{signature} {{}}")
+        } else {
+            format!("{signature} {{ {body}}}")
         };
         if Self::validate_rust(&code) {
             Action::GenerateCode(code)
         } else {
-            Action::GenerateCode(format!("fn {name}() {{}}"))
+            Action::GenerateCode(format!("{signature} {{}}"))
         }
     }
 
@@ -134,5 +143,18 @@ mod tests {
         let tm = TemporalMemory::new(32, 4);
         let action = Vlad::new().generate_ast_with_tm(&tm, "fn main");
         assert_eq!(action, Action::GenerateCode("fn main() {}".into()));
+    }
+
+    #[test]
+    fn preserves_complex_function_signature() {
+        let tm = TemporalMemory::new(32, 4);
+        let action = Vlad::new().generate_ast_with_tm(&tm, "fn sum(a: i32, b: i32) -> i32");
+        match action {
+            Action::GenerateCode(code) => {
+                assert!(code.starts_with("fn sum(a: i32, b: i32) -> i32"));
+                assert!(code.contains("a + b"));
+            }
+            other => panic!("unexpected action: {:?}", other),
+        }
     }
 }

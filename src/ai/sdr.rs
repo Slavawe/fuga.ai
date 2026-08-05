@@ -6,6 +6,15 @@ pub const SDR_DIM: usize = 8192;
 pub const SDR_WORDS: usize = SDR_DIM / 64;
 pub const SDR_DENSITY: f64 = 0.02;
 pub const BOW_DENSITY: f64 = 0.20;
+/// Density for structure-folded vectors: a whole-sequence cross-product needs
+/// more active bits than a single token (0.02) to stay discriminative against
+/// chance, but far fewer than bag-of-words (0.20) so distinct orderings remain
+/// separable.
+pub const STRUCTURE_DENSITY: f64 = 0.06;
+/// Position stride for structure folding. Coprime with SDR_DIM so consecutive
+/// positions map to distinct, well-mixed bit offsets and token order is
+/// preserved in the super-vector.
+const STRUCTURE_STRIDE: usize = 977;
 
 lazy_static::lazy_static! {
     static ref TOKEN_SDR_CACHE: Mutex<HashMap<u32, SdrVector>> = Mutex::new(HashMap::new());
@@ -17,7 +26,7 @@ pub fn clear_token_sdr_cache() {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SdrVector {
     pub bits: [u64; SDR_WORDS],
 }
@@ -67,8 +76,11 @@ impl SdrVector {
             })
             .collect();
 
-        scored.sort_by(|a, b| a.1.cmp(&b.1));
-        scored.truncate(target);
+        if scored.len() > target {
+            scored.select_nth_unstable_by(target, |a, b| a.1.cmp(&b.1));
+            scored.truncate(target);
+        }
+        scored.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
         for &(bit, _) in &scored {
             let wi = bit / 64;
@@ -98,6 +110,10 @@ impl SdrVector {
 
     pub fn popcount(&self) -> u32 {
         self.bits.iter().map(|w| w.count_ones()).sum()
+    }
+
+    pub fn bit_at(&self, idx: usize) -> u64 {
+        if idx >= SDR_DIM { 0 } else { (self.bits[idx / 64] >> (idx % 64)) & 1 }
     }
 
     pub fn bind(&self, other: &SdrVector) -> SdrVector {
@@ -316,6 +332,68 @@ pub fn domain_sdr(name: &str) -> SdrVector {
     sparsify(&hv)
 }
 
+/// Fold a token sequence into a single position-invariant-to-noise super-vector
+/// (VSA binding + superposition). Each token contributes its own sparse SDR,
+/// permuted by a position-dependent stride so that ORDER is part of the
+/// representation: `fn main` and `main fn` map to distinct vectors, while
+/// shared prefixes/suffixes stay similar. This is the "collapse the structure
+/// into one fixed-size hypervector" step the VSA/JEPA pipeline calls for,
+/// replacing fragile token-by-token bi-gram segments with one structural key.
+pub fn structure_sdr(tokens: &[&str]) -> SdrVector {
+    let sdrs: Vec<SdrVector> = tokens.iter().map(|t| encode_text(t)).collect();
+    structure_sdr_from_sdrs(&sdrs)
+}
+
+/// Position-sensitive structural fold over pre-encoded token SDRs. Kept
+/// separate from `structure_sdr` so callers that already encoded the window
+/// (e.g. `learn_structure`, which also feeds the same SDRs to the latent
+/// transition operator) do not pay the encode cost twice.
+pub fn structure_sdr_from_sdrs(tokens: &[SdrVector]) -> SdrVector {
+    if tokens.is_empty() {
+        return SdrVector::zero();
+    }
+    // Bump every token's bits to a position-shifted offset, count overlap.
+    let mut counts = vec![0u32; SDR_DIM];
+    for (pos, base) in tokens.iter().enumerate() {
+        let shift = (pos * STRUCTURE_STRIDE) % SDR_DIM;
+        for (wi, &w) in base.bits.iter().enumerate() {
+            let base_bit = wi * 64;
+            let mut x = w;
+            while x != 0 {
+                let bi = x.trailing_zeros() as usize;
+                let bit = base_bit + bi;
+                counts[(bit + shift) % SDR_DIM] += 1;
+                x &= x - 1;
+            }
+        }
+    }
+    // Keep the most-supported bits, tie-broken by hash, to a fixed density.
+    let target = (SDR_DIM as f64 * STRUCTURE_DENSITY).ceil() as usize;
+    let mut scored: Vec<(usize, u32, u64)> = counts
+        .iter()
+        .enumerate()
+        .filter(|&(_, &c)| c > 0)
+        .map(|(bit, &c)| {
+            // Fast deterministic tie-break hash (fnv1a over the bit index)
+            // instead of DefaultHasher, which is ~10x slower per call.
+            let h = crate::ai::crystal::fnv1a(&(bit as u64).to_le_bytes());
+            (bit, c, h)
+        })
+        .collect();
+    // Partial selection instead of a full O(n log n) sort: find the top-k by
+    // count, then stably order just those k by (count desc, hash asc).
+    if scored.len() > target {
+        scored.select_nth_unstable_by(target, |a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+        scored.truncate(target);
+    }
+    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    let mut out = SdrVector::zero();
+    for &(bit, _, _) in &scored {
+        out.bits[bit / 64] |= 1u64 << (bit % 64);
+    }
+    out
+}
+
 pub struct SdrIndex {
     pub nodes: Vec<SdrVector>,
     pub texts: Vec<String>,
@@ -367,5 +445,50 @@ impl SdrIndex {
             .into_iter()
             .map(|(i, s)| (i, s, self.texts[i].as_str()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structure_fold_preserves_similarity() {
+        // Same structure → high overlap.
+        let a = structure_sdr(&["fn", "main", "(", ")", "{"]);
+        let b = structure_sdr(&["fn", "main", "(", ")", "{"]);
+        assert!(a.overlap(&b) as f64 >= STRUCTURE_DENSITY * 0.5 * SDR_DIM as f64);
+    }
+
+    #[test]
+    fn structure_fold_distinguishes_order() {
+        // `fn main` vs `main fn`: same bag, different positions → must not
+        // collapse onto each other, proving order is encoded.
+        let a = structure_sdr(&["fn", "main"]);
+        let b = structure_sdr(&["main", "fn"]);
+        // Order should push them apart: overlap below a same-structure threshold
+        // but still nonzero (shared vocabulary).
+        let ov = a.overlap(&b) as f64;
+        let expected = STRUCTURE_DENSITY * SDR_DIM as f64;
+        assert!(ov < expected * 0.75, "order should distinguish: ov={}", ov);
+        assert!(ov > 0.0);
+    }
+
+    #[test]
+    fn structure_fold_is_deterministic() {
+        let a = structure_sdr(&["pub", "fn", "sum", "(", ")", "{"]);
+        let b = structure_sdr(&["pub", "fn", "sum", "(", ")", "{"]);
+        assert_eq!(a.bits, b.bits);
+    }
+
+    #[test]
+    fn structure_fold_density_is_bounded() {
+        for toks in [vec!["a"], vec!["a", "b", "c"], vec!["fn", "main", "(", ")", "{", "}"]]
+        {
+            let v = structure_sdr(&toks);
+            let pc = v.popcount() as f64;
+            let lim = (STRUCTURE_DENSITY * 1.05) * SDR_DIM as f64;
+            assert!(pc <= lim, "density too high: {} > {}", pc, lim);
+        }
     }
 }

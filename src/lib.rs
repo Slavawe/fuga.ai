@@ -27,6 +27,7 @@ pub mod speech;
 pub mod text_quality;
 pub mod vsa;
 
+pub use ai::latent_jepa::LATENT_DIM;
 pub use core::fuga_synthesizer::{BugLocation, FugaResult, FugaSynthesizer};
 pub use core::hypervector::Hypervector;
 pub use core::information_triangle::InformationTriangle;
@@ -78,7 +79,8 @@ pub use ai::{
     AIOutput, ActOptions, AgentBrain, AgentPaths, AgentTick, AnomalyDetector, AnomalyEvent,
     AnomalyReflector, AnswerEngine, AnswerHit, AnswerResult, AttentionCell, CodegenResult,
     CorrectionSignal, DendriteSegment, DynamicRouter, Episode, ExpertConfig, FugaAI,
-    HierarchicalJEPA, JepaPredictor, MemoryEntry, MemoryStore, MoEStore, Outcome, PainAvoidance,
+    HierarchicalJEPA, JepaPredictor, LatentPredictor, LatentVector, MemoryEntry, MemoryStore,
+    MoEStore, Outcome, PainAvoidance,
     PromptVectors, ResonanceAttention, SDR_DENSITY, SDR_DIM, SDR_WORDS, SafeOutcome, SdrIndex,
     SdrStore, SdrVector, StyloProfile, Synapse, TargetExpert, TemporalCell, TemporalMemory,
     ThinkOutcome, act_and_observe, act_and_observe_at,
@@ -159,4 +161,13 @@ pub fn load_corpus(path: &str) -> Result<Vec<CorpusDoc>, String> {
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect())
+}
+
+#[cfg(test)]
+mod zz_reexport_check {
+    #[test]
+    fn reexport_works() {
+        let _: crate::LatentVector;
+        let _: crate::LatentPredictor;
+    }
 }

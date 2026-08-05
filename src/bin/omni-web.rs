@@ -774,7 +774,7 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
 }
 
 fn main() {
-    let cube_path = env::var("FUGA_CUBE_PATH").unwrap_or_else(|_| "fuga_code_cube.bin".into());
+    let cube_path = env::var("FUGA_CUBE_PATH").unwrap_or_else(|_| "omni_cube_repos.bin".into());
     let port: u16 = env::var("FUGA_WEB_PORT")
         .unwrap_or_else(|_| "8080".into())
         .parse()

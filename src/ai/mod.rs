@@ -10,6 +10,8 @@ pub mod htm_temporal;
 pub mod jepa;
 pub mod memory_store;
 pub mod moe;
+pub mod mentalese;
+pub mod latent_jepa;
 pub mod personas;
 pub mod predictive_coder;
 pub mod prompts;
@@ -32,8 +34,10 @@ pub use answer_engine::{AnswerEngine, AnswerHit, AnswerResult};
 pub use codegen::CodegenResult;
 pub use core::{AIOutput, FugaAI};
 pub use hierarchical_jepa::HierarchicalJEPA;
-pub use htm_temporal::{DendriteSegment, Synapse, TemporalCell, TemporalMemory};
+pub use htm_temporal::{DendriteSegment, Synapse, TemporalCell, TemporalMemory, TrainStats};
+pub use latent_jepa::LATENT_DIM;
 pub use jepa::JepaPredictor;
+pub use latent_jepa::{LatentPredictor, LatentVector};
 pub use memory_store::{AttractorIndex, MemoryEntry, MemoryStore, NUM_ATTRACTORS};
 pub use moe::MoEStore;
 pub use prompts::PromptVectors;
@@ -41,6 +45,7 @@ pub use resonance_attention::{AttentionCell, ResonanceAttention};
 pub use router::{DynamicRouter, ExpertConfig, TargetExpert};
 pub use sdr::{
     SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrIndex, SdrVector, domain_sdr, encode_text, sparsify,
+    structure_sdr,
 };
 pub use sdr_store::SdrStore;
 pub mod crystal;
@@ -67,3 +72,5 @@ pub use transpile::{
 };
 pub use unified_mind::{UnifiedMind, UnifiedResult};
 pub use unity_mind::UnityMind;
+
+pub mod soft_sdr;

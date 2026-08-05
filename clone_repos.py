@@ -22,6 +22,17 @@ REPOS = {
     "code_python": [
         "https://github.com/tiangolo/fastapi.git",
         "https://github.com/pallets/flask.git",
+        "https://github.com/encode/httpx.git",
+        "https://github.com/psf/requests.git",
+        "https://github.com/pydantic/pydantic.git",
+        "https://github.com/Textualize/rich.git",
+        "https://github.com/Textualize/textual.git",
+        "https://github.com/pallets/click.git",
+        "https://github.com/encode/uvicorn.git",
+        "https://github.com/encode/starlette.git",
+        "https://github.com/pola-rs/polars.git",
+        "https://github.com/faif/python-patterns.git",
+        "https://github.com/cosmicpython/code.git",
     ],
 }
 

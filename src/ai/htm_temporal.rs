@@ -1,4 +1,8 @@
+use crate::ai::latent_jepa::LatentPredictor;
+use crate::ai::latent_jepa::LatentVector;
+use crate::ai::latent_jepa::LATENT_DIM;
 use crate::ai::sdr::{SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrVector};
+use crate::ai::soft_sdr::{info_nce_loss, sigmoid, SoftSdrVector};
 
 const MIN_PERMANENCE: f64 = 0.2;
 const CONNECTED_PERMANENCE: f64 = 0.5;
@@ -6,6 +10,21 @@ const PERMANENCE_INCREMENT: f64 = 0.05;
 const PERMANENCE_DECREMENT: f64 = 0.02;
 const MAX_SEGMENTS_PER_CELL: usize = 128;
 const PRUNE_INTERVAL: usize = 200;
+
+/// Minimum segment overlap required to count a predecessor as a real match.
+/// Two unrelated 2%-density 8192-bit SDRs (164 bits each) overlap on roughly
+/// 164²/8192 ≈ 3.3 bits purely by chance, so a low threshold (e.g. 3) treats
+/// random noise as a learned bi-gram and lets common tokens hijack the
+/// segments of rarer ones. 20 is ~8σ above the noise floor while a true
+/// `prev → next` match saturates at the full 164.
+const MATCH_OVERLAP: u32 = 20;
+
+/// Match threshold for STRUCTURE-folded keys, which are 6%-dense (~490 active
+/// bits at 8192 dims) instead of the 2%-dense single tokens (164 bits). Two
+/// unrelated structure keys chance-overlap on ~490²/8192 ≈ 29 bits — already
+/// above the token-level threshold of 20. 60 is ~2× that noise and far below a
+/// true structural match (~490).
+const STRUCTURE_MATCH_OVERLAP: u32 = 60;
 
 #[derive(Clone, Debug)]
 pub struct Synapse {
@@ -125,6 +144,18 @@ pub struct TemporalMemory {
     pub window: Vec<SdrVector>,
     pub context_len: usize,
     pub step: usize,
+    predictor: LatentPredictor,
+    cell_index: std::collections::HashMap<[u64; SDR_WORDS], usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TrainStats {
+    pub steps: usize,
+    pub initial_loss: f32,
+    pub final_loss: f32,
+    pub mean_loss: f32,
+    pub learned_transitions: usize,
+    pub total_latent_loss: f32,
 }
 
 impl TemporalMemory {
@@ -134,26 +165,64 @@ impl TemporalMemory {
             window: Vec::new(),
             context_len,
             step: 0,
+            predictor: LatentPredictor::new(0xF03D_C0DE),
+            cell_index: std::collections::HashMap::new(),
         }
     }
 
     pub fn get_or_create_cell(&mut self, pattern: &SdrVector) -> usize {
-        if let Some((idx, _)) = self
-            .cells
-            .iter()
-            .enumerate()
-            .find(|(_, c)| c.pattern.bits == pattern.bits)
-        {
+        if let Some(&idx) = self.cell_index.get(&pattern.bits) {
             return idx;
         }
         let id = self.cells.len();
         self.cells.push(TemporalCell::new(id, pattern.clone()));
+        self.cell_index.insert(pattern.bits, id);
         id
     }
 
     pub fn reset(&mut self) {
         self.window.clear();
         self.step = 0;
+    }
+
+    pub fn train_on_sequence(&mut self, tokens: &[&str], epochs: usize) -> TrainStats {
+        let mut stats = TrainStats::default();
+        let rounds = epochs.max(1);
+        let mut total = 0.0f32;
+        for _ in 0..rounds {
+            for pair in tokens.windows(2) {
+                let prev = crate::ai::sdr::encode_text(pair[0]);
+                let next = crate::ai::sdr::encode_text(pair[1]);
+                let before = self.predict_soft(std::slice::from_ref(&prev));
+                let loss = before.bce_l1_loss(&next, 0.01);
+                if stats.steps == 0 { stats.initial_loss = loss; }
+                total += loss;
+                stats.steps += 1;
+                self.learn_sequence(&prev, &next);
+                stats.learned_transitions += 1;
+                let cell = self.get_or_create_cell(&next);
+                if let Some(seg) = self.cells[cell].segments.last_mut() {
+                    for syn in &mut seg.synapses {
+                        let target = next.bit_at(syn.bit_index) == 1;
+                        syn.permanence = if target {
+                            (syn.permanence + 0.02).min(1.0)
+                        } else {
+                            (syn.permanence - 0.005).max(MIN_PERMANENCE)
+                        };
+                    }
+                }
+                let after = self.predict_soft(std::slice::from_ref(&prev));
+                stats.final_loss = after.bce_l1_loss(&next, 0.01);
+                // Train the latent transition operator (Widrow-Hoff delta
+                // rule): W += lr * (encode(next) - W·encode(prev)) ⊗ encode(prev).
+                let latent_loss = self
+                    .predictor
+                    .learn_transition(std::slice::from_ref(&prev), &next, 0.1);
+                stats.total_latent_loss += latent_loss;
+            }
+        }
+        stats.mean_loss = if stats.steps == 0 { 0.0 } else { total / stats.steps as f32 };
+        stats
     }
 
     pub fn feed(&mut self, input: &SdrVector) -> (SdrVector, f64) {
@@ -185,7 +254,7 @@ impl TemporalMemory {
 
             let mut has_prev_seg = false;
             for seg in &self.cells[cell_id].segments {
-                if seg.overlap(&prev) >= 3 {
+                if seg.overlap(&prev) >= MATCH_OVERLAP {
                     has_prev_seg = true;
                     break;
                 }
@@ -199,7 +268,7 @@ impl TemporalMemory {
                     continue;
                 }
                 for seg in &mut c.segments {
-                    if seg.overlap(&prev) >= 3 {
+                    if seg.overlap(&prev) >= MATCH_OVERLAP {
                         seg.reinforce_match_only(&prev);
                     }
                 }
@@ -249,7 +318,7 @@ impl TemporalMemory {
     pub fn predict_next(&self, prev: &SdrVector) -> SdrVector {
         let mut pred = SdrVector::zero();
         for c in &self.cells {
-            let depolarized = c.segments.iter().any(|seg| seg.overlap(prev) >= 5);
+            let depolarized = c.segments.iter().any(|seg| seg.overlap(prev) >= MATCH_OVERLAP);
             if depolarized {
                 for i in 0..SDR_WORDS {
                     pred.bits[i] |= c.pattern.bits[i];
@@ -283,16 +352,65 @@ impl TemporalMemory {
         }
     }
 
+    /// Soft projection of HTM segment evidence. Inference-only; no fake gradient path.
+    pub fn predict_soft(&self, context: &[SdrVector]) -> SoftSdrVector {
+        let ctx = context.last().or_else(|| self.window.last());
+        let Some(ctx) = ctx else { return SoftSdrVector::new(SDR_DIM); };
+        let mut logits = vec![0.0f32; SDR_DIM];
+        for cell in &self.cells {
+            for seg in &cell.segments {
+                let ov = seg.overlap(ctx) as f32;
+                if ov < MATCH_OVERLAP as f32 {
+                    continue;
+                }
+                let scale = ov / seg.synapses.len().max(1) as f32;
+                for syn in &seg.synapses {
+                    if syn.bit_index < SDR_DIM {
+                        logits[syn.bit_index] += syn.permanence as f32 * scale;
+                    }
+                }
+            }
+        }
+        let max_logit = logits.iter().copied().fold(0.0f32, f32::max).max(1e-6);
+        SoftSdrVector { probs: logits.into_iter().map(|x| sigmoid(x / max_logit * 8.0 - 4.0)).collect() }
+    }
+
+    pub fn info_nce_loss(&self, context: &[SdrVector], actual: &SdrVector, temperature: f32) -> f32 {
+        let pred = self.predict_soft(context);
+        let negatives: Vec<SdrVector> = self.cells.iter().take(8).map(|c| c.pattern.clone()).collect();
+        info_nce_loss(&pred, actual, &negatives, temperature)
+    }
+
+    /// Latent projection of the next-token signal. Uses the LatentPredictor
+    /// to compress the contextual SDR into 512 dims. This is the primary
+    pub fn predict_latent(&self, context: &[SdrVector]) -> crate::ai::latent_jepa::LatentVector {
+        self.predictor.predict_next(context)
+    }
+
+    /// Cosine loss between the latent prediction and the latent of the actual
+    /// next token. Lower is better.
+    pub fn latent_cosine_loss(&self, context: &[SdrVector], actual: &SdrVector) -> f32 {
+        self.predictor.cosine_loss(context, actual)
+    }
+    /// Latent encoding of an SDR through the frozen encoder (vocab pre-cache).
+    pub fn latent_of_sdr(&self, sdr: &SdrVector) -> crate::ai::latent_jepa::LatentVector {
+        self.predictor.encoder.encode(sdr)
+    }
+
     /// Contextual prediction: a cell is depolarized when one of its segments
     /// matches the bundle of the whole context window, not just the last token.
     pub fn predict_next_context(&self, context: &[SdrVector]) -> SdrVector {
+        self.predict_context_threshold(context, MATCH_OVERLAP)
+    }
+
+    fn predict_context_threshold(&self, context: &[SdrVector], threshold: u32) -> SdrVector {
         let ctx = SdrVector::union(context);
         if ctx.popcount() == 0 {
             return SdrVector::zero();
         }
         let mut pred = SdrVector::zero();
         for c in &self.cells {
-            let depolarized = c.segments.iter().any(|seg| seg.overlap(&ctx) >= 5);
+            let depolarized = c.segments.iter().any(|seg| seg.overlap(&ctx) >= threshold);
             if depolarized {
                 for i in 0..SDR_WORDS {
                     pred.bits[i] |= c.pattern.bits[i];
@@ -343,7 +461,7 @@ impl TemporalMemory {
             }
         }
         match best {
-            Some(i) if best_ov >= 3 => {
+            Some(i) if best_ov >= MATCH_OVERLAP => {
                 self.cells[next_cell].segments[i].reinforce_match_only(prev);
             }
             _ => {
@@ -356,6 +474,10 @@ impl TemporalMemory {
     /// the whole context window (last `context_len` tokens), so the cell fires
     /// only when the full recent history matches — not just the last token.
     pub fn learn_context(&mut self, context: &[SdrVector], next: &SdrVector) {
+        self.learn_context_threshold(context, next, MATCH_OVERLAP)
+    }
+
+    fn learn_context_threshold(&mut self, context: &[SdrVector], next: &SdrVector, threshold: u32) {
         let next_cell = self.get_or_create_cell(next);
         let ctx = SdrVector::union(context);
         if ctx.popcount() == 0 {
@@ -363,7 +485,7 @@ impl TemporalMemory {
         }
         let mut has_ctx_seg = false;
         for seg in &self.cells[next_cell].segments {
-            if seg.overlap(&ctx) >= 3 {
+            if seg.overlap(&ctx) >= threshold {
                 has_ctx_seg = true;
                 break;
             }
@@ -376,6 +498,96 @@ impl TemporalMemory {
                 seg.reinforce(&ctx);
             }
         }
+    }
+
+    /// Learn a transition from an ORDER-SENSITIVE structural key (the current
+    /// frame folded via `structure_sdr`) to the next token. Unlike a raw
+    /// bi-gram segment, the whole recent window is bound into one super-vector
+    /// (position-permuted bundle), so a tail of many predecessors does not
+    /// drown out the pair we care about — structure is the feature, not a
+    /// single predecessor.
+    pub fn learn_structure(&mut self, window_tokens: &[&str], next_tok: &str) {
+        self.learn_structure_lr(window_tokens, next_tok, 0.1);
+    }
+
+    pub fn learn_structure_lr(&mut self, window_tokens: &[&str], next_tok: &str, lr: f32) {
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_tokens
+            .iter()
+            .map(|t| crate::ai::sdr::encode_text(t))
+            .collect();
+        let key = crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs);
+        let next = crate::ai::sdr::encode_text(next_tok);
+        self.learn_context_threshold(std::slice::from_ref(&key), &next, STRUCTURE_MATCH_OVERLAP);
+        // Also train the latent transition operator on the raw window→next
+        // pair. The window SDRs are already encoded above — reuse them.
+        self.predictor.learn_transition(&window_sdrs, &next, lr);
+    }
+
+    /// Same as [`Self::learn_structure_lr`] but the latent delta update is
+    /// applied along `proj·x` for an arbitrary projector. Used by
+    /// intra-sequence OWM: pass a local `P_seq` built from the already-learned
+    /// prefix transitions so a later step of the same function cannot
+    /// overwrite them. The structural segment learning still uses the default
+    /// path (it is separate from the W transition operator).
+    pub fn learn_structure_lr_with_p(
+        &mut self,
+        window_tokens: &[&str],
+        next_tok: &str,
+        lr: f32,
+        proj: &[f32],
+    ) {
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_tokens
+            .iter()
+            .map(|t| crate::ai::sdr::encode_text(t))
+            .collect();
+        let key = crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs);
+        let next = crate::ai::sdr::encode_text(next_tok);
+        self.learn_context_threshold(std::slice::from_ref(&key), &next, STRUCTURE_MATCH_OVERLAP);
+        self.predictor.learn_transition_with_p(&window_sdrs, &next, lr, proj);
+    }
+
+    /// Negative learning for the compiler-grounded loop: reduce the association
+    /// between a window and a *wrong* token (the one the decoder emitted where
+    /// rustc rejected it), without promoting any alternative. Latent-side only
+    /// (the linear transition operator), OWM-projected via `proj`. See
+    /// [`LatentPredictor::demote_transition_with_p`].
+    pub fn demote_structure_lr_with_p(
+        &mut self,
+        window_tokens: &[&str],
+        wrong_tok: &str,
+        lr: f32,
+        proj: &[f32],
+    ) {
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_tokens
+            .iter()
+            .map(|t| crate::ai::sdr::encode_text(t))
+            .collect();
+        let wrong = crate::ai::sdr::encode_text(wrong_tok);
+        if wrong.popcount() == 0 {
+            return;
+        }
+        self.predictor.demote_transition_with_p(&window_sdrs, &wrong, lr, proj);
+    }
+
+    /// Build an intra-sequence OWM projector `P_seq` from the given latent
+    /// directions (the inputs of the already-learned prefix transitions),
+    /// starting from identity. See `LatentPredictor::local_owm_projector`.
+    pub fn local_owm_projector(
+        &self,
+        directions: &[crate::ai::latent_jepa::LatentVector],
+        top_k: usize,
+        alpha: f32,
+    ) -> Vec<f32> {
+        self.predictor.local_owm_projector(directions, top_k, alpha)
+    }
+
+    /// Structural prediction: fold the visible window into a super-vector and
+    /// return the strongest predicted next-token pattern SDR.
+    pub fn predict_structure(&self, window_tokens: &[&str]) -> SdrVector {
+        let key = crate::ai::sdr::structure_sdr(window_tokens);
+        // Structural folds are denser than single tokens, so they need a
+        // density-scaled match threshold (see STRUCTURE_MATCH_OVERLAP).
+        self.predict_context_threshold(std::slice::from_ref(&key), STRUCTURE_MATCH_OVERLAP)
     }
 
     pub fn prune(&mut self) {
@@ -414,6 +626,27 @@ impl TemporalMemory {
                 for w in &sdr.bits {
                     f.write_all(&w.to_le_bytes()).ok();
                 }
+            }
+            // Latent transition operator W (LATENT_DIM² f32 values). Written
+            // after the window so older checkpoints without it still load.
+            let w = &self.predictor.w;
+            f.write_all(&(w.len() as u32).to_le_bytes()).ok();
+            for val in w {
+                f.write_all(&val.to_le_bytes()).ok();
+            }
+            // Number of delta updates (drives the throttled norm cap). Legacy
+            // checkpoints end after W; absence is treated as 0.
+            f.write_all(&self.predictor.updates.to_le_bytes()).ok();
+            // Context-window length. Written last so older checkpoints (which
+            // end after `updates`) still load with the historical default.
+            f.write_all(&(self.context_len as u64).to_le_bytes()).ok();
+            // OWM projector P (LATENT_DIM² f32 values). Written after the
+            // context length so checkpoints saved without OWM still load with
+            // P = identity (no protection).
+            let p = &self.predictor.p;
+            f.write_all(&(p.len() as u32).to_le_bytes()).ok();
+            for val in p {
+                f.write_all(&val.to_le_bytes()).ok();
             }
         }
     }
@@ -466,12 +699,108 @@ impl TemporalMemory {
             }
             window.push(crate::ai::sdr::SdrVector { bits });
         }
+        // Latent transition operator W. Older checkpoints end right after the
+        // window — detect that and fall back to the identity-initialized
+        // predictor.
+        let mut w = Vec::new();
+        let mut updates = 0u64;
+        if pos + 4 <= data.len() {
+            let wn = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+            pos += 4;
+            if wn > 0 && pos + wn * 4 <= data.len() {
+                w.reserve(wn);
+                for _ in 0..wn {
+                    w.push(f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?));
+                    pos += 4;
+                }
+            }
+            if pos + 8 <= data.len() {
+                updates = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+            }
+        }
+        // Context length is written after `updates`; checkpoints saved before
+        // that field end here, and fall back to the historical default (4).
+        let mut context_len = 4usize;
+        if pos + 8 <= data.len() {
+            context_len = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?) as usize;
+            pos += 8;
+        }
+        // OWM projector P. Checkpoints saved before OWM end after the context
+        // length; absence falls back to the identity projector.
+        let mut p = Vec::new();
+        if pos + 4 <= data.len() {
+            let pn = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+            pos += 4;
+            if pn == LATENT_DIM * LATENT_DIM && pos + pn * 4 <= data.len() {
+                p.reserve(pn);
+                for _ in 0..pn {
+                    p.push(f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?));
+                    pos += 4;
+                }
+            }
+        }
+        let mut cell_index = std::collections::HashMap::with_capacity(cells.len());
+        for (i, c) in cells.iter().enumerate() {
+            cell_index.insert(c.pattern.bits, i);
+        }
         Some(TemporalMemory {
             cells,
             window,
-            context_len: 4,
+            context_len,
             step: 0,
+            predictor: LatentPredictor::with_w(0xF03D_C0DE, w)
+                .with_updates(updates)
+                .with_p(p),
+            cell_index,
         })
+    }
+
+    /// Reassemble a TM from already-parsed parts (used by the binary loader in
+    /// the CLI, which keeps its own defensive bounds-checked parser). An empty
+    /// `w` falls back to the identity-initialized predictor (legacy checkpoints).
+    pub fn restore(
+        cells: Vec<TemporalCell>,
+        window: Vec<SdrVector>,
+        context_len: usize,
+        w: Vec<f32>,
+        updates: u64,
+        p: Vec<f32>,
+    ) -> Self {
+        let mut cell_index = std::collections::HashMap::with_capacity(cells.len());
+        for (i, c) in cells.iter().enumerate() {
+            cell_index.insert(c.pattern.bits, i);
+        }
+        let predictor = if w.is_empty() {
+            LatentPredictor::new(0xF03D_C0DE)
+        } else {
+            LatentPredictor::with_w(0xF03D_C0DE, w)
+                .with_updates(updates)
+                .with_p(p)
+        };
+        TemporalMemory {
+            cells,
+            window,
+            context_len,
+            step: 0,
+            predictor,
+            cell_index,
+        }
+    }
+
+    pub fn predictor_w(&self) -> &[f32] { &self.predictor.w }
+
+    pub fn predictor_p(&self) -> &[f32] { &self.predictor.p }
+
+    pub fn predictor_updates(&self) -> u64 { self.predictor.updates }
+
+    pub fn predictor_cap_firings(&self) -> u64 { self.predictor.cap_firings }
+
+    /// OWM consolidation hook: protect the given input directions (as encoded
+    /// latents) so future delta updates cannot overwrite them. See
+    /// `LatentPredictor::consolidate_owm`.
+    pub fn consolidate_owm(&mut self, directions: &[LatentVector], top_k: usize, alpha: f32) -> usize {
+        self.predictor.consolidate_owm(directions, top_k, alpha)
     }
 
     pub fn stats(&self) -> String {
@@ -489,5 +818,136 @@ impl TemporalMemory {
             total_syn,
             self.window.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn train_on_sequence_records_transition() {
+        let mut tm = TemporalMemory::new(8, 2);
+        let stats = tm.train_on_sequence(&["fn", "main", "(", ")"], 2);
+        assert_eq!(stats.steps, 6);
+        assert_eq!(stats.learned_transitions, 6);
+        assert!(stats.initial_loss.is_finite());
+        assert!(stats.final_loss.is_finite());
+    }
+
+    /// Regression guard for the `main → (` bi-gram getting lost when the `(`
+    /// cell is trained under many distinct predecessors. The winner-take-all
+    /// branch must preserve a dedicated segment per predecessor instead of
+    /// decaying it away, so the segment keeps firing with high overlap.
+    #[test]
+    fn rare_bigram_survives_many_predecessors() {
+        use crate::ai::sdr::{encode_text, SDR_DIM};
+
+        let mut tm = TemporalMemory::new(SDR_DIM, 4);
+        // 200 distinct predecessor tokens, each appearing before `(`, and the
+        // specific `main` predecessor appears only once. Emulates a real corpus.
+        for trial in 0..200 {
+            let prev = encode_text(&format!("tok_{}", trial));
+            tm.learn_sequence(&prev, &encode_text("("));
+        }
+        // The special pair is learned last and must be retrievable.
+        tm.learn_sequence(&encode_text("main"), &encode_text("("));
+        tm.learn_sequence(&encode_text("main"), &encode_text("("));
+
+        let paren = encode_text("(");
+        let main = encode_text("main");
+        let cell = tm
+            .cells
+            .iter()
+            .find(|c| c.pattern.bits == paren.bits)
+            .expect("cell for `(` must exist");
+        let best_overlap = cell
+            .segments
+            .iter()
+            .map(|seg| seg.overlap(&main))
+            .max()
+            .unwrap_or(0);
+        eprintln!(
+            "segments={} best_overlap(main)={}",
+            cell.segments.len(),
+            best_overlap
+        );
+        // The segment trained on `main` must be strongly depolarized.
+        assert!(best_overlap >= MATCH_OVERLAP, "main→( segment lost: {}", best_overlap);
+        let pred = tm.predict_next(&main);
+        assert!(pred.overlap(&paren) >= MATCH_OVERLAP);
+    }
+
+    /// Structural learning must associate the whole ordered window with the
+    /// next token, and the folded key must be repeatable.
+    #[test]
+    fn structural_learning_predicts_next() {
+        use crate::ai::sdr::encode_text;
+
+        let mut tm = TemporalMemory::new(SDR_DIM, 4);
+        // Teach the structure "fn NAME (" then ")" twice.
+        tm.learn_structure(&["fn", "main", "("], ")");
+        tm.learn_structure(&["fn", "main", "("], ")");
+        tm.learn_structure(&["fn", "sum", "("], ")");
+
+        let pred = tm.predict_structure(&["fn", "main", "("]);
+        let close = encode_text(")");
+        assert!(
+            pred.overlap(&close) >= 5,
+            "structural prediction lost: overlap={}",
+            pred.overlap(&close)
+        );
+    }
+
+    /// Latent predictor must produce a finite 512-dim vector for any context.
+    #[test]
+    fn predict_latent_returns_512_dim_vector() {
+        use crate::ai::sdr::encode_text;
+        let tm = TemporalMemory::new(SDR_DIM, 4);
+        let ctx = vec![encode_text("fn"), encode_text("main")];
+        let latent = tm.predict_latent(&ctx);
+        assert_eq!(latent.values.len(), 512);
+        assert!(latent.values.iter().all(|v| v.is_finite()));
+    }
+
+    /// Latent cosine loss is finite and in [0, 2].
+    #[test]
+    fn latent_cosine_loss_is_finite() {
+        use crate::ai::sdr::encode_text;
+        let tm = TemporalMemory::new(SDR_DIM, 4);
+        let ctx = vec![encode_text("main")];
+        let next = encode_text("(");
+        let loss = tm.latent_cosine_loss(&ctx, &next);
+        assert!(loss.is_finite());
+        assert!((0.0..=2.0).contains(&loss));
+    }
+
+    /// Order is part of the structural key. Two windows sharing the same
+    /// trailing token occupy the same position slot (so partial overlap is
+    /// expected), but a genuinely different window — different tokens and
+    /// order — must elicit far weaker evidence for `)`.
+    #[test]
+    fn structural_learning_is_order_sensitive() {
+        use crate::ai::sdr::encode_text;
+
+        let mut tm = TemporalMemory::new(SDR_DIM, 4);
+        tm.learn_structure(&["fn", "main", "("], ")");
+        tm.learn_structure(&["fn", "main", "("], ")");
+
+        let close = encode_text(")");
+        let pred_fwd = tm.predict_structure(&["fn", "main", "("]);
+        let pred_bogus = tm.predict_structure(&["let", "count", "=", "5"]);
+        // The learned signal fires strongly on the exact window.
+        assert!(
+            pred_fwd.overlap(&close) >= MATCH_OVERLAP,
+            "forward match lost: {}",
+            pred_fwd.overlap(&close)
+        );
+        // A structurally unrelated window must not produce a strong `)` response.
+        assert!(
+            pred_bogus.overlap(&close) < 5,
+            "bogus window leaks into ) : {}",
+            pred_bogus.overlap(&close)
+        );
     }
 }

@@ -15,6 +15,16 @@ pub struct SandboxResult {
     pub reward: f64,
 }
 
+/// Raw rustc result including the full stderr text, so callers can extract the
+/// failing token / expected token from diagnostics to drive targeted learning.
+#[derive(Debug, Clone)]
+pub struct SandboxDiagnostics {
+    pub compiles: bool,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub stderr: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CppSandboxResult {
     pub compiles: bool,
@@ -104,14 +114,31 @@ impl SandboxHarness {
         }
     }
 
+    /// Compile-only check that also returns the raw stderr, so the caller can
+    /// extract the expected token from diagnostics to target learning.
+    pub fn evaluate_diagnostics(&self, code: &str, file_name: &str) -> SandboxDiagnostics {
+        let file_path = self.temp_dir.join(file_name);
+        let crate_name = file_name.trim_end_matches(".rs");
+
+        if let Err(e) = std::fs::write(&file_path, code) {
+            return SandboxDiagnostics {
+                compiles: false,
+                error_count: 1,
+                warning_count: 0,
+                stderr: format!("write error: {}", e),
+            };
+        }
+
+        let compile_result = self.compile_crate(&file_path, crate_name);
+        SandboxDiagnostics {
+            compiles: compile_result.success,
+            error_count: compile_result.errors,
+            warning_count: compile_result.warnings,
+            stderr: compile_result.stderr,
+        }
+    }
+
     fn compile_cpp(&self, file_path: &std::path::Path) -> CppCompileResult {
-        let _out = self.temp_dir.join(format!(
-            "{}.exe",
-            file_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("a")
-        ));
         let mut cmd = Command::new("g++");
         cmd.arg("-std=c++17")
             .arg("-Wall")

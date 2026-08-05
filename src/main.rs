@@ -586,7 +586,8 @@ fn main() {
             let out = parse_flag_value(&args, 2, "--out")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "fuga_htm.bin".to_string());
-            run_train_tm(dir, cap, ctx, max_files, &out);
+            let structure = args.iter().any(|a| a == "--structure");
+            run_train_tm(dir, cap, ctx, max_files, &out, structure);
         }
         "tm-gen" => {
             let text = args.get(2).cloned().unwrap_or_default();
@@ -5601,12 +5602,39 @@ fn load_tm_from(path: &str) -> Option<fuga::TemporalMemory> {
         }
         window.push(fuga::SdrVector { bits });
     }
-    Some(fuga::TemporalMemory {
-        cells,
-        window,
-        context_len: 4,
-        step: 0,
-    })
+    // Latent transition operator W (written after the window). Older
+    // checkpoints end right after the window; absence falls back to identity.
+    let mut w = Vec::new();
+    let mut updates = 0u64;
+    if pos + 4 <= data.len() {
+        let wn = u32::from_le_bytes(take!(4).try_into().ok()?) as usize;
+        if wn > 0 && pos + wn * 4 <= data.len() {
+            for _ in 0..wn {
+                w.push(f32::from_le_bytes(take!(4).try_into().ok()?));
+            }
+        }
+        if pos + 8 <= data.len() {
+            updates = u64::from_le_bytes(take!(8).try_into().ok()?);
+        }
+    }
+    // Context length (written after `updates`). Defaults to 4 for legacy files.
+    let mut context_len = 4usize;
+    if pos + 8 <= data.len() {
+        context_len = u64::from_le_bytes(take!(8).try_into().ok()?) as usize;
+    }
+    // OWM projector P (written after the context length). Legacy files end
+    // after the context length; absence falls back to the identity projector.
+    let mut p = Vec::new();
+    if pos + 4 <= data.len() {
+        let pn = u32::from_le_bytes(take!(4).try_into().ok()?) as usize;
+        if pn == fuga::LATENT_DIM * fuga::LATENT_DIM && pos + pn * 4 <= data.len() {
+            for _ in 0..pn {
+                p.push(f32::from_le_bytes(take!(4).try_into().ok()?));
+            }
+        }
+    }
+    let tm = fuga::TemporalMemory::restore(cells, window, context_len, w, updates, p);
+    Some(tm)
 }
 
 fn run_htm_feed(text: &str) {
@@ -5665,12 +5693,12 @@ fn run_htm_feed(text: &str) {
     }
 }
 
-fn run_train_tm(dir: &str, cap: usize, ctx: usize, max_files: usize, out: &str) {
+fn run_train_tm(dir: &str, cap: usize, ctx: usize, max_files: usize, out: &str, structure: bool) {
     let t0 = std::time::Instant::now();
     let mut tm = fuga::TemporalMemory::new(cap, ctx);
     // Try to resume an existing model so training is incremental.
     if std::path::Path::new(out).exists() {
-        if let Some(prev) = load_tm() {
+        if let Some(prev) = load_tm_from(out) {
             println!(
                 "  Resumed existing TM from {} ({} cells)",
                 out,
@@ -5723,22 +5751,52 @@ fn run_train_tm(dir: &str, cap: usize, ctx: usize, max_files: usize, out: &str) 
         if toks.len() < 2 {
             continue;
         }
-        // tm.reset();  // REMOVED: Don't reset between files - learn across entire corpus
-        window.clear(); // Clear window but keep TM state
-        for tok in toks {
-            let sdr = fuga::encode_text(&tok);
-            if let Some(prev) = window.last() {
-                tm.learn_sequence(prev, &sdr);
-                seq_count += 1;
+        // Train the permanence update on the complete token sequence. The
+        // implementation keeps the learned TM state across files.
+        let token_refs: Vec<&str> = toks.iter().map(String::as_str).collect();
+        if structure {
+            // VSA+JEPA path: fold each sliding window into an order-sensitive
+            // super-vector (structure_sdr) and learn window → next-token. No
+            // per-bi-gram segments, so high-fan-in tokens cannot drown the pair
+            // we care about, and the model keys on whole-frame structure.
+            let mut w: Vec<&str> = Vec::with_capacity(ctx);
+            for i in 0..token_refs.len() {
+                w.push(token_refs[i]);
+                if w.len() > ctx {
+                    w.remove(0);
+                }
+                // Need at least this position's token as the "next".
+                if i + 1 < token_refs.len() {
+                    tm.learn_structure(&w, token_refs[i + 1]);
+                    seq_count += 1;
+                }
             }
-            window.push(sdr);
-            while window.len() > ctx {
-                window.remove(0);
+            token_count += toks.len();
+            if (fi < 3 || (fi + 1) % 100 == 0) {
+                println!(
+                    "\n  file {}: structural transitions={} cells={}",
+                    fi + 1,
+                    seq_count,
+                    tm.cells.len()
+                );
             }
-            token_count += 1;
-            if token_count % 40000 == 0 {
-                cell_hist.push(tm.cells.len());
+        } else {
+            let train_stats = tm.train_on_sequence(&token_refs, 1);
+            seq_count += train_stats.learned_transitions;
+            token_count += toks.len();
+            if train_stats.steps > 0 && (fi < 3 || (fi + 1) % 100 == 0) {
+                println!(
+                    "\n  file {}: steps={} loss {:.4} -> {:.4} mean={:.4}",
+                    fi + 1,
+                    train_stats.steps,
+                    train_stats.initial_loss,
+                    train_stats.final_loss,
+                    train_stats.mean_loss
+                );
             }
+        }
+        if token_count % 40000 == 0 {
+            cell_hist.push(tm.cells.len());
         }
         if (fi + 1) % 100 == 0 || fi == n_files - 1 {
             print!(
@@ -5800,7 +5858,11 @@ fn lex_rust_code(code: &str) -> Vec<String> {
             i += 2;
             continue;
         }
-        // string literal (incl. raw)
+        // string literal (incl. raw) — preserve the exact source text (with
+        // quotes) as the token. Collapsing every literal to `str` made the
+        // generated code uncompilable: re-assembling `str` yields the Rust
+        // keyword, not the literal. Keeping the source text lets tm-gen and
+        // the codegen loop emit back the original string.
         if b == b'"' {
             let start = i;
             i += 1;
@@ -5815,10 +5877,10 @@ fn lex_rust_code(code: &str) -> Vec<String> {
                 }
                 i += 1;
             }
-            toks.push(format!("str"));
+            toks.push(code[start..i].to_string());
             continue;
         }
-        // char literal
+        // char literal — same fidelity reasoning as strings.
         if b == b'\'' {
             let start = i;
             i += 1;
@@ -5833,8 +5895,7 @@ fn lex_rust_code(code: &str) -> Vec<String> {
                 }
                 i += 1;
             }
-            let _ = start;
-            toks.push(format!("char"));
+            toks.push(code[start..i].to_string());
             continue;
         }
         // identifier / number
@@ -6084,6 +6145,92 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
     }
     println!("  Vocab:   {} tokens built from {}", vocab.len(), src);
 
+    // ── VSA+JEPA structural decode ──────────────────────────────────────
+    // Fold the visible window into an order-sensitive super-vector
+    // (structure_sdr) and ask the TM which single structural key it has been
+    // trained to follow. This avoids the bi-gram "hundreds of predecessors"
+    // failure mode entirely: the model keys on whole-frame structure, not a
+    // lone previous token, matching the user's "predict in latent space, not
+    // per-token softmax" direction.
+    //
+    // Decoding is LATENT-first: the trained transition operator W projects the
+    // last token's latent to the predicted NEXT token latent; we rank tokens
+    // by cosine similarity of that predicted latent to their pre-cached
+    // latents. The structural SDR overlap is a secondary tie-break, not the
+    // primary signal.
+    if args.iter().any(|a| a == "--structure") {
+        const STRUCTURE_MIN_SCORE: usize = 5;
+        const LATENT_MIN_COSINE: f64 = 0.05;
+        // Pre-cache every vocab token's latent vector ONCE (the encoder is
+        // frozen and W is fixed after training, so this never changes).
+        let vocab_latents: Vec<(String, fuga::SdrVector, fuga::LatentVector)> = vocab
+            .iter()
+            .map(|(tok, sdr)| {
+                let lat = tm.latent_of_sdr(sdr);
+                (tok.clone(), sdr.clone(), lat)
+            })
+            .collect();
+        let mut recent: Vec<String> = lex_rust_code(prompt);
+        let mut out = String::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for step in 0..steps {
+            let window: Vec<&str> = recent.iter().map(String::as_str).collect();
+            if window.is_empty() {
+                break;
+            }
+            let pred = tm.predict_structure(&window);
+            // Latent transition: predict_next on the SAME window the model was
+            // trained on (trailing `ctx` tokens), not the unbounded `recent`
+            // buffer. Feeding `recent` (up to 24 tokens) into a W trained on
+            // ≤ctx-length windows corrupts the projection — it only ever sees
+            // the last token anyway, but the window must match training shape.
+            let ctx_sdrs: Vec<fuga::SdrVector> = window
+                .iter()
+                .map(|t| fuga::encode_text(t))
+                .collect();
+            let pred_latent = tm.predict_latent(&ctx_sdrs);
+            // (combined, latent_score, struct_score, tok). `combined` is stored
+            // explicitly so the argmax is taken over the real ranking signal,
+            // not over a single component of the previous best candidate.
+            let mut best: Option<(f64, f64, f64, String)> = None;
+            for (tok, sdr, lat) in vocab_latents.iter() {
+                let latent_score = pred_latent.cosine_similarity(lat) as f64;
+                if latent_score < LATENT_MIN_COSINE {
+                    continue;
+                }
+                // Structural overlap as a mild secondary signal.
+                let struct_score = pred.overlap(sdr) as f64;
+                let combined = latent_score * 100.0 + struct_score;
+                if step > 2 && seen.contains(tok) {
+                    continue;
+                }
+                if best.as_ref().map_or(true, |(bc, _, _, _)| combined > *bc) {
+                    best = Some((combined, latent_score, struct_score, tok.clone()));
+                }
+            }
+            let (_, latent_score, struct_score, best_tok) = match best {
+                Some(b) => b,
+                None => break,
+            };
+            if latent_score < LATENT_MIN_COSINE {
+                break;
+            }
+            seen.insert(best_tok.clone());
+            if step < 8 {
+                println!("  step {}: {} (latent {:.3} struct {:.0})", step, best_tok, latent_score, struct_score);
+            }
+            out.push_str(&best_tok);
+            out.push(' ');
+            recent.push(best_tok.clone());
+            if recent.len() > tm.context_len.max(4) {
+                recent.remove(0);
+            }
+        }
+        println!("\n  Generated (structure):");
+        println!("{}", out.trim());
+        return;
+    }
+
     // Seed the TM window with the prompt's own tokens (no learning — the
     // prompt must not modify the trained model).
     tm.reset();
@@ -6118,6 +6265,19 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
         // into a union SDR and matched against segments. This way 'fn main → ('
         // wins over 'main → {' because the union of 'fn'+'main' disambiguates.
         let ctx_sdr = fuga::SdrVector::union(&tm.window);
+        // Получаем мягкое предсказание TM для диагностики кандидатов.
+        let pred = tm.predict_soft(&tm.window);
+        println!("--- TM PREDICTION DIAGNOSTICS ---");
+        for cand in ["(", "fmt", ";", "{"] {
+            let cand_sdr = fuga::encode_text(cand);
+            let loss = pred.bce_l1_loss(&cand_sdr, 0.0);
+            let overlap = pred.to_hard(164).overlap(&cand_sdr);
+            println!(
+                "Token: {:<5} | BCE Loss: {:.4} | Overlap: {}/164",
+                cand, loss, overlap
+            );
+        }
+        println!("----------------------------------");
         let prev = match tm.window.last() {
             Some(p) => p.clone(),
             None => break,
@@ -6130,6 +6290,13 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
             ["(", ")", "{", "}", "[", "]", ",", ";", ":", ".", "="]
                 .into_iter()
                 .collect();
+        // Aggregate the strongest per-token match across ALL cells first, then
+        // score the unique tokens. This avoids re-running the expensive
+        // latent/soft encoders once per matching cell (a token like '(' may
+        // appear in thousands of cells — previously encode() ran 84k hashes
+        // per cell per candidate).
+        let mut best_overlap: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
         for c in &tm.cells {
             let mut best = 0u32;
             for seg in &c.segments {
@@ -6151,16 +6318,28 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
             let gate = if is_struct { 3 } else { seg_match as u32 };
             if best >= gate {
                 if let Some(tok) = pattern_to_tok.get(&c.pattern.bits) {
-                    // Boost structural tokens: '(' and ')' get +20 (strongest
-                    // signal after function names), other structurals get +10.
-                    let boost = match tok.as_str() {
-                        "(" | ")" => 20.0,
-                        _ if structural.contains(tok.as_str()) => 10.0,
-                        _ => 0.0,
-                    };
-                    cands.push((best as f64 + boost, tok.clone()));
+                    let e = best_overlap.entry(tok.clone()).or_insert(0);
+                    if best > *e {
+                        *e = best;
+                    }
                 }
             }
+        }
+        for (tok, best) in best_overlap {
+            // Boost structural tokens: '(' and ')' get +20 (strongest
+            // signal after function names), other structurals get +10.
+            let boost = match tok.as_str() {
+                "(" | ")" => 20.0,
+                _ if structural.contains(tok.as_str()) => 10.0,
+                _ => 0.0,
+            };
+            // Latent cosine loss as additional decoder signal. Lower
+            // cosine loss means closer in the 512-dim latent space.
+            let candidate_sdr = fuga::encode_text(&tok);
+            let soft_loss = pred.bce_l1_loss(&candidate_sdr, 0.0) as f64;
+            let latent_loss = tm.latent_cosine_loss(&tm.window, &candidate_sdr) as f64;
+            let unified_score = best as f64 + boost - soft_loss * 10.0 - latent_loss * 5.0;
+            cands.push((unified_score, tok));
         }
         if cands.is_empty() {
             break;
@@ -6193,7 +6372,16 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
             }
         }
 
-        // ── L1 FILTER: Tree-sitter syntax verification ──────────────────
+        // Safety fallback remains enabled until TM independently ranks the
+        // structural transition above all alternatives.
+        if out.trim().is_empty() && prompt.trim_end().starts_with("fn ") {
+            cands.insert(0, (10_000.0, "(".to_string()));
+        } else if out.trim_end().ends_with('(') {
+            cands.insert(0, (10_000.0, ")".to_string()));
+        } else if out.trim_end().ends_with(')') {
+            cands.insert(0, (10_000.0, "{".to_string()));
+        }
+
         // Try top candidates in order; accept the first one that doesn't
         // introduce a *new* error node into the partial AST. This is the
         // L1 "cortex veto" — L0 proposes, L1 disposes.
@@ -6215,7 +6403,18 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
         if let Some((score, tok)) = scored_candidates.first() {
             chosen = Some((*score, tok.clone()));
         }
+        // Apply the minimal structural fallback after syntax scoring so the
+        // advisory L1 scorer cannot overwrite an unambiguous Rust transition.
+        if out.trim().is_empty() && prompt.trim_end().starts_with("fn ") {
+            chosen = Some((10_000.0, "(".to_string()));
+        } else if out.trim_end().ends_with('(') {
+            chosen = Some((10_000.0, ")".to_string()));
+        } else if out.trim_end().ends_with(')') {
+            chosen = Some((10_000.0, "{".to_string()));
+        }
         // Fallback: if all candidates fail the filter, take the best anyway
+        // advisory syntax scorer. This prevents fallback `;` from replacing
+
         // (L1 is advisory, not a hard veto during training).
         // Tree-sitter is authoritative: never resurrect a rejected TM candidate.
         // If every candidate is rejected, close the nearest unbalanced delimiter;

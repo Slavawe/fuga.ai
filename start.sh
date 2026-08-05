@@ -11,7 +11,7 @@ pkill -f "serveo.net" 2>/dev/null
 sleep 1
 
 # Start web server
-FUGA_CUBE_PATH="$DIR/fuga_code_cube.bin" FUGA_WEB_PORT=8080 \
+FUGA_CUBE_PATH="$DIR/omni_cube_repos.bin" FUGA_WEB_PORT=8080 \
   nohup "$DIR/target/release/fuga-web" > "$DIR/web_output.log" 2>&1 &
 echo "  Web server: PID $!"
 
