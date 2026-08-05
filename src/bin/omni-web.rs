@@ -369,6 +369,118 @@ fn answer_from_flat<const N: usize, const S: usize>(ai: &mut FugaAI<N, S>, query
     }
 }
 
+fn handle_openai_chat<const N: usize, const S: usize>(
+    state: &mut WebState<N, S>,
+    body: &str,
+) -> String {
+    let req: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
+    let model = req.get("model").and_then(|v| v.as_str()).unwrap_or("fuga-2.0");
+    let stream = req.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let messages = req.get("messages").and_then(|v| v.as_array()).cloned();
+    let temperature =
+        req.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.6);
+    let _max_tokens = req.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(512);
+
+    // Собираем контекст: последнее user-сообщение + всё после прошлого tool-цикла,
+    // чтобы агентный цикл (fenced `:::call` у Fuga) мог продолжать с результатами.
+    let mut prompt_parts: Vec<String> = Vec::new();
+    if let Some(msgs) = messages {
+        for m in msgs {
+            let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let mut content = m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if let Some(tool_calls) = m.get("tool_calls").and_then(|v| v.as_array()) {
+                for tc in tool_calls {
+                    if let Some(args) = tc.get("function").and_then(|f| f.get("arguments")) {
+                        content.push_str(&format!("\n[want_tool] {}", args));
+                    }
+                }
+            }
+            if !content.trim().is_empty() {
+                match role {
+                    "user" | "system" | "tool" | "assistant" => {
+                        prompt_parts.push(format!("[{}]\n{}", role, content))
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let query = if prompt_parts.is_empty() {
+        "Hello".to_string()
+    } else {
+        prompt_parts.join("\n")
+    };
+
+    let chat_body = serde_json::json!({"message": query}).to_string();
+    let full = handle_chat::<N, S>(state, &query);
+    let v: serde_json::Value = serde_json::from_str(&full).unwrap_or_default();
+
+    // Fuga-ответ = свой контекст: конверсионный + omni + сгенерированный код.
+    let conversation = v
+        .get("conversational")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    let omni_text = v
+        .get("omni_output")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut content = conversation;
+    if !omni_text.trim().is_empty() {
+        content.push_str("\n\n");
+        content.push_str(&omni_text);
+    }
+
+    let _ = temperature; // VSA-температура пока задаётся внутри handle_chat
+    let id = format!("chatcmpl-fuga-{}", uuid_like());
+    let usage = serde_json::json!({
+        "prompt_tokens": query.split_whitespace().count(),
+        "completion_tokens": content.split_whitespace().count(),
+        "total_tokens": query.split_whitespace().count() + content.split_whitespace().count(),
+    });
+    let base = serde_json::json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": crate::unix_now(),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop"
+        }],
+        "usage": usage,
+    });
+    if stream {
+        let mut out = String::new();
+        let chunk = serde_json::json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": crate::unix_now(),
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": null}]
+        });
+        out.push_str("data: ");
+        out.push_str(&chunk.to_string());
+        out.push_str("\n\n");
+        out.push_str(&serde_json::json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": crate::unix_now(),
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        }).to_string());
+        out.push_str("\n\ndata: [DONE]\n\n");
+        out
+    } else {
+        base.to_string()
+    }
+}
+
 fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> String {
     let mut builder = TokenBuilder::new();
     let _ = builder.load_configs_from_dir("tikones");
@@ -751,6 +863,34 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                     Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
                 )
             }
+            ("GET", "/v1/models") => {
+                let models = serde_json::json!({
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "fuga-2.0",
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": "fuga",
+                            "permission": [],
+                        }
+                    ]
+                });
+                Response::from_string(models.to_string()).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
+            }
+            ("POST", "/v1/chat/completions") => {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap_or(0);
+                let resp = {
+                    let mut st = state.lock().unwrap();
+                    handle_openai_chat::<N, S>(&mut st, &body)
+                };
+                Response::from_string(resp).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
+            }
             ("POST", "/api/speak") => {
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body).unwrap_or(0);
@@ -830,4 +970,22 @@ fn main() {
         (5, 4) => run_server::<5, 4>(&cube_path, port),
         _ => eprintln!("Unsupported cube dimensions: {}×{}", side_len, ndim),
     }
+}
+
+fn unix_now() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn uuid_like() -> String {
+    use fastrand;
+    let mut h = String::with_capacity(24);
+    let hex = b"0123456789abcdef";
+    for i in 0..24 {
+        h.push(hex[fastrand::usize(..16)] as char);
+    }
+    h
 }
