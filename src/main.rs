@@ -1671,7 +1671,8 @@ fn run_tm_gen_entry(args: &[String]) {
         let toks: Vec<&str> = query.split_whitespace().collect();
         for t in toks.iter().rev().take(5) {
             let pc = tm.predict_structure(&[*t]).popcount();
-            println!("[debug] predict_structure([{:?}]) popcount={}", t, pc);
+            let raw = tm.predict_structure_raw(&[*t]).popcount();
+            println!("[debug] predict_structure([{:?}]) pc={} raw_pc={}", t, pc, raw);
         }
     }
 

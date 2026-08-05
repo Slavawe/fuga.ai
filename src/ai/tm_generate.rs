@@ -1,7 +1,13 @@
 use crate::ai::htm_temporal::TemporalMemory;
-use crate::ai::sdr::{SdrVector, encode_text};
+use crate::ai::sdr::{SDR_DIM, SDR_WORDS, SdrVector, encode_text};
 
-const MIN_OVERLAP: u32 = 7;
+/// Minimum average per-bit weight a candidate must carry to be emitted. Weights
+/// come from [`TemporalMemory::predict_structure_weighted`]: each bit accumulates
+/// the segment-match overlap of every depolarized next-token pattern containing
+/// it. A candidate that actually follows the context scores its own bit-count
+/// worth of strong matches; a candidate that merely co-occurs by chance scores
+/// close to 0. Empirically a real next token averages well above this.
+const MIN_AVG_WEIGHT: f32 = 6.0;
 
 // Последовательная генерация через Временную память (TM + SDR).
 // В отличие от статической склейки строк памяти, TM предсказывает следующий
@@ -32,20 +38,31 @@ pub fn tm_generate(
 
     while out.len() < steps && guard < steps * 2 {
         guard += 1;
-        let pred = best_structure_prediction(tm, &window);
-        if pred.popcount() == 0 {
+        let weights = best_structure_weights(tm, &window);
+        if weights.iter().all(|&w| w <= 0.0) {
             break;
         }
-        let next = decode_to_word(&pred, candidates);
+        let next = decode_weighted(&weights, candidates);
         match next {
-            Some((word, _overlap)) if out.last() == Some(&word) => {
+            Some(word) if out.last() == Some(&word) => {
                 // A temporal memory must not re-emit the same token off the
                 // same context forever; a repeated emission means the merged
                 // prediction did not diverge, so stop rather than loop.
                 break;
             }
-            Some((word, _overlap)) => {
+            Some(word) => {
                 out.push(word.to_string());
+                // Anti-repetition guards. Either a token recurs ~3× in the
+                // recent tail or the chain settles into a 2-token cycle
+                // (`A B A B`), the generation is oscillating on a fixed set
+                // instead of advancing — stop.
+                let recent = &out[out.len().saturating_sub(6)..];
+                if recent.iter().filter(|w| *w == &word).count() >= 3 {
+                    break;
+                }
+                if out.len() >= 2 && out[out.len() - 2] == word {
+                    break;
+                }
                 window.push(word.to_string());
                 if window.len() > window_size.max(1) {
                     window.remove(0);
@@ -57,39 +74,56 @@ pub fn tm_generate(
     out
 }
 
-/// Predict the next token from a sliding window, accepting partial matches:
-/// if the full window yields nothing, shrink it (drop the oldest token) and
-/// retry — a tail that did appear somewhere in the learned corpus still fires.
-fn best_structure_prediction(tm: &TemporalMemory, window: &[String]) -> SdrVector {
+/// Weighted next-token evidence from a sliding window, accepting partial
+/// matches: if the full window depolarizes nothing, shrink it (drop the oldest
+/// token) and retry — a tail that did appear in the learned corpus still fires.
+fn best_structure_weights(tm: &TemporalMemory, window: &[String]) -> Vec<f32> {
     let mut n = window.len();
     while n >= 1 {
         let win_refs: Vec<&str> = window[window.len() - n..].iter().map(|s| s.as_str()).collect();
-        let pred = tm.predict_structure(&win_refs);
-        if pred.popcount() > 0 {
-            return pred;
+        let weights = tm.predict_structure_weighted(&win_refs);
+        if weights.iter().any(|&w| w > 0.0) {
+            return weights;
         }
         n -= 1;
     }
-    SdrVector::zero()
+    vec![0f32; SDR_DIM]
 }
 
-fn decode_to_word(pred: &SdrVector, candidates: &[String]) -> Option<(String, u32)> {
+/// Rank candidates by the average weight carried on their own bits. A token
+/// whose cell depolarized with a strong segment match earns a high average;
+/// a token only randomly overlapping the evidence scores ~0.
+fn decode_weighted(weights: &[f32], candidates: &[String]) -> Option<String> {
     if candidates.is_empty() {
         return None;
     }
-    let mut best: Option<(usize, u32)> = None;
+    let mut best: Option<(usize, f32)> = None;
     for (i, w) in candidates.iter().enumerate() {
         let sdr = encode_text(w);
-        let o = pred.overlap(&sdr);
+        let mut sum = 0f32;
+        let mut cnt = 0usize;
+        for wi in 0..SDR_WORDS {
+            let base = wi * 64;
+            let mut x = sdr.bits[wi];
+            while x != 0 {
+                let bi = x.trailing_zeros() as usize;
+                sum += weights[base + bi];
+                cnt += 1;
+                x &= x - 1;
+            }
+        }
+        if cnt == 0 {
+            continue;
+        }
+        let avg = sum / cnt as f32;
         match best {
-            Some((_, bo)) if o > bo => best = Some((i, o)),
-            None => best = Some((i, o)),
+            Some((_, ba)) if avg > ba => best = Some((i, avg)),
+            None => best = Some((i, avg)),
             _ => {}
         }
     }
-    best
-        .filter(|(_, o)| *o >= MIN_OVERLAP)
-        .map(|(i, o)| (candidates[i].clone(), o))
+    best.filter(|(_, avg)| *avg >= MIN_AVG_WEIGHT)
+        .map(|(i, _)| candidates[i].clone())
 }
 
 #[cfg(test)]

@@ -404,19 +404,7 @@ impl TemporalMemory {
     }
 
     fn predict_context_threshold(&self, context: &[SdrVector], threshold: u32) -> SdrVector {
-        let ctx = SdrVector::union(context);
-        if ctx.popcount() == 0 {
-            return SdrVector::zero();
-        }
-        let mut pred = SdrVector::zero();
-        for c in &self.cells {
-            let depolarized = c.segments.iter().any(|seg| seg.overlap(&ctx) >= threshold);
-            if depolarized {
-                for i in 0..SDR_WORDS {
-                    pred.bits[i] |= c.pattern.bits[i];
-                }
-            }
-        }
+        let pred = self.predict_context_raw(context, threshold);
         if pred.popcount() > 0 {
             let target = (SDR_DIM as f64 * SDR_DENSITY).ceil() as usize;
             let mut scored: Vec<(usize, u64)> = (0..SDR_DIM)
@@ -442,6 +430,77 @@ impl TemporalMemory {
         } else {
             SdrVector::zero()
         }
+    }
+
+    /// Raw merge of every depolarized cell's pattern for the context — the
+    /// OR of the candidate next tokens before the density re-selection in
+    /// [`Self::predict_context_threshold`]. Re-selection collapses a
+    /// multi-candidate union into a hash-sampled 2%-dense slice that no single
+    /// token reproduces; the raw union keeps each candidate's full pattern so a
+    /// decoder can rank candidates by what fraction of their bits fired. Used
+    /// by the TM sequential generator.
+    fn predict_context_raw(&self, context: &[SdrVector], threshold: u32) -> SdrVector {
+        let ctx = SdrVector::union(context);
+        if ctx.popcount() == 0 {
+            return SdrVector::zero();
+        }
+        let mut pred = SdrVector::zero();
+        for c in &self.cells {
+            let depolarized = c.segments.iter().any(|seg| seg.overlap(&ctx) >= threshold);
+            if depolarized {
+                for i in 0..SDR_WORDS {
+                    pred.bits[i] |= c.pattern.bits[i];
+                }
+            }
+        }
+        pred
+    }
+
+    /// Structural prediction over the RAW merged candidate patterns: the union
+    /// of every next-token pattern whose cell depolarized for `window_tokens`.
+    /// Wraps [`Self::predict_context_raw`] with the structure-folded key so the
+    /// generator can score overlaps without the destructive re-selection.
+    pub fn predict_structure_raw(&self, window_tokens: &[&str]) -> SdrVector {
+        let key = crate::ai::sdr::structure_sdr(window_tokens);
+        self.predict_context_raw(std::slice::from_ref(&key), STRUCTURE_MATCH_OVERLAP)
+    }
+
+    /// Weighted structural prediction: a per-bit accumulator over every
+    /// depolarized next-token pattern, where each pattern contributes its
+    /// segment-match overlap as a weight. Unlike the raw OR (which loses
+    /// multiplicity and saturates when many cells fire) and the re-selected
+    /// vector (which samples bits at random), the weights preserve both how
+    /// strongly a context matched AND how many cells voted for each bit, so a
+    /// decoder can rank a token by the total evidence its bits carry. Returns
+    /// SDR_DIM weights, zero when nothing depolarized.
+    pub fn predict_structure_weighted(&self, window_tokens: &[&str]) -> Vec<f32> {
+        let key = crate::ai::sdr::structure_sdr(window_tokens);
+        if key.popcount() == 0 {
+            return vec![0f32; SDR_DIM];
+        }
+        let mut weights = vec![0f32; SDR_DIM];
+        for c in &self.cells {
+            let mut best = 0u32;
+            for seg in &c.segments {
+                let ov = seg.overlap(&key);
+                if ov > best {
+                    best = ov;
+                }
+            }
+            if best >= STRUCTURE_MATCH_OVERLAP {
+                let w = best as f32;
+                for (wi, bits) in c.pattern.bits.iter().enumerate() {
+                    let base = wi * 64;
+                    let mut x = *bits;
+                    while x != 0 {
+                        let bi = x.trailing_zeros() as usize;
+                        weights[base + bi] += w;
+                        x &= x - 1;
+                    }
+                }
+            }
+        }
+        weights
     }
 
     pub fn learn_sequence(&mut self, prev: &SdrVector, next: &SdrVector) {
