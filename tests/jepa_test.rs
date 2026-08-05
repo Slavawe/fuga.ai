@@ -34,10 +34,15 @@ fn test_jepa_predict_empty_context() {
 fn test_jepa_predict_single() {
     let jepa = JepaPredictor::new(8192, 4);
     let hv = Hypervector::random(8192);
+    // Single-context predict returns hv permuted. This codebase uses dense
+    // hypervectors (default `Hypervector::random` is ~50% bits), so a cyclic
+    // permutation decorrelates the vector and similarity clusters around 0.5
+    // with sigma ~0.0055. Assert a robust bound well below the mean (~9 sigma)
+    // so the check stays meaningful without being flaky on the RNG seed.
     let result = jepa.predict(&[&hv]);
     assert_eq!(result.dim, 8192);
     let sim = result.similarity(&hv);
-    assert!(sim > 0.49);
+    assert!(sim > 0.45);
 }
 
 #[test]
