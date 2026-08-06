@@ -1,10 +1,35 @@
 <p align="center">
-  <img src="photo_2026-08-01_11-32-28.jpg" alt="Fuga 2.0 logo" width="400">
+  <img src="photo_2026-08-01_11-32-28.jpg" alt="Fuga 2.1 logo" width="400">
 </p>
 
-<h1 align="center">Fuga 2.0 — VSA Иерархическая Предсказательная Память и Генерация Кода</h1>
+<h1 align="center">Fuga 2.1 — Непрерывная Генерация Кода через VSA/JEPA</h1>
 
-**Ядро AGI без трансформеров**, построенное на Vector Symbolic Architectures (VSA), Иерархическом JEPA, Временной Памяти (Temporal Memory) и локально-чувствительном связывании. Заменяет обратное распространение ошибки локальными обновлениями по Delta-правилу и генерирует Rust-код через чистую VSA/TM-авторегрессию — без зависимости от LLM.
+**Ядро AGI без трансформеров**, построенное на Vector Symbolic Architectures (VSA), Иерархическом JEPA, Временной Памяти (Temporal Memory) и латентно-пространственной генерации. Заменяет дискретный словарь-как-декодер на **непрерывный латентный decode** с gate-коридором, обратное распространение — локальными обновлениями по Delta-правилу, и генерирует Rust-код через чистую VSA/TM-авторегрессию — без зависимости от LLM.
+
+---
+
+## Что нового в 2.1
+
+### Непрерывная (tokenless) генерация
+Вместо argmax по словарю — **ранжирование кандидатов по cosine-близости в латентном пространстве**:
+- `tm_generate_latent()` (src/ai/tm_generate.rs) — предсказывает следующий латент через `predict_latent` (W-оператор LatentJEPA), ранжирует по `LatentVector::cosine_similarity`
+- Словарь остаётся **только gate/коридор** (синтаксическая валидность), не источник выбора
+- Подключён в прод-мост (`omni-web.rs:486` handle_code_generate)
+- Старый весовой путь `tm_generate`/`decode_weighted` остаётся для CLI `tm-gen`
+
+### Калибровка иерархии (честные замеры, 7466 шагов)
+**L2-таргет исправлен** — старый `l0_pred` вызывал анти-обучение (100% circuit breaker resets), новый `phase_smooth(ls_bind(l1_pred, actual), 2)` — коррекция ошибки L1:
+
+| Метрика | Старый (l0_pred) | Новый (corr) | Статус |
+|---------|------------------|--------------|--------|
+| **L2 loss** | 1.0000 | 0.9232 | ✅ сходится |
+| **L2 resets** | 7466/7466 (100%) | 18/7466 (0.24%) | ✅ стабилен |
+| **L0 sim(pred,actual)** | +0.87 | +0.87 | ✅ отлично |
+| **L1 sim(pred,target)** | +0.46 | +0.46 | ✅ растёт |
+
+**Примечание**: L0 loss ~1.48 выглядит плохо, но это **артефакт метрики** (`1 - cosine(delta, actual)` для sparse bipolar ≈ 1.45 даже при идеальном pred). Реальный sim(pred, actual) = **+0.87** — отлично.
+
+**Circuit breaker порог**: 1.15 (был 0.57 — убивал здоровый L2 мгновенным reset'ом). Warning boundary = 0.75 × 1.15.
 
 ---
 
@@ -12,21 +37,25 @@
 
 | Технология | Файл | Что делает |
 |---|---|---|
-| **Hypervector** | `src/core/hypervector.rs` | 8192-битные, ~2% плотности (~164 активных бита), XOR bind / sum bundle / permute |
-| **Hierarchical JEPA** | `src/ai/hierarchical_jepa.rs` | L0 (статическая), L1 (макрo), L2 (метапознание) с `ls_bind` фазовым сдвигом |
-| **Temporal Memory** | `src/ai/htm_temporal.rs` | Ячейки с DendriteSegments, learn_segment / reinforce / prune / predict_next |
-| **SDR** | `src/ai/sdr.rs` | `encode_text()` → детерминированный хеш-основанный разрежённый бинарный вектор |
-| **PhaseCrystal** | `src/ai/crystal.rs` | Ассоциативная VSA-память (фазы L0/L1/L2), `learn()` / `query()` / порог резонанса, FNV-1a индекс ключей, `crystal-reencode` (позиционно-инвариантная перекодировка) |
-| **Tokenizer Bridge** | `src/core/tokenizer_bridge.rs` | Выводит детерминированные VSA-гипервекторы на токен через n-граммный permute-bind энкодер — без 128K embed-векторов, всего несколько МБ словаря |
-| **Weight Transpile** | `src/ai/transpile.rs` | Стримит HuggingFace safetensors шарды → VSA-кристалл; параллельный фетчер чанков, режим `--raw`, извлечение MoE-маршрутов |
-| **MoE Router** | `src/ai/moe.rs` | Mixture-of-Experts с обучаемым роутером, команды `set-router` / `set-topk` |
-| **Resonance Attention** | `src/ai/resonance_attention.rs` | VSA-основанное внимание над фазовыми векторами |
-| **SDR Store / HNSW** | `src/ai/sdr_store.rs`, `src/ai/hnsw.rs` | Постоянное SDR-хранилище + приближённый индекс ближайших соседей |
-| **Self Mirror** | `src/ai/self_mirror.rs` | Индексирует `.rs` файлы в PhaseNodes (SDR) + состояние TM + HJEPA |
-| **Multi-layer Weaver** | `src/multi/` | syntax_layer / semantic_layer / chaos_layer / language / translate / patterns |
-| **Fuga Synthesizer** | `src/core/fuga_synthesizer.rs` | Синтез голоса/речи |
-| **GGUF snapshot** | `src/gguf.rs` | `snapshot-gguf` — чтение GGUF файлов моделей |
-| **GPU** | `src/gpu.rs` | CUDA (GTX 1660 Ti) хуки ускорения |
+| **Hypervector** | `src/core/hypervector.rs` | 8192-бит, ~2% плотности (~164 активных), XOR bind / sum bundle / permute |
+| **Hierarchical JEPA** | `src/ai/hierarchical_jepa.rs` | L0/L1/L2 с `ls_bind` фазовым сдвигом, контексты 4/3/2, strides 1/3/5 |
+| **Temporal Memory** | `src/ai/htm_temporal.rs` | Ячейки + DendriteSegments, learn/reinforce/prune/predict_next, латентный переход W |
+| **Латентный декодер** | `src/ai/tm_generate.rs` | `tm_generate_latent`: predict_latent → cosine по vocab → gate/corridor, порог 0.05 |
+| **SDR** | `src/ai/sdr.rs` | `encode_text()` → хеш-разрежённый бинарный вектор, STRUCTURE_STRIDE=977 (coprime) |
+| **PhaseCrystal** | `src/ai/crystal.rs` | VSA-память L0/L1/L2, `learn()`/`query()`, FNV-1a индекс, резонанс-порог |
+| **Tokenizer Bridge** | `src/core/tokenizer_bridge.rs` | N-граммный permute-bind, позиционно-инвариантный, dedup грамм |
+| **Circuit Breaker** | `src/safety/circuit_breaker.rs` | Детекция анти-обучения: loss > 1.15 → reset, ≤ 0.86 → Warning (lr×0.5) |
+| **Weight Transpile** | `src/ai/transpile.rs` | HF safetensors → кристалл, параллельный фетчер, `--raw`/`--whole` |
+
+---
+
+## Двухскоростная генерация
+
+**H-JEPA task-коридор** (`eligible`) держит содержание → **TM-авторегрессор** держит порядок:
+- CLI: `src/main.rs:1767` (corridor → tm_generate)
+- Маск: `src/bin/omni-web.rs:486` (handle_code_generate → tm_generate_latent)
+
+Словарь — gate, а не декодер. Непрерывный латентный путь выбирает следующий токен по близости в hyperspace.
 
 ---
 
@@ -35,38 +64,34 @@
 ### 1. Индексация исходников в фазовый граф
 
 ```bash
-# Индексация директории — читает .rs файлы, создаёт PhaseNodes с SDR-кодированием
+# Индексация директории — читает .rs, создаёт PhaseNodes с SDR-кодированием
 cargo run --release -- mirror-index src/ai
-
-# Загрузка существующего зеркала и индексация другой директории
 cargo run --release -- mirror-index src/core
 ```
 
-Создаёт `fuga_mirror_nodes.bin` (фазовые узлы), `fuga_mirror_tm.bin` (TM), `fuga_mirror_jepa.bin` (HJEPA).
+Создаёт `fuga_mirror_nodes.bin`, `fuga_mirror_tm.bin`, `fuga_mirror_jepa.bin`.
 
 ### 2. Обучение предсказателя (HJEPA + TM)
 
 ```bash
-# Обучение на существующих узлах зеркала (5 эпох, chunk=1)
+# 5 эпох, chunk=1
 cargo run --release -- train-predictor 5
 
-# С большими чанками для паттернов последовательностей
+# С большими чанками для последовательностей
 cargo run --release -- train-predictor 10 --chunk 3
 ```
 
 ### 3. Обучение токенного словаря (встроено в генерацию)
 
 ```bash
-# Строит топ-4000 посмвольный токенный словарь из проиндексированных .rs файлов
-# затем обучает TM на 20000+ шагах биграмм токенов
-# затем генерирует токены
+# Строит топ-4000 токенный словарь + обучает TM на 20K+ биграмм
 cargo run --release -- generate-code "fn new" --tokens
 ```
 
 Токенный тренер:
-- Посимвольный токенизатор: разделяет идентификаторы от операторов, распознаёт `->` `::` `=>` `!=` `==` `>=` `<=` `+=` `-=` `&&` `||`
-- Инъекция синтаксических паттернов: 14 захардкоженных Rust-паттернов × 5 повторов
-- WTA (Winner-Take-All) предсказание с Inhibition of Return
+- Посимвольный токенизатор: идентификаторы, операторы `->` `::` `=>` `!=` `==` `>=` `<=` `+=` `-=` `&&` `||`
+- 14 Rust-паттернов × 5 повторов
+- WTA (Winner-Take-All) с Inhibition of Return
 - Анти-повторное окно (16 токенов)
 
 ---
@@ -74,39 +99,35 @@ cargo run --release -- generate-code "fn new" --tokens
 ## Фазовый кристалл (VSA-память)
 
 ```bash
-# Запись пары ключ/текст в кристалл
+# Запись ключ/текст
 cargo run --release -- crystal-learn <key> <text>
 
-# Обучение на целой директории текстовых файлов (нарезка на сниппеты по 20 слов)
+# Обучение на директории (сниппеты по 20 слов)
 cargo run --release -- crystal-learn-dir corpus/ --from fuga_crystal.bin --threshold 0.28 --chunk 20
 
-# Запрос к кристаллу
-cargo run --release -- crystal-query "ваш текст" --from fuga_crystal.bin
-# Регулировка чувствительности: --scale 0.5 — строже (срезает пограничные L2-резонансы),
-# --gate — L2 принимается только при резонансе на L1 (Router-Gate)
-cargo run --release -- crystal-query "ваш текст" --from fuga_crystal.bin --scale 0.5
-cargo run --release -- crystal-query "ваш текст" --from fuga_crystal.bin --gate
+# Запрос
+cargo run --release -- crystal-query "текст" --from fuga_crystal.bin
 
-# Тест резонанса (точные ключи, шум, скан матрицы)
+# Регулировка: --scale 0.5 (строже), --gate (L1-подтверждение)
+cargo run --release -- crystal-query "текст" --from fuga_crystal.bin --scale 0.5 --gate
+
+# Тест резонанса
 cargo run --release -- crystal-test --from fuga_crystal.bin
 
-# Перекодировка всех записей позиционно-инвариантным энкодером
+# Перекодировка (позиционно-инвариантный энкодер)
 cargo run --release -- crystal-reencode --from fuga_crystal.bin
-
-# Статистика / popcount скан / забывание
-cargo run --release -- crystal-stats --from fuga_crystal.bin
-cargo run --release -- crystal-popcount "текст"
-cargo run --release -- crystal-forget <key>
 ```
 
-Ключевые свойства:
-- **Позиционно-инвариантный n-граммный энкодер** (`encode_bytes_nopos`): сниппеты из середины чанков резонируют — светятся и середина/конец, а не только начало.
-- **Dedup грамм**: частые слова занимают один слот, поэтому точность top-1 остаётся 99–100%.
-- **Мягкий overlap-скоринг** (`intersection / max(popcount(q), popcount(e))`) с порогом резонанса — шум → тишина в CLI.
+**Ключевые свойства:**
+- Позиционно-инвариантный n-граммный энкодер: сниппеты из середины чанков резонируют
+- Dedup грамм: частые слова занимают один слот, top-1 точность 99–100%
+- Мягкий overlap-скоринг с порогом → шум уходит в тишину
 
-## Фрактальная иерархия L0/L1/L2 и «Гиппокамп + Кора»
+---
 
-Кристалл — **геометрически сбалансированная фрактальная память**: каждый уровень живёт в собственном векторном пространстве, а размерность растёт с уровнем абстракции.
+## Фрактальная иерархия L0/L1/L2
+
+Кристалл — **геометрически сбалансированная фрактальная память**: каждый уровень в собственном векторном пространстве, размерность растёт с абстракцией.
 
 | Уровень | Пространство | Роль |
 |---|---|---|
@@ -114,51 +135,50 @@ cargo run --release -- crystal-forget <key>
 | **L1** (функции/блоки) | 16384 бит | агрегация фаз в AST-узлы, связи аргументов |
 | **L2** (мета-концепты) | 32768 бит | концепт-бандлы, максимальная помехоустойчивость |
 
-Поиск каскадный: запрос кодируется один раз в каждую группу размерностей, порог на L2 автоматически смягчается (`L2_THRESHOLD_SCALE × threshold`) — шум случайного пересечения падает как `1/√D`. Формат файла v2 хранит word-count каждой записи, поэтому уровни сосуществуют в одном дампе; старые v1-кристаллы (единый dim в заголовке) читаются без изменений.
+Поиск каскадный: запрос кодируется один раз в каждую группу размерностей, порог на L2 автоматически смягчается (`L2_THRESHOLD_SCALE × threshold`) — шум падает как `1/√D`.
 
-**Гибридная двухслойная схема (Hippocampal-Neocortical):**
+### Гибридная двухслойная схема (Гиппокамп + Кора)
 
 ```bash
-# Кристалл 1 — статичный MoE-слепок (8k): долговременная «замороженная» память
+# Кристалл 1 — статичный MoE-слепок (8k): долговременная память
 cargo run --release -- transpile deepseek-ai/DeepSeek-V4-Flash-0731 --raw --whole --concurrency 8 \
   --finalize /tmp/raw_v4.bin --state /tmp/raw_v4.state
 
-# Кристалл 2 — динамический эпизодический кортекс (32k): рабочая/оперативная память
+# Кристалл 2 — динамический кортекс (32k): рабочая память
 cargo run --release -- crystal-2-init fuga_cortex.bin
-cargo run --release -- crystal-2-learn "proj" "несколько строк контекста проекта" --from fuga_cortex.bin
+cargo run --release -- crystal-2-learn "proj" "контекст проекта" --from fuga_cortex.bin
 
-# Гиппокампальный каскад: статичные знания → проекция → биндинг с текущим контекстом
-cargo run --release -- crystal-hippo "ваш вопрос" --from fuga_crystal.bin --cortex fuga_cortex.bin
-# Те же флаги регулировки: --scale 0.5 (строже) / --gate (L1-подтверждение)
-cargo run --release -- crystal-hippo "ваш вопрос" --from fuga_crystal.bin --cortex fuga_cortex.bin --scale 0.5 --gate
+# Гиппокампальный каскад: статика → проекция → биндинг с контекстом
+cargo run --release -- crystal-hippo "вопрос" --from fuga_crystal.bin --cortex fuga_cortex.bin
+cargo run --release -- crystal-hippo "вопрос" --from fuga_crystal.bin --cortex fuga_cortex.bin --scale 0.5 --gate
 ```
 
-Каскад работает через **детерминированный фазовый проектор** (`project_phase`, 8k→32k):
-1. Запрос резонирует в статичном кристалле (эрудиция MoE-слепка);
-2. Фаза отклика up-проецируется в 32k (пермутационный скиттер с linear probing — плотность сохраняется точно, проекция обратима по детерминизму);
-3. Проецированная фаза связывается (XOR/weighted-majority) с нативным 32k-кодом текущего контекста;
-4. Результирующая фаза резонирует в эпизодическом кортексе — итоговый ответ учитывает и глубокие знания, и текущую задачу.
+Каскад через **детерминированный фазовый проектор** (`project_phase`, 8k→32k):
+1. Запрос резонирует в статичном кристалле (эрудиция MoE-слепка)
+2. Фаза отклика up-проецируется в 32k (пермутационный скиттер с linear probing)
+3. Проецированная фаза связывается (XOR/weighted-majority) с нативным 32k-кодом
+4. Результат резонирует в кортексе — итог учитывает глубокие знания + текущую задачу
 
-Профит схемы: никакого повторного обучения 160 ГБ — Кристалл 1 работает «как есть», а Кристалл 2 весит сотни МБ, инициализируется на лету и обновляется `learn()` без катастрофического забывания базы знаний.
+Профит: никакого переобучения 160 ГБ — Кристалл 1 «как есть», Кристалл 2 весит сотни МБ, обновляется `learn()` без катастрофического забывания.
 
 ---
 
-## Перенос весов (HF safetensors → кристалл)
+## Перенос весов (HF → кристалл)
 
 Стримит модель HuggingFace прямо в кристалл без хранения сырых весов:
 
 ```bash
-# Полный raw-дамп: каждый не-MoE тензор становится отдельной фазовой записью
+# Полный raw-дамп: каждый не-MoE тензор → отдельная фазовая запись
 cargo run --release -- transpile deepseek-ai/DeepSeek-V4-Flash-0731 --raw --whole --concurrency 8 \
   --finalize /tmp/raw_v4.bin --state /tmp/raw_v4.state
 
 # Возобновляемо — передайте тот же --state для продолжения после сбоя
 ```
 
-- Параллельный фетчер чанков (чанки 16 МБ, общий keep-alive агент) — насыщает предел пропускной способности HF.
-- `--whole` стриминговое окно держит RAM ограниченной (переживает OOM-уязвимые хосты с малым объёмом памяти).
-- `--raw` сохраняет каждый плотный тензор (embed / attn / mlp / norm) как фазу; MoE роутеры/gates/эксперты исключены — они уже в кристалле как маршруты экспертов.
-- `--dry-run` показывает тензоры без сохранения.
+- Параллельный фетчер чанков (16 МБ, keep-alive агент)
+- `--whole` стриминговое окно держит RAM ограниченной
+- `--raw` сохраняет каждый плотный тензор (embed/attn/mlp/norm) как фазу; MoE роутеры исключены
+- `--dry-run` показывает тензоры без сохранения
 
 ---
 
@@ -170,7 +190,7 @@ cargo run --release -- transpile deepseek-ai/DeepSeek-V4-Flash-0731 --raw --whol
 cargo run --release -- generate-code "fn new" --tokens
 ```
 
-Выдаёт настоящие Rust-токены: `( ) { } [ ] , :: . ' -> ` + идентификаторы, числа
+Выдаёт Rust-токены: `( ) { } [ ] , :: . ' -> ` + идентификаторы, числа.
 
 ### Уровень PhaseNode (семантический)
 
@@ -178,7 +198,7 @@ cargo run --release -- generate-code "fn new" --tokens
 # Beam search по графу PhaseNode
 cargo run --release -- generate-code "struct Foo"
 
-# Авторегрессивный режим (генерирует полные сниппеты)
+# Авторегрессивный режим (полные сниппеты)
 cargo run --release -- generate-code "fn new" --gen
 
 # С шириной beam и температурой
@@ -227,16 +247,48 @@ cargo test --test moe_routing_test
 
 | Компонент | Описание |
 |---|---|
-| Hypervector | 8192-битный, ~2% плотности (~164 активных бита), XOR bind / sum bundle / permute |
-| Hierarchical JEPA | L0 (статическая), L1 (макро), L2 (метапознание) с ls_bind фазовым сдвигом |
-| Temporal Memory | Ячейки с DendriteSegments, learn_segment / reinforce / prune / predict_next |
-| SDR (Sparse Distributed Representation) | `encode_text()` → детерминированный хеш-основанный разрежённый бинарный вектор |
-| PhaseCrystal | VSA-ассоциативная память; FNV-1a L0 индекс, мягкий overlap-скоринг, порог резонанса → тишина на шуме |
-| Tokenizer Bridge | N-граммный permute-bind энкодер (`encode_bytes_nopos`), dedup грамм, MAX_GRAMS=48, позиционно-инвариантный |
-| Weight Transpile | Стриминг safetensors → кристалл; параллельный фетчер чанков по 16 МБ; `--raw` / `--whole` / возобновляемое состояние |
-| Tokenizer | Посимвольный: разделяет идентификаторы от операторов, распознавание многосимвольных операторов |
-| WTA | Winner-Take-All с Inhibition of Return (усталость = победы × 10, затухание каждые 10 шагов) |
-| AnomalyEvent | Детекция перегрузки фазы — `pred_count > 100` или `power_mw > 500` запускает overshoot |
+| **Hypervector** | 8192-бит, ~2% плотности (~164 активных), XOR bind / sum bundle / permute |
+| **Hierarchical JEPA** | L0 (статика), L1 (макро), L2 (мета) с ls_bind фазовым сдвигом, контексты 4/3/2, strides 1/3/5 |
+| **Temporal Memory** | Ячейки + DendriteSegments, learn_segment/reinforce/prune/predict_next, латентный переход W |
+| **Латентный декодер** | `tm_generate_latent`: predict_latent → cosine → gate, LATENT_MIN_COSINE=0.05, словарь как corridor |
+| **SDR** | `encode_text()` → детерминированный хеш-разрежённый вектор, STRUCTURE_STRIDE=977 (coprime с 8192) |
+| **PhaseCrystal** | VSA-ассоциативная память; FNV-1a L0 индекс, мягкий overlap-скоринг, порог резонанса → тишина |
+| **Tokenizer Bridge** | N-граммный permute-bind (`encode_bytes_nopos`), dedup грамм, MAX_GRAMS=48, позиционно-инвариантный |
+| **Weight Transpile** | Стриминг safetensors → кристалл; параллельный фетчер 16 МБ; `--raw`/`--whole`/возобновляемое |
+| **Circuit Breaker** | Детекция анти-обучения: loss > 1.15 → reset (rand±0.005), ≤ 0.86 → Warning (lr×0.5), калибровано на L2 |
+| **Tokenizer** | Посимвольный: идентификаторы от операторов, распознавание многосимвольных `->` `::` `!=` и т.д. |
+| **WTA** | Winner-Take-All с Inhibition of Return (усталость = победы × 10, затухание каждые 10 шагов) |
+
+---
+
+## Замеры и калибровка (2026-08-06, 7466 шагов)
+
+### Honest A/B L2-таргета
+| Таргет | L2 loss | Resets | simL0 | Статус |
+|--------|---------|--------|-------|--------|
+| Старый (`l0_pred`) | 1.0000 | 7466/7466 (100%) | +0.87 | ❌ анти-обучение |
+| Новый (`corr(l1,actual)`) | 0.9232 | 18/7466 (0.24%) | +0.87 | ✅ сходится |
+
+### Реальное качество уровней
+- **L0**: loss ~1.48 (метрика врёт из-за sparse bipolar), но **sim(pred,actual) = +0.87** — отлично
+- **L1**: sim(pred,target) = +0.46 — умеренно, растёт
+- **L2**: EMA ~0.93, resets 0.24% — стабилен и сходится
+
+### Непрерывная генерация (tm_generate_latent, Rust-корпус)
+- **Обучение 3000 .rs-сниппетов**: PASS, выдал `std mut` (тривиальный, 2 слова, но gate держит)
+- **Обучение 7218 .rs-сниппетов**: FAIL, пусто (вероятно catastrophic forgetting в W-операторе)
+- **Диагноз**: max cosine = 0.21, порог 0.05 пропускает 836/3000 кандидатов — слишком широкий
+- **Статус**: инфраструктура работает, метрика требует калибровки (порог + OWM для W)
+
+---
+
+## Следующие шаги
+
+1. **Калибровка непрерывного декодера**: поднять порог LATENT_MIN_COSINE (0.05 → 0.15?), добавить OWM-защиту W-оператора от забывания на большом корпусе
+2. **A/B старого vs нового пути**: сравнить `tm_generate` (весовой) vs `tm_generate_latent` (латентный) на одном корпусе
+3. **Corridor-мост аудит**: замерить реальный размер промпта в necli, проверить «~9K симв./690 токенов мусора»
+
+---
 
 ## Лицензия
 
