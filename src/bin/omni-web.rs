@@ -19,6 +19,18 @@ struct WebState<const N: usize, const S: usize> {
     qual: CodeQualityFilter,
     dim: usize,
     jepa: Option<fuga::TemporalPredictor>,
+    /// Explicit, separately-ranked lesson tier. Gate-passed lessons only
+    /// (compilable AND task-relevant), matched by task-token overlap BEFORE any
+    /// competition against the 587K raw-corpus entries — so a single fresh
+    /// lesson is observable by construction, not by fighting similarity.
+    lessons: Vec<AgentLesson>,
+}
+
+/// A gated self-improvement lesson: the task it was generated for + the code
+/// that passed compile AND relevance gates.
+struct AgentLesson {
+    task: String,
+    code: String,
 }
 
 fn run_microwave(mw_path: &str, mode: &str, code: &str) -> String {
@@ -219,6 +231,149 @@ fn handle_code_fix<const N: usize, const S: usize>(
     .to_string()
 }
 
+/// Sanitized source-doc name for a gated agent lesson. The filename boost in
+/// `search_by_text` (+2 when a query word appears in the source filename) makes
+/// an "agent_lesson_<task>.rs" entry structurally more discoverable than the
+/// 587K raw corpus entries — the honest priority layer for absorbed lessons.
+fn agent_lesson_source(task: &str) -> String {
+    let slug: String = task
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .collect();
+    format!(
+        "agent_lesson_{}.rs",
+        slug.trim_matches('_').chars().take(48).collect::<String>()
+    )
+}
+
+/// Store a gate-passed lesson directly into the LIVE searchable memory store
+/// (the one the answer tiers and code generation actually query), tagged with
+/// the agent_lesson_* source doc so it wins the filename boost in text search.
+fn store_lesson_live<const N: usize, const S: usize>(
+    ai: &mut FugaAI<N, S>,
+    task: &str,
+    code: &str,
+) -> serde_json::Value {
+    let mut builder = TokenBuilder::new();
+    let _ = builder.load_configs_from_dir("tikones");
+    let flat_vocab = builder.build_flat_vocab();
+    let combined = format!("TASK: {}\nCODE:\n{}", task, code);
+    let tokens = tokenize_corpus_text(&combined, &flat_vocab);
+    let src = agent_lesson_source(task);
+    ai.absorb_with_source(&tokens, &src);
+    serde_json::json!({
+        "ok": true,
+        "source_doc": src,
+        "memory_size": ai.memory.size(),
+    })
+}
+
+/// Re-inject durable lessons (agent_lessons.jsonl, CorpusDoc JSONL) into live
+/// memory at startup, so gated lessons survive a mask restart.
+fn load_lessons_into_memory<const N: usize, const S: usize>(ai: &mut FugaAI<N, S>, path: &str) {
+    let Ok(content) = std::fs::read_to_string(path) else { return; };
+    let mut n = 0usize;
+    for line in content.lines() {
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+        let task = doc.get("title").and_then(|t| t.as_str()).unwrap_or("task");
+        let code = doc
+            .get("chapters")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|ch| ch.get("paragraphs"))
+            .and_then(|p| p.as_array())
+            .and_then(|p| {
+                p.iter().find(|par| {
+                    par.as_str()
+                        .map_or(false, |s| s.starts_with("CODE: ") || s.starts_with("CODE:"))
+                })
+            })
+            .and_then(|par| par.as_str())
+            .map(|s| s.trim_start_matches("CODE: ").to_string())
+            .unwrap_or_default();
+        if !code.is_empty() {
+            store_lesson_live(ai, task, &code);
+            n += 1;
+        }
+    }
+    if n > 0 {
+        println!("  Lessons injected into live memory: {} (source={})", n, path);
+    }
+}
+
+/// Meaningful query/task tokens (mirror of agent_loop.relevance_gate stopwords).
+fn meaningful_tokens(text: &str) -> Vec<String> {
+    const STOP: &[&str] = &[
+        "the", "a", "an", "and", "or", "of", "to", "in", "that", "it", "for",
+        "generate", "safe", "rust", "function", "with", "compile", "report",
+        "pass", "fail", "this", "is", "output", "only", "write", "into", "as",
+        "on", "by", "from", "at",
+    ];
+    text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() >= 3 && !STOP.contains(&w.as_str()))
+        .collect()
+}
+
+/// Find the best matching gated lesson for a query. The query must contain at
+/// least one meaningful token of the lesson's task and cover >=25% of the
+/// task's meaningful vocabulary — the same thresholds the gate uses, so a
+/// lesson only wins when the query genuinely asks for its task. Returns None to
+/// fall through to the general corpus when nothing matches.
+fn find_lesson<const N: usize, const S: usize>(state: &WebState<N, S>, query: &str) -> Option<String> {
+    let q: Vec<String> = meaningful_tokens(query);
+    if q.is_empty() {
+        return None;
+    }
+    let mut best: Option<(f64, &AgentLesson)> = None;
+    for lesson in &state.lessons {
+        let lt = meaningful_tokens(&lesson.task);
+        if lt.is_empty() {
+            continue;
+        }
+        let hits = q.iter().filter(|t| lt.contains(t)).count();
+        let ratio = hits as f64 / lt.len() as f64;
+        if hits >= 1 && ratio >= 0.25 {
+            match best {
+                Some((r, _)) if r >= ratio => {}
+                _ => best = Some((ratio, lesson)),
+            }
+        }
+    }
+    best.map(|(_, l)| l.code.clone())
+}
+
+/// Parse durable lessons (agent_lessons.jsonl, CorpusDoc JSONL) into the
+/// explicit lesson tier.
+fn parse_lessons(path: &str) -> Vec<AgentLesson> {
+    let Ok(content) = std::fs::read_to_string(path) else { return vec![]; };
+    let mut lessons = Vec::new();
+    for line in content.lines() {
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+        let task = doc.get("title").and_then(|t| t.as_str()).unwrap_or("task");
+        let code = doc
+            .get("chapters")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|ch| ch.get("paragraphs"))
+            .and_then(|p| p.as_array())
+            .and_then(|p| {
+                p.iter().find(|par| {
+                    par.as_str()
+                        .map_or(false, |s| s.starts_with("CODE: ") || s.starts_with("CODE:"))
+                })
+            })
+            .and_then(|par| par.as_str())
+            .map(|s| s.trim_start_matches("CODE: ").trim().to_string())
+            .unwrap_or_default();
+        if !code.is_empty() {
+            lessons.push(AgentLesson { task: task.to_string(), code });
+        }
+    }
+    lessons
+}
+
 fn handle_code_generate<const N: usize, const S: usize>(
     state: &mut WebState<N, S>,
     body: &str,
@@ -232,6 +387,23 @@ fn handle_code_generate<const N: usize, const S: usize>(
     let tokens = tokenize_corpus_text(prompt, &flat_vocab);
 
     let domain = OmniEngine::<N, S>::detect_domain(prompt);
+    let lang = detect_lang_from_prompt(prompt);
+
+    // C: explicit lesson tier — checked BEFORE the general corpus competition.
+    // A gate-passed lesson whose task matches the prompt wins directly, so a
+    // single fresh lesson is observable by construction (not by boost against
+    // 587K entries). Non-matching lessons never shadow the corpus.
+    if let Some(lesson_code) = find_lesson(state, prompt) {
+        return serde_json::json!({
+            "domain": domain,
+            "generated_code": format!("// agent lesson\n{}", lesson_code),
+            "language": lang,
+            "hits": 1,
+            "entropy": format!("{:.4}", state.omni.ai.cube.global_entropy()),
+        })
+        .to_string();
+    }
+
     let output = state.omni.ai.think(&tokens);
 
     let mut hits: Vec<(f64, String)> = Vec::new();
@@ -248,7 +420,6 @@ fn handle_code_generate<const N: usize, const S: usize>(
     hits.truncate(5);
 
     let mut generated = assemble_code(prompt, &hits);
-    let lang = detect_lang_from_prompt(prompt);
 
     serde_json::json!({
         "domain": domain,
@@ -594,6 +765,7 @@ fn handle_openai_chat<const N: usize, const S: usize>(
         "object": "chat.completion",
         "created": crate::unix_now(),
         "model": model,
+        "system_fingerprint": "fuga-self-jepa-vsa",
         "choices": [{
             "index": 0,
             "message": {"role": "assistant", "content": content},
@@ -608,6 +780,7 @@ fn handle_openai_chat<const N: usize, const S: usize>(
             "object": "chat.completion.chunk",
             "created": crate::unix_now(),
             "model": model,
+            "system_fingerprint": "fuga-self-jepa-vsa",
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": null}]
         });
         out.push_str("data: ");
@@ -618,6 +791,7 @@ fn handle_openai_chat<const N: usize, const S: usize>(
             "object": "chat.completion.chunk",
             "created": crate::unix_now(),
             "model": model,
+            "system_fingerprint": "fuga-self-jepa-vsa",
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
         }).to_string());
         out.push_str("\n\ndata: [DONE]\n\n");
@@ -686,6 +860,12 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
     // (MoE → VSA-flat → цитатный retrieval → шаблон), чтобы маск отвечал
     // содержимым, а не шаблоном.
     let conv = {
+        // C: when a gated lesson matches, the authoritative answer is its code
+        // (emitted as generated_code). Suppress the corpus conversational dump
+        // so the response leads with the real lesson, not raw-corpus noise.
+        if find_lesson(state, query).is_some() {
+            String::new()
+        } else {
         // Цитатный retrieval по текстовому индексу (с бустом по имени файла)
         // — лучший источник; далее moe, flat и H-JEPA как фолбэки.
         let mem = answer_from_memory(&mut state.omni.ai, query);
@@ -709,6 +889,7 @@ fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query
                     }
                 }
             }
+        }
         }
     };
 
@@ -953,6 +1134,14 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
     }
     println!("  Memory: {} entries", omni.ai.memory.size());
 
+    // Re-inject durable gated lessons into live memory so self-improvement
+    // survives a restart (lessons are the ONLY store tagged agent_lesson_*).
+    load_lessons_into_memory::<N, S>(&mut omni.ai, "agent_lessons.jsonl");
+
+    // Init the multi-engine so the code-domain query renders a real status
+    // instead of leaking "No multi-engine initialized..." into the answer.
+    omni = omni.with_multi(cube_dim);
+
     omni.ai.moe = fuga::MoEStore::new(cube_path);
     match omni.ai.moe.load_all() {
         Ok(()) => {
@@ -1004,6 +1193,7 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
         qual,
         dim: cube_dim,
         jepa,
+        lessons: parse_lessons("agent_lessons.jsonl"),
     }));
 
     let server =
@@ -1148,6 +1338,8 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                             "created": 0,
                             "owned_by": "fuga",
                             "permission": [],
+                            "description": "Fuga self-powered brain (JEPA/VSA) — NOT an external LLM. Local inference, own learned model.",
+                            "system_fingerprint": "fuga-self-jepa-vsa",
                         }
                     ]
                 });
@@ -1161,6 +1353,25 @@ fn run_server<const N: usize, const S: usize>(cube_path: &str, port: u16) {
                 let resp = {
                     let mut st = state.lock().unwrap();
                     handle_openai_chat::<N, S>(&mut st, &body)
+                };
+                Response::from_string(resp).with_header(
+                    Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                )
+            }
+            ("POST", "/v1/fuga/lesson") => {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap_or(0);
+                let req: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                let task = req.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let code = req.get("code").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let resp = if code.is_empty() {
+                    serde_json::json!({"ok": false, "error": "empty code"}).to_string()
+                } else {
+                    let mut st = state.lock().unwrap();
+                    // C: register in the explicit lesson tier (checked before
+                    // corpus retrieval) + keep the live-memory copy as a bonus.
+                    st.lessons.push(AgentLesson { task: task.clone(), code: code.clone() });
+                    store_lesson_live::<N, S>(&mut st.omni.ai, &task, &code).to_string()
                 };
                 Response::from_string(resp).with_header(
                     Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),

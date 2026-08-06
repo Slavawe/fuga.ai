@@ -178,6 +178,11 @@ fn main() {
                 run_agent(&task, dim, false);
             }
         }
+        "agent-loop" => {
+            // Полный агентский стек + саморекурсивное обучение через necli
+            // (Fuga-мозг через собственный OpenAI-совместимый маск, не внешний).
+            run_agent_loop(&args);
+        }
         "sim" => {
             run_sim(&args);
         }
@@ -1732,6 +1737,10 @@ fn run_jepa_train_entry(args: &[String]) {
         .and_then(|v| v.parse().ok())
         .unwrap_or(usize::MAX);
 
+    // --load <path> — warm-start: продолжить обучение с уже обученного чекпоинта
+    // (саморекурсивный цикл агента: впитал новые уроки → дотянул модель).
+    let load_path = parse_flag_value(args, 2, "--load");
+
     // feed_learn_hv_only учит JEPA в пространстве сырых word-SDR и TM не
     // трогает — тяжёлый чекпоинт грузим только если явно запрошен.
     let tm = match parse_flag_value(args, 2, "--tm") {
@@ -1744,7 +1753,19 @@ fn run_jepa_train_entry(args: &[String]) {
         },
         None => fuga::TemporalMemory::new(32, 3),
     };
-    let hjepa = fuga::HierarchicalJEPA::new(dim);
+    let hjepa = match &load_path {
+        Some(p) => match fuga::HierarchicalJEPA::load(p) {
+            Ok(h) => {
+                println!("  Warm-start: continued from {}", p);
+                h
+            }
+            Err(e) => {
+                eprintln!("  Failed to load {}: {} — starting fresh", p, e);
+                fuga::HierarchicalJEPA::new(dim)
+            }
+        },
+        None => fuga::HierarchicalJEPA::new(dim),
+    };
     let mut tp = fuga::TemporalPredictor::new(tm, hjepa);
     println!("═══ H-JEPA corpus training ═══");
     println!("  TM:     {} ({} cells)", tm_path, tp.tm.cells.len());
@@ -1764,8 +1785,13 @@ fn run_jepa_train_entry(args: &[String]) {
     let _ = builder.load_configs_from_dir("tikones");
     let flat_vocab = builder.build_flat_vocab();
 
+    let progress_every = parse_flag_value(args, 2, "--progress-every")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(250);
+
     let mut n_tokens = 0usize;
     let mut n_learns = 0usize;
+    let mut last_errs: [f64; 3] = [1.0; 3];
     let t0 = std::time::Instant::now();
     let n = docs.len().min(limit);
     for (di, doc) in docs.iter().enumerate() {
@@ -1780,22 +1806,29 @@ fn run_jepa_train_entry(args: &[String]) {
                 for t in &tokens {
                     n_tokens += 1;
                     let errs = tp.feed_learn_hv_only(&t.text);
+                    for (i, &e) in errs.iter().enumerate().take(3) {
+                        last_errs[i] = e;
+                    }
                     if errs.iter().any(|e| *e < 1.0) {
                         n_learns += 1;
                     }
-                    if n_learns > 0 && n_learns % 20000 == 0 {
-                        println!(
-                            "  [{}] tokens={} learns={} err=({:.3},{:.3},{:.3})",
-                            di + 1,
-                            n_tokens,
-                            n_learns,
-                            errs[0],
-                            errs.get(1).copied().unwrap_or(1.0),
-                            errs.get(2).copied().unwrap_or(1.0)
-                        );
-                    }
                 }
             }
+        }
+        // Print on a document cadence so progress is visible and never looks
+        // frozen (the old learns-milestone log went silent for ~320k tokens).
+        if (di + 1) % progress_every == 0 || di + 1 >= n {
+            println!(
+                "  [{}/{}] tokens={} learns={} err=({:.3},{:.3},{:.3}) {:.0}s",
+                di + 1,
+                n,
+                n_tokens,
+                n_learns,
+                last_errs[0],
+                last_errs.get(1).copied().unwrap_or(1.0),
+                last_errs.get(2).copied().unwrap_or(1.0),
+                t0.elapsed().as_secs_f64()
+            );
         }
     }
     println!("\n  Tokens fed: {} · learns: {}", n_tokens, n_learns);
@@ -4591,6 +4624,54 @@ try {{
 
     let _ = std::fs::remove_file(&tmp_path);
     println!("\n  Agent cycle complete.");
+}
+
+fn run_agent_loop(args: &[String]) {
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║  Fuga Agent — Self-Recursive Loop (necli)  ║");
+    println!("╚══════════════════════════════════════════════╝");
+    println!("  Brain: Fuga self-powered mask (OpenAI-compat /v1/chat/completions)\n");
+    let task = args.iter()
+        .skip_while(|a| !a.contains("loop") && !a.contains("agent") && a.as_str() != "fuga")
+        .skip(1)
+        .filter(|a| !a.starts_with("--") && !a.starts_with("-"))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let task_str = if task.trim().is_empty() {
+        "Generate a safe Rust function that computes factorial; include test; compile it; output PASS/FAIL.".to_string()
+    } else {
+        task
+    };
+    let iters = args.iter()
+        .enumerate()
+        .filter_map(|(i, v)| if v == "--iters" { args.get(i + 1) } else { None })
+        .filter_map(|v| v.parse::<usize>().ok())
+        .next()
+        .unwrap_or(3);
+    println!("  Task: {}  |  Iterations: {}\n", task_str, iters);
+    // Delegate to the Python agent_loop driver (uses necli -> Fuga mask -> compile -> retrain).
+    let script_path = std::env::current_dir().unwrap().join("agent_loop.py");
+    if !script_path.exists() {
+        eprintln!("  agent_loop.py not found — make sure it is in repo root");
+        return;
+    }
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg(&script_path)
+        .arg(&task_str)
+        .arg("--iters")
+        .arg(iters.to_string())
+        .env("FUGA_WEB_PORT", "8080");
+    println!("  Running: python3 agent_loop.py \"{}\" --iters {} ... (self-brain -> necli -> compile -> retrain)\n", task_str, iters);
+    match cmd.status() {
+        Ok(s) => {
+            println!("  Agent-loop exit code: {}\n", s.code().unwrap_or(-1));
+            println!("  Recursive results: check agent_lessons.jsonl and updated fuga_hjepa.bin.");
+        }
+        Err(e) => {
+            eprintln!("  Failed to launch agent_loop: {}", e);
+        }
+    }
 }
 
 fn run_generate(prompt: &str, _dim: usize, output: Option<&str>) {

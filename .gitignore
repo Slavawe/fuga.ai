@@ -80,3 +80,9 @@ cube-3d.html
 .vscode/
 .DS_Store
 *.swp
+
+# Self-brain agent loop (ephemeral)
+.workdir/
+__pycache__/
+test.1.er/
+w_base.bin.dirs
