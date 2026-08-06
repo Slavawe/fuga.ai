@@ -165,7 +165,12 @@ impl TemporalPredictor {
         } else {
             actuals.push(l0_pred.clone());
         }
-        actuals.push(l0_pred.clone());
+        // AUDIT-CALIB: согласованный L2-таргет (коррекция ошибки L1)
+        let l1_for_corr = l1_pred.clone().unwrap_or_else(|| l0_pred.clone());
+        actuals.push(crate::vsa::topology::phase_smooth(
+            &crate::vsa::topology::ls_bind(&l1_for_corr, actual, 32),
+            2,
+        ));
 
         let actual_refs: Vec<&Hypervector> = actuals.iter().collect();
         let errors = self.hjepa.learn(&ctx, &actual_refs);
@@ -212,7 +217,12 @@ impl TemporalPredictor {
         } else {
             actuals.push(l0_pred.clone());
         }
-        actuals.push(l0_pred.clone());
+        // AUDIT-CALIB: согласованный L2-таргет (коррекция ошибки L1)
+        let l1_for_corr = l1_pred.clone().unwrap_or_else(|| l0_pred.clone());
+        actuals.push(crate::vsa::topology::phase_smooth(
+            &crate::vsa::topology::ls_bind(&l1_for_corr, actual, 32),
+            2,
+        ));
 
         let actual_refs: Vec<&Hypervector> = actuals.iter().collect();
         self.hjepa.learn(&ctx, &actual_refs)
@@ -258,7 +268,12 @@ impl TemporalPredictor {
         } else {
             actuals.push(l0_pred.clone());
         }
-        actuals.push(l0_pred.clone());
+        // AUDIT-CALIB: согласованный L2-таргет (коррекция ошибки L1)
+        let l1_for_corr = l1_pred.clone().unwrap_or_else(|| l0_pred.clone());
+        actuals.push(crate::vsa::topology::phase_smooth(
+            &crate::vsa::topology::ls_bind(&l1_for_corr, actual, 32),
+            2,
+        ));
 
         let actual_refs: Vec<&Hypervector> = actuals.iter().collect();
         self.hjepa.learn_ff(&ctx, &actual_refs, neg_pool)
@@ -391,7 +406,12 @@ impl TemporalPredictor {
         } else {
             actuals.push(l0_pred.clone());
         }
-        actuals.push(l0_pred.clone());
+        // AUDIT-CALIB: согласованный L2-таргет (коррекция ошибки L1)
+        let l1_for_corr = l1_pred.clone().unwrap_or_else(|| l0_pred.clone());
+        actuals.push(crate::vsa::topology::phase_smooth(
+            &crate::vsa::topology::ls_bind(&l1_for_corr, actual, 32),
+            2,
+        ));
         let actual_refs: Vec<&Hypervector> = actuals.iter().collect();
         self.hjepa.learn(&ctx, &actual_refs)
     }
@@ -407,5 +427,64 @@ impl TemporalPredictor {
             self.hjepa.levels[2].lr,
             self.buffer.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::htm_temporal::TemporalMemory;
+    use crate::ai::HierarchicalJEPA;
+    use crate::core::hypervector::Hypervector;
+
+    fn fresh_predictor() -> TemporalPredictor {
+        TemporalPredictor::new(
+            TemporalMemory::new(30_000, 4),
+            HierarchicalJEPA::new(8192),
+        )
+    }
+
+    // Смоук по всем 4 feed_learn* путям: corr-таргет (ls_bind+phase_smooth) в
+    // feed_learn_no_tm / feed_learn_ff / feed_learn_hv_only не должен давать
+    // NaN/Inf и должен возвращать валидный вектор ошибок длиной 3.
+    #[test]
+    fn corr_target_smoke_all_feed_paths() {
+        let mut tp = fresh_predictor();
+        let mut neg_pool: Vec<Hypervector> = (0..4).map(|_| Hypervector::random(8192)).collect();
+        neg_pool.push(Hypervector::new(8192));
+
+        let texts = [
+            "fn main() { println!(\"hello world\"); }",
+            "let x = 42; let y = x + 1;",
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+            "struct Foo { bar: String }",
+            "impl Foo { fn new() -> Self { Foo { bar: String::new() } } }",
+        ];
+
+        for t in &texts {
+            let (_, errs) = tp.feed_learn(t);
+            assert_eq!(errs.len(), 3, "feed_learn err len");
+            for v in &errs {
+                assert!(v.is_finite(), "feed_learn NaN/Inf: {}", v);
+            }
+
+            let errs = tp.feed_learn_no_tm(t);
+            assert_eq!(errs.len(), 3, "feed_learn_no_tm err len");
+            for v in &errs {
+                assert!(v.is_finite(), "feed_learn_no_tm NaN/Inf: {}", v);
+            }
+
+            let errs = tp.feed_learn_ff(t, &neg_pool);
+            assert_eq!(errs.len(), 3, "feed_learn_ff err len");
+            for v in &errs {
+                assert!(v.is_finite(), "feed_learn_ff NaN/Inf: {}", v);
+            }
+
+            let errs = tp.feed_learn_hv_only(t);
+            assert_eq!(errs.len(), 3, "feed_learn_hv_only err len");
+            for v in &errs {
+                assert!(v.is_finite(), "feed_learn_hv_only NaN/Inf: {}", v);
+            }
+        }
     }
 }

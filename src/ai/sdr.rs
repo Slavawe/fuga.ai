@@ -14,7 +14,35 @@ pub const STRUCTURE_DENSITY: f64 = 0.06;
 /// Position stride for structure folding. Coprime with SDR_DIM so consecutive
 /// positions map to distinct, well-mixed bit offsets and token order is
 /// preserved in the super-vector.
+///
+/// # Invariant (mine)
+/// `gcd(SDR_DIM, STRUCTURE_STRIDE) == 1`. If it ever breaks — SDR_DIM changes,
+/// or the stride is edited — consecutive positions alias and folded vectors
+/// collide (`fn main` == `main fn`), silently destroying order discriminability.
+/// Enforced at the fold site via `structure_shift`.
 const STRUCTURE_STRIDE: usize = 977;
+
+/// Position-dependent bit offset for structure folding. Applies
+/// `STRUCTURE_STRIDE` and guards the coprime invariant (see constant doc).
+#[inline]
+fn structure_shift(pos: usize) -> usize {
+    debug_assert!(
+        euclid_gcd(SDR_DIM, STRUCTURE_STRIDE) == 1,
+        "STRUCTURE_STRIDE must be coprime with SDR_DIM (aliasing folds); now gcd={}",
+        euclid_gcd(SDR_DIM, STRUCTURE_STRIDE)
+    );
+    (pos * STRUCTURE_STRIDE) % SDR_DIM
+}
+
+#[inline]
+const fn euclid_gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
+}
 
 lazy_static::lazy_static! {
     static ref TOKEN_SDR_CACHE: Mutex<HashMap<u32, SdrVector>> = Mutex::new(HashMap::new());
@@ -355,7 +383,7 @@ pub fn structure_sdr_from_sdrs(tokens: &[SdrVector]) -> SdrVector {
     // Bump every token's bits to a position-shifted offset, count overlap.
     let mut counts = vec![0u32; SDR_DIM];
     for (pos, base) in tokens.iter().enumerate() {
-        let shift = (pos * STRUCTURE_STRIDE) % SDR_DIM;
+        let shift = structure_shift(pos);
         for (wi, &w) in base.bits.iter().enumerate() {
             let base_bit = wi * 64;
             let mut x = w;
@@ -490,5 +518,21 @@ mod tests {
             let lim = (STRUCTURE_DENSITY * 1.05) * SDR_DIM as f64;
             assert!(pc <= lim, "density too high: {} > {}", pc, lim);
         }
+    }
+
+    #[test]
+    fn structure_stride_is_coprime_and_mixes() {
+        // Invariant: stride coprime with dim — otherwise positions alias and
+        // order stops being encoded (the STRUCTURE_STRIDE "mine").
+        assert_eq!(euclid_gcd(SDR_DIM, STRUCTURE_STRIDE), 1);
+        // Distinct positions must map to distinct offsets; period must be SDR_DIM
+        // (full mixing), not a divisor.
+        let mut seen = std::collections::HashSet::new();
+        for pos in 0..SDR_DIM {
+            let s = structure_shift(pos);
+            assert!(s < SDR_DIM);
+            assert!(seen.insert(s), "offset collision at pos={}", pos);
+        }
+        assert_eq!(seen.len(), SDR_DIM);
     }
 }

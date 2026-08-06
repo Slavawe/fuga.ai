@@ -22,7 +22,12 @@ impl FugaCircuitBreaker {
     }
 
     pub fn inspect(&self, current_l2_loss: f32) -> SystemState {
-        if current_l2_loss < 0.5100 {
+        // CALIBRATED 2026-08: здоровый L2 при согласованном таргете живёт в
+        // диапазоне 0.78-1.03 (EMA ~0.93). Порог 0.57 из предыдущей версии
+        // убивал здоровый режим мгновенным reset'ом на каждом шаге.
+        // Граница Nominal/Warning — 75% от критического порога.
+        let warning_boundary = self.max_allowed_l2_delta * 0.75;
+        if current_l2_loss < warning_boundary {
             SystemState::Nominal
         } else if current_l2_loss <= self.max_allowed_l2_delta {
             SystemState::DivergingWarning(current_l2_loss)
@@ -49,25 +54,26 @@ mod tests {
 
     #[test]
     fn test_circuit_breaker_nominal() {
-        let cb = FugaCircuitBreaker::new(0.5700);
-        assert_eq!(cb.inspect(0.4500), SystemState::Nominal);
+        // 0.85 = 0.75 * 1.15 (порог по умолчанию)
+        let cb = FugaCircuitBreaker::new(1.1500);
+        assert_eq!(cb.inspect(0.8000), SystemState::Nominal);
     }
 
     #[test]
     fn test_circuit_breaker_warning() {
-        let cb = FugaCircuitBreaker::new(0.5700);
-        assert_eq!(cb.inspect(0.5500), SystemState::DivergingWarning(0.5500));
+        let cb = FugaCircuitBreaker::new(1.1500);
+        assert_eq!(cb.inspect(1.0000), SystemState::DivergingWarning(1.0000));
     }
 
     #[test]
     fn test_circuit_breaker_critical() {
-        let cb = FugaCircuitBreaker::new(0.5700);
-        assert_eq!(cb.inspect(0.6200), SystemState::CriticalResetRequired);
+        let cb = FugaCircuitBreaker::new(1.1500);
+        assert_eq!(cb.inspect(1.2000), SystemState::CriticalResetRequired);
     }
 
     #[test]
     fn test_validate_trajectory() {
-        let cb = FugaCircuitBreaker::new(0.5700);
+        let cb = FugaCircuitBreaker::new(1.1500);
         let pv = Hypervector::random(8192);
         let bv = Hypervector::random(8192);
         let result = cb.validate_trajectory(&pv, &bv);

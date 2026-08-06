@@ -855,7 +855,7 @@ impl HierarchicalJEPA {
 
     pub fn learn(&mut self, context: &[&Hypervector], actual: &[&Hypervector]) -> Vec<f64> {
         let mut errors = Vec::new();
-        let cb = FugaCircuitBreaker::new(0.5700);
+        let cb = FugaCircuitBreaker::new(1.1500);
 
         for li in 0..self.levels.len() {
             let level = &mut self.levels[li];
@@ -1237,7 +1237,7 @@ impl HierarchicalJEPA {
         );
 
         // --- Train L2 on L1 error deltas ---
-        let cb = FugaCircuitBreaker::new(0.5700);
+        let cb = FugaCircuitBreaker::new(1.1500);
         println!("  Training L2 (error deltas → next error delta)...");
         for epoch in 0..epochs {
             let margin = 1.0;
