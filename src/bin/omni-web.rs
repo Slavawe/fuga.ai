@@ -483,7 +483,19 @@ fn handle_code_generate<const N: usize, const S: usize>(
                     if !eligible.is_empty() {
                         let seed: Vec<String> =
                             prompt.split_whitespace().map(|s| s.to_lowercase()).collect();
-                        let tok_seq = fuga::tm_generate(&tp.tm, &seed, 24, &vocab, 4, Some(&eligible));
+                        // Continuous (tokenless) decode: rank candidates by the
+                        // LATENT direction the TM predicts (cosine in latent
+                        // space), not by dictionary bit-weights — the dictionary
+                        // stays only as the corridor/gate. Content from the
+                        // latent channel, order from the syntax graph.
+                        let tok_seq = fuga::tm_generate_latent(
+                            &tp.tm,
+                            &seed,
+                            24,
+                            &vocab,
+                            4,
+                            Some(&eligible),
+                        );
                         // Guard: a bridge that degenerates to a 1-2 token echo
                         // (TM has no chain for this task) must NOT be emitted
                         // as an answer — fall through to corpus retrieval.
@@ -492,7 +504,7 @@ fn handle_code_generate<const N: usize, const S: usize>(
                             return serde_json::json!({
                                 "domain": domain,
                                 "generated_code": format!(
-                                    "// fuga-bridge tm_generate (corridor {} tokens)\n{}",
+                                    "// fuga-bridge tm_generate_latent (corridor {} tokens)\n{}",
                                     eligible.len(),
                                     generated
                                 ),

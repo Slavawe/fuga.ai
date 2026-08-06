@@ -3,6 +3,7 @@
 ## Проект
 Собственный «агентский стек» без внешних LLM: `necli/` (локальный каталог/CLI) → OpenAI-совместимый маск `fuga-web` → генерация кода → гейты (compile + relevance) → рекурсивное дообучение на уроках, прошедших гейты.
 Двухскоростная генерация: **H-JEPA task-коридор (`eligible`) держит содержание, TM-авторегрессор держит порядок**. Мост в CLI (`tm-gen`) и в маск (`handle_code_generate`).
+**Непрерывный (tokenless) декод**: `tm_generate_latent` (tm_generate.rs) — ранжирует кандидатов по cosine в латентном пространстве (predict_latent → LatentVector), словарь остаётся только gate/коридор. Подключён в `omni-web.rs:486` (`handle_code_generate`). Старый `tm_generate`/`decode_weighted` (веса по битам) остаётся для CLI `tm-gen`.
 
 ## Команды
 - Сборка: `cargo build --release --bin fuga-web` (или `--bin fuga`)
@@ -47,7 +48,7 @@
 - `src/bin/audit_l2.rs` (не закоммичен, временный): EMA+гистограмма+счётчик resets.
 - `src/bin/omni-web.rs`: `find_lesson` (324), мост C2 (`handle_code_generate` 386), `meaningful_tokens` (306).
 - `src/ai/sdr.rs`: `STRUCTURE_STRIDE=977` (17), `structure_shift` + `euclid_gcd` (20-42), `encode_text` (253), тест `structure_stride_is_coprime_and_mixes`.
-- `src/ai/tm_generate.rs`: `tm_generate(..., eligible)`, `decode_weighted` hard gate, `MIN_AVG_WEIGHT=6`.
+- `src/ai/tm_generate.rs`: `tm_generate` (весовой, CLI), `tm_generate_latent` (непрерывный через латент, прод-мост), `decode_weighted` hard gate, `MIN_AVG_WEIGHT=6`, `LATENT_MIN_COSINE=0.05`; тест `tm_generate_latent_uses_continuous_decode_and_respects_gate`.
 - `necli/src/system_prompt.py` (270).
 - Данные: `fuga_stack_tm.bin` (394MB), `fuga_hjepa.bin`, `agent_lessons.jsonl` (1 урок factorial), `corpus*.jsonl`, `/tmp/cs.jsonl`.
 
