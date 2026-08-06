@@ -332,9 +332,18 @@ fn find_lesson<const N: usize, const S: usize>(state: &WebState<N, S>, query: &s
         if lt.is_empty() {
             continue;
         }
-        let hits = q.iter().filter(|t| lt.contains(t)).count();
-        let ratio = hits as f64 / lt.len() as f64;
-        if hits >= 1 && ratio >= 0.25 {
+        let mut matched: Vec<String> = Vec::new();
+        for t in &q {
+            if lt.contains(t) && !matched.contains(t) {
+                matched.push(t.clone());
+            }
+        }
+        let hits = matched.len() as f64;
+        let ratio = hits / lt.len() as f64;
+        // A single shared stopword-ish token (e.g. "via") must not steal a
+        // lesson: require at least two overlapping tokens AND a solid overlap
+        // fraction so only queries genuinely about the lesson's task win.
+        if hits >= 2.0 && ratio >= 0.5 {
             match best {
                 Some((r, _)) if r >= ratio => {}
                 _ => best = Some((ratio, lesson)),
@@ -938,7 +947,8 @@ fn answer_from_jepa<const N: usize, const S: usize>(
     }
 }
 
-fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> String {    let mut builder = TokenBuilder::new();
+fn handle_chat<const N: usize, const S: usize>(state: &mut WebState<N, S>, query: &str) -> String {
+    let mut builder = TokenBuilder::new();
     let _ = builder.load_configs_from_dir("tikones");
     let flat_vocab = builder.build_flat_vocab();
     let tokens = tokenize_corpus_text(query, &flat_vocab);
