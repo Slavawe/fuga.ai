@@ -94,6 +94,17 @@ fn main() {
         "tm-gen" => {
             run_tm_gen_entry(&args);
         }
+        "w-gen" => {
+            // Latent W-operator generation (predict_latent), the OLD generative
+            // path that `tm-gen` no longer reaches. Seeded probe for testing
+            // whether an accepted lesson actually shifted the W operator.
+            let text = args.get(2).cloned().unwrap_or_default();
+            if text.is_empty() {
+                eprintln!("Usage: fuga w-gen <prompt> [--file TM] [--vocab-dir DIR] [--steps N] [--structure]");
+                return;
+            }
+            run_tm_gen(&text, &args);
+        }
         "hjepa" => {
             run_hjepa_gen_entry(&args);
         }
@@ -6694,6 +6705,46 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
     }
     println!("  Vocab:   {} tokens built from {}", vocab.len(), src);
 
+    // ── Task-conditioned hard VSA mask (identity/task channel) ────────────
+    // Optional `--task "<text>"`: build a task-hypervector from the task words
+    // (hamming union) and HARD-gate every candidate token: a candidate whose SDR
+    // shares no bit with any task word is zeroed (windows/handle/async ... the
+    // corpus-dominant noise), so next-token selection can only fall on tokens
+    // that belong to the requested task's semantic neighbourhood.
+    let task_words: Vec<fuga::SdrVector> = parse_flag_value(&args, 2, "--task")
+        .map(|tt| {
+            tt.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() >= 2)
+                .map(fuga::encode_text)
+                .collect()
+        })
+        .unwrap_or_default();
+    let task_masked = !task_words.is_empty();
+    if task_masked {
+        println!("  Task-mask: {} task word SDRs (hard AND gate on candidates)", task_words.len());
+    }
+    // Soft VSA mask: `--task-soft <w>` replaces the hard AND gate with a
+    // weighted Hamming-overlap score against the task hypervector's spanning
+    // bits, so syntactic connector tokens are NOT dropped — their weight is
+    // just moderated by task relevance.
+    let task_weight = parse_flag_value(&args, 2, "--task-soft")
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let task_bits: [u64; 128] = if task_weight > 0.0 && !task_words.is_empty() {
+        let mut b = [0u64; 128];
+        for s in &task_words {
+            for i in 0..128 {
+                b[i] |= s.bits[i];
+            }
+        }
+        b
+    } else {
+        [0u64; 128]
+    };
+    if task_weight > 0.0 {
+        println!("  Task-soft: weight={} (cosine-hamming to task union)", task_weight);
+    }
+
     // ── VSA+JEPA structural decode ──────────────────────────────────────
     // Fold the visible window into an order-sensitive super-vector
     // (structure_sdr) and ask the TM which single structural key it has been
@@ -6719,6 +6770,36 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
                 (tok.clone(), sdr.clone(), lat)
             })
             .collect();
+        // ── H-JEPA L1/L2 trajectory guidance ─────────────────────────────
+        // `--hjepa <path>`: the upper-level hierarchical JEPA (TemporalPredictor:
+        // TM feed -> HV buffer -> predict_sequence latent roll-out) REGULATES THE
+        // ORDER of generated tokens, decoding each predicted latent to the
+        // nearest eligible vocab word. The vocab is task-gated (hard mask), so
+        // the trajectory only picks among task-eligible tokens.
+        if let Some(hj_path) = parse_flag_value(&args, 2, "--hjepa") {
+            let hjepa = match fuga::HierarchicalJEPA::load(hj_path) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("  ✗ H-JEPA {}: {}", hj_path, e);
+                    return;
+                }
+            };
+            let dim = hjepa.dim;
+            let mut tpred = fuga::TemporalPredictor::new(tm, hjepa);
+            let mut elig: Vec<(String, fuga::Hypervector)> = Vec::new();
+            for (tok, sdr, _) in vocab_latents.iter() {
+                if task_masked && !task_words.iter().any(|w| sdr.overlap(w) > 0) {
+                    continue;
+                }
+                elig.push((tok.clone(), fuga::sdr_to_hypervector(sdr, dim)));
+            }
+            println!("  H-JEPA L1/L2 guidance: {} eligible vocab words", elig.len());
+            let out = tpred.generate_words(prompt, steps, &elig, 0.05);
+            for (i, w) in out.iter().enumerate() {
+                println!("  step {}: {}", i, w);
+            }
+            return;
+        }
         let mut recent: Vec<String> = lex_rust_code(prompt);
         let mut out = String::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -6747,9 +6828,25 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
                 if latent_score < LATENT_MIN_COSINE {
                     continue;
                 }
+                // Task score: hard AND gate (any shared bit) when in hard mode,
+                // or a soft Hamming overlap vs the task-union bits.
+                let task_score = if task_weight > 0.0 {
+                    let mut c = 0usize;
+                    for i in 0..128 {
+                        c += (sdr.bits[i] & task_bits[i]).count_ones() as usize;
+                    }
+                    c as f64
+                } else {
+                    0.0
+                };
+                if task_masked && task_weight <= 0.0
+                    && !task_words.iter().any(|w| sdr.overlap(w) > 0)
+                {
+                    continue;
+                }
                 // Structural overlap as a mild secondary signal.
                 let struct_score = pred.overlap(sdr) as f64;
-                let combined = latent_score * 100.0 + struct_score;
+                let combined = latent_score * 100.0 + struct_score + task_weight * task_score;
                 if step > 2 && seen.contains(tok) {
                     continue;
                 }
