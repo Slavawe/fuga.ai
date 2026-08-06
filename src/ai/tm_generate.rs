@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::ai::htm_temporal::TemporalMemory;
 use crate::ai::sdr::{SDR_DIM, SDR_WORDS, SdrVector, encode_text};
 
@@ -13,12 +15,18 @@ const MIN_AVG_WEIGHT: f32 = 6.0;
 // В отличие от статической склейки строк памяти, TM предсказывает следующий
 // токен по контекстному окну предыдущих (temporal sequence), возвращая
 // построенную во времени цепочку слов — непрерывно, с учётом history.
+//
+// `eligible` — опциональный коридор от верхнего уровня (H-JEPA L1/L2
+// task-mask): локальный авторегрессор двигается СТРОГО внутри него. Это
+// две скорости в духе MegaByte/BLT — глобал держит намерение (содержание),
+// TM выстраивает валидный порядок (синтаксис). None = без маски.
 pub fn tm_generate(
     tm: &TemporalMemory,
     seed: &[String],
     steps: usize,
     candidates: &[String],
     window_size: usize,
+    eligible: Option<&HashSet<String>>,
 ) -> Vec<String> {
     let tokens: Vec<String> = seed
         .iter()
@@ -42,7 +50,7 @@ pub fn tm_generate(
         if weights.iter().all(|&w| w <= 0.0) {
             break;
         }
-        let next = decode_weighted(&weights, candidates);
+        let next = decode_weighted(&weights, candidates, eligible);
         match next {
             Some(word) if out.last() == Some(&word) => {
                 // A temporal memory must not re-emit the same token off the
@@ -93,12 +101,25 @@ fn best_structure_weights(tm: &TemporalMemory, window: &[String]) -> Vec<f32> {
 /// Rank candidates by the average weight carried on their own bits. A token
 /// whose cell depolarized with a strong segment match earns a high average;
 /// a token only randomly overlapping the evidence scores ~0.
-fn decode_weighted(weights: &[f32], candidates: &[String]) -> Option<String> {
+///
+/// When `eligible` is present, tokens OUTSIDE the corridor get −∞ (hard gate):
+/// the TM never emits a token the upper level did not sanction. This is the
+/// H-JEPA→TM two-speed bridge — intent above, syntax below.
+fn decode_weighted(
+    weights: &[f32],
+    candidates: &[String],
+    eligible: Option<&HashSet<String>>,
+) -> Option<String> {
     if candidates.is_empty() {
         return None;
     }
     let mut best: Option<(usize, f32)> = None;
     for (i, w) in candidates.iter().enumerate() {
+        if let Some(elig) = eligible {
+            if !elig.contains(w) {
+                continue;
+            }
+        }
         let sdr = encode_text(w);
         let mut sum = 0f32;
         let mut cnt = 0usize;
@@ -142,7 +163,7 @@ mod tests {
             "delta".to_string(),
         ];
         // Untrained TM: predict_structure returns zero -> generation stops.
-        let out = tm_generate(&tm, &seed, 20, &cands, 4);
+        let out = tm_generate(&tm, &seed, 20, &cands, 4, None);
         assert!(out.is_empty() || out.len() < 20);
     }
 
@@ -159,7 +180,7 @@ mod tests {
         }
         let seed = vec!["tokio".to_string()];
         let cands: Vec<String> = seq.iter().map(|s| s.to_string()).collect();
-        let out = tm_generate(&tm, &seed, 6, &cands, 2);
+        let out = tm_generate(&tm, &seed, 6, &cands, 2, None);
         assert!(
             !out.is_empty(),
             "TM learned a bigram chain, expected output, got none"

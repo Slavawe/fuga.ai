@@ -1700,12 +1700,54 @@ fn run_tm_gen_entry(args: &[String]) {
 
     // Кандидаты для декода: слова запроса + слова ближайшей памяти.
     let mem_path = cube_path.replace(".bin", "_mem.bin");
+    // `--vocab-dir DIR` overrides the memory source: build candidates from all
+    // .rs files in DIR (the lesson/corpus vocab), so the TM can only ever emit
+    // tokens that actually appear in that source.
     let mut cands: Vec<String> = query
         .split_whitespace()
         .map(|s| s.to_lowercase())
         .filter(|w| w.len() >= 2)
         .collect();
-    if let Ok(memory) = fuga::MemoryStore::load_bin(&mem_path) {
+    if let Some(vocab_dir) = parse_flag_value(args, 3, "--vocab-dir") {
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        fn walk_rs_dir(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            if let Ok(entries) = std::fs::read_dir(d) {
+                for ent in entries.flatten() {
+                    let p = ent.path();
+                    let meta = match ent.metadata() {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    if meta.is_file() {
+                        if p.extension().map(|e| e == "rs").unwrap_or(false) {
+                            out.push(p);
+                        }
+                    } else if meta.is_dir() {
+                        walk_rs_dir(&p, out);
+                    }
+                }
+            }
+        }
+        walk_rs_dir(std::path::Path::new(&vocab_dir), &mut files);
+        files.sort();
+        let single_ok = |t: &str| {
+            matches!(
+                t,
+                "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "." | "=" | "<" | ">"
+            )
+        };
+        let mut seen: std::collections::HashSet<String> = cands.iter().cloned().collect();
+        for f in files {
+            if let Ok(content) = std::fs::read_to_string(&f) {
+                for tok in lex_rust_code(&content) {
+                    let tl = tok.to_lowercase();
+                    if (tl.len() >= 2 || single_ok(&tl)) && seen.insert(tl.clone()) {
+                        cands.push(tl);
+                    }
+                }
+            }
+        }
+    } else if let Ok(memory) = fuga::MemoryStore::load_bin(&mem_path) {
         let hits = memory.search_by_text(&query, 10);
         for (_i, _s, e) in &hits {
             for w in e.text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-') {
@@ -1721,7 +1763,68 @@ fn run_tm_gen_entry(args: &[String]) {
     }
 
     let seed: Vec<String> = query.split_whitespace().map(|s| s.to_lowercase()).collect();
-    let out = fuga::tm_generate(&tm, &seed, steps, &cands, window);
+
+    // ── Two-speed bridge: H-JEPA task-mask → TM corridor ────────────────
+    // Optional `--task "<words>"` + `--task-sim <floor>`: the upper level
+    // sanctions a corridor (eligible Set) of tokens whose SDR is cosine-close
+    // to the task union; the local TM autoregressor may only emit inside it.
+    // This is the architectural fix for "right tokens, wrong order": content
+    // comes from the task/identity channel, ORDER still from the TM syntax
+    // graph. Enabled only when a task text is given.
+    let eligible: Option<std::collections::HashSet<String>> =
+        if let Some(task_text) = parse_flag_value(args, 3, "--task") {
+            let floor = parse_flag_value(args, 3, "--task-sim")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            if task_text.trim().is_empty() {
+                None
+            } else {
+                let task_words: Vec<String> = task_text
+                    .split_whitespace()
+                    .filter(|w| w.len() >= 2)
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                let task_sdrs: Vec<_> = task_words
+                    .iter()
+                    .map(|w| fuga::encode_text(w))
+                    .collect();
+                let mut task_bits = [0u64; fuga::SDR_WORDS];
+                for s in &task_sdrs {
+                    for i in 0..fuga::SDR_WORDS {
+                        task_bits[i] |= s.bits[i];
+                    }
+                }
+                let task_pop: f64 = task_bits
+                    .iter()
+                    .map(|w| w.count_ones() as f64)
+                    .sum();
+                let mut elig = std::collections::HashSet::new();
+                for w in &cands {
+                    let sdr = fuga::encode_text(w);
+                    let cand_pop: f64 = sdr.bits.iter().map(|b| b.count_ones() as f64).sum();
+                    let shared: f64 = sdr
+                        .bits
+                        .iter()
+                        .zip(task_bits.iter())
+                        .map(|(a, b)| (a & b).count_ones() as f64)
+                        .sum();
+                    let sim = if cand_pop * task_pop > 0.0 {
+                        shared / (cand_pop * task_pop).sqrt()
+                    } else {
+                        0.0
+                    };
+                    if sim >= floor {
+                        elig.insert(w.clone());
+                    }
+                }
+                println!("  Eligible corridor: {} tokens (task-sim ≥ {})", elig.len(), floor);
+                Some(elig)
+            }
+        } else {
+            None
+        };
+
+    let out = fuga::tm_generate(&tm, &seed, steps, &cands, window, eligible.as_ref());
 
     println!("╔══════════════════════════════════════════════╗");
     println!("║  Temporal-Memory Sequential Generator       ║");
