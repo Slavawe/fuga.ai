@@ -404,6 +404,102 @@ fn handle_code_generate<const N: usize, const S: usize>(
         .to_string();
     }
 
+    // C2: two-speed bridge (MegaByte/BLT split) — the H-JEPA task corridor
+    // gates the TM autoregressor. When no stored lesson matches but a trained
+    // TM/W exists, GENERATE a fresh code path instead of falling back to
+    // corpus retrieval: the corridor (eligible tokens whose SDR is cosine-close
+    // to the task words) supplies CONTENT, the TM syntax graph supplies ORDER.
+    // This is what lets the mask produce NEW code for unseen tasks.
+    if let Some(tp) = state.jepa.as_ref() {
+        if tp.tm.cells.len() > 0 {
+            let words: Vec<String> = prompt
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() >= 2)
+                .map(|w| w.to_lowercase())
+                .collect();
+            if !words.is_empty() {
+                let task_sdrs: Vec<fuga::SdrVector> =
+                    words.iter().map(|w| fuga::encode_text(w)).collect();
+                let mut task_bits = [0u64; fuga::SDR_WORDS];
+                for s in &task_sdrs {
+                    for i in 0..fuga::SDR_WORDS {
+                        task_bits[i] |= s.bits[i];
+                    }
+                }
+                let task_pop: f64 = task_bits.iter().map(|w| w.count_ones() as f64).sum();
+                // Vocabulary: lesson words + task words (small, so content
+                // dominates the TM weights — corpus-scale cands let corpus
+                // noise win, as the CLI experiments showed).
+                let mut vocab: Vec<String> = Vec::new();
+                let mut seen_vocab = std::collections::HashSet::new();
+                for l in &state.lessons {
+                    for w in l
+                        .code
+                        .split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .filter(|w| w.len() >= 2)
+                    {
+                        let wl = w.to_lowercase();
+                        if seen_vocab.insert(wl.clone()) {
+                            vocab.push(wl);
+                        }
+                    }
+                }
+                for w in &words {
+                    if seen_vocab.insert(w.clone()) {
+                        vocab.push(w.clone());
+                    }
+                }
+                if !vocab.is_empty() {
+                    let mut eligible = std::collections::HashSet::new();
+                    for w in &vocab {
+                        let sdr = fuga::encode_text(w);
+                        let cand_pop: f64 = sdr.bits.iter().map(|b| b.count_ones() as f64).sum();
+                        let shared: f64 = sdr
+                            .bits
+                            .iter()
+                            .zip(task_bits.iter())
+                            .map(|(a, b)| (a & b).count_ones() as f64)
+                            .sum();
+                        let sim = if cand_pop * task_pop > 0.0 {
+                            shared / (cand_pop * task_pop).sqrt()
+                        } else {
+                            0.0
+                        };
+                        // 0.05: permissive enough to include lesson body tokens
+                        // (which carry the task's words) yet reject corpus noise.
+                        if sim >= 0.05 {
+                            eligible.insert(w.clone());
+                        }
+                    }
+                    if !eligible.is_empty() {
+                        let seed: Vec<String> =
+                            prompt.split_whitespace().map(|s| s.to_lowercase()).collect();
+                        let tok_seq = fuga::tm_generate(&tp.tm, &seed, 24, &vocab, 4, Some(&eligible));
+                        // Guard: a bridge that degenerates to a 1-2 token echo
+                        // (TM has no chain for this task) must NOT be emitted
+                        // as an answer — fall through to corpus retrieval.
+                        if tok_seq.len() >= 3 {
+                            let generated: String = tok_seq.join(" ");
+                            return serde_json::json!({
+                                "domain": domain,
+                                "generated_code": format!(
+                                    "// fuga-bridge tm_generate (corridor {} tokens)\n{}",
+                                    eligible.len(),
+                                    generated
+                                ),
+                                "language": lang,
+                                "hits": eligible.len(),
+                                "entropy": format!("{:.4}", state.omni.ai.cube.global_entropy()),
+                                "bridge": true,
+                            })
+                            .to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let output = state.omni.ai.think(&tokens);
 
     let mut hits: Vec<(f64, String)> = Vec::new();

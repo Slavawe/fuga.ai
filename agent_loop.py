@@ -62,8 +62,9 @@ def run_necli(task: str, workdir: Path, iter_: int) -> tuple[str, str, bool]:
     # Actually the CLI expects a prompt argument; run from necli dir with uv
     necli_main = NECLI_DIR / "src/main.py"
     try:
+        wd_arg = str(Path(workdir).resolve().relative_to(NECLI_DIR.resolve()))
         out = subprocess.run(
-            [str(PYTHON_BIN), str(necli_main), "run", "--api", "fuga", "--model", "fuga-2.0", "--workdir", str(workdir), task],
+            [str(PYTHON_BIN), str(necli_main), "run", "--api", "fuga", "--model", "fuga-2.0", "--workdir", wd_arg, task],
             cwd=str(NECLI_DIR),
             env={**os.environ, "FUGA_WEB_PORT": FUGA_WEB_PORT},
             capture_output=True,
