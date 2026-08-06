@@ -6730,7 +6730,7 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
     let task_weight = parse_flag_value(&args, 2, "--task-soft")
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(0.0);
-    let task_bits: [u64; 128] = if task_weight > 0.0 && !task_words.is_empty() {
+    let task_bits: [u64; 128] = if !task_words.is_empty() {
         let mut b = [0u64; 128];
         for s in &task_words {
             for i in 0..128 {
@@ -6786,14 +6786,42 @@ fn run_tm_gen(prompt: &str, args: &[String]) {
             };
             let dim = hjepa.dim;
             let mut tpred = fuga::TemporalPredictor::new(tm, hjepa);
+            let task_pop: f64 = task_bits.iter().map(|w| w.count_ones() as f64).sum();
             let mut elig: Vec<(String, fuga::Hypervector)> = Vec::new();
+            let task_sim_floor = parse_flag_value(&args, 2, "--task-sim")
+                .and_then(|v| v.parse::<f64>().ok());
             for (tok, sdr, _) in vocab_latents.iter() {
-                if task_masked && !task_words.iter().any(|w| sdr.overlap(w) > 0) {
-                    continue;
+                if task_masked {
+                    let share = task_words.iter().any(|w| sdr.overlap(w) > 0);
+                    if let Some(floor) = task_sim_floor {
+                        // Cosine-hamming similarity vs the task-union bits.
+                        let cand_pop = sdr.bits.iter().map(|w| w.count_ones() as f64).sum::<f64>();
+                        let shared = sdr
+                            .bits
+                            .iter()
+                            .zip(task_bits.iter())
+                            .map(|(a, b)| (a & b).count_ones() as f64)
+                            .sum::<f64>();
+                        let sim = if cand_pop * task_pop > 0.0 {
+                            shared / (cand_pop * task_pop).sqrt()
+                        } else {
+                            0.0
+                        };
+                        if sim < floor {
+                            continue;
+                        }
+                    } else if !share {
+                        continue;
+                    }
                 }
                 elig.push((tok.clone(), fuga::sdr_to_hypervector(sdr, dim)));
             }
             println!("  H-JEPA L1/L2 guidance: {} eligible vocab words", elig.len());
+            if elig.len() <= 60 {
+                let mut names: Vec<&str> = elig.iter().map(|(t, _)| t.as_str()).collect();
+                names.sort();
+                println!("  eligible: {:?}", names);
+            }
             let out = tpred.generate_words(prompt, steps, &elig, 0.05);
             for (i, w) in out.iter().enumerate() {
                 println!("  step {}: {}", i, w);
