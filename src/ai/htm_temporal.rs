@@ -1018,6 +1018,11 @@ impl TemporalMemory {
         &self.predictor
     }
 
+    /// Borrow the global two-speed patch predictor (W_patch/P_patch) directly.
+    pub fn patch_predictor(&self) -> &LatentPredictor {
+        &self.patch_predictor
+    }
+
     pub fn predictor_p(&self) -> &[f32] { &self.predictor.p }
 
     pub fn predictor_updates(&self) -> u64 { self.predictor.updates }
