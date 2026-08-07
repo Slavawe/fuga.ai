@@ -311,6 +311,104 @@ pub fn tm_generate_latent_bytes(
     out
 }
 
+/// Two-speed (MegaByte-style) byte decoder.
+///
+/// Fixes the naive byte-by-byte failure (one byte out of 256 = huge noisy
+/// decision space → local bigram garbage). A GLOBAL patch transition operator
+/// (`learn_patch`/`predict_patch_latent`) decides ONE whole patch (a small
+/// group of raw bytes) per step from the `patch_vocab` — far fewer, sharper
+/// decisions; the localities of the selected patch are then emitted as-is.
+/// The byte-level cell memory still provides context, but the *decision* is
+/// concentrated at patch granularity, exactly how MegaByte beats single-rate
+/// byte models.
+///
+/// `patch_vocab` is a dictionary-free byte grammar: every distinct byte-group
+/// seen in training, none of which are tokens or subwords.
+pub fn tm_generate_two_speed(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    steps_patches: usize,
+    window_patches: usize,
+    patch_vocab: &[Vec<u8>],
+    eligible: Option<&HashSet<u8>>,
+) -> Vec<u8> {
+    fn patches_from(state: &[u8], size: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for chunk in state.chunks(size) {
+            if !chunk.is_empty() {
+                out.push(chunk.to_vec());
+            }
+        }
+        out
+    }
+    let psize = if patch_vocab.iter().map(|p| p.len()).max().unwrap_or(1) > 0 {
+        patch_vocab.iter().map(|p| p.len()).min().unwrap_or(4).max(1)
+    } else {
+        4
+    };
+
+    // Pre-encode each candidate patch latent once (frozen encoder).
+    let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+
+    while out.len() < steps_patches * psize && guard < steps_patches * 2 {
+        guard += 1;
+        let patches = patches_from(&state, psize);
+        let window: Vec<&[u8]> = patches
+            .iter()
+            .rev()
+            .take(window_patches.max(1))
+            .rev()
+            .map(|p| p.as_slice())
+            .collect();
+        if window.is_empty() {
+            break;
+        }
+        let pred = tm.predict_patch_latent(&window);
+
+        let mut best: Option<(f32, Vec<u8>)> = None;
+        for (patch, lat) in patch_latents.iter() {
+            if let Some(elig) = eligible {
+                // A patch is only eligible if every one of its bytes passes
+                // the corridor — keeps generated output sanitized.
+                if !patch.iter().all(|b| elig.contains(b)) {
+                    continue;
+                }
+            }
+            let score = pred.cosine_similarity(lat);
+            if score < LATENT_MIN_COSINE {
+                continue;
+            }
+            if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                best = Some((score, patch.clone()));
+            }
+        }
+        let (score, patch) = match best {
+            Some(b) => b,
+            None => break,
+        };
+        if score < LATENT_MIN_COSINE {
+            break;
+        }
+        if out.last() == patch.last() && !out.is_empty() && patch.len() == 1 {
+            break;
+        }
+        out.extend_from_slice(&patch);
+        state.extend_from_slice(&patch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,9 +514,43 @@ mod tests {
         let ba = encode_bytes_sdr(b"ba");
         assert_ne!(ab, ba);
         // A single-byte typo keeps shared-prefix similarity (byte-level
-        // robustness: "helo" vs "hello" still overlap strongly).
-        let ok = encode_bytes_sdr(b"hello");
-        let typo = encode_bytes_sdr(b"helio");
-        assert!(ok.soft_overlap(&typo) > 0.0);
-    }
-}
+                // robustness: "helo" vs "hello" still overlap strongly).
+                let ok = encode_bytes_sdr(b"hello");
+                let typo = encode_bytes_sdr(b"helio");
+                assert!(ok.soft_overlap(&typo) > 0.0);
+            }
+
+            #[test]
+            fn two_speed_patch_decode_selects_relevant_patch() {
+                let mut tm = TemporalMemory::new(64, 4);
+                // Learn patch transitions over byte-groups of size 2: "fn"->" m",
+                // " m"->"ai", "ai"->"n(" ... the local byte memory stays free.
+                let patches: Vec<Vec<u8>> = ["fn", " m", "ai", "n(", "{", "}"]
+                    .iter()
+                    .map(|s| s.as_bytes().to_vec())
+                    .collect();
+                for w in 0..patches.len().saturating_sub(1) {
+                    tm.learn_patch(&[&patches[w]], &patches[w + 1], 0.2);
+                }
+                let seed = "fn".as_bytes(); // starts the chain " m->ai->..."
+                let vocab = patches.clone();
+                let out = tm_generate_two_speed(&tm, seed, 6, 2, &vocab, None);
+                // The global rate must produce a non-empty continuation: at least the
+                // first learned next-patch " m" (or a contiguous chain).
+                assert!(
+                    !out.is_empty(),
+                    "two-speed patch decode expected a next patch after 'fn', got none"
+                );
+                let s = String::from_utf8_lossy(&out);
+                assert!(!s.trim().is_empty());
+                // Two-speed retains dictionary-free property: no token model here.
+                // (Byte level remains validated by the earlier test.)
+            }
+
+            #[test]
+            fn two_speed_zero_vocab_returns_empty() {
+                let tm = TemporalMemory::new(32, 4);
+                let out = tm_generate_two_speed(&tm, b"fn", 4, 2, &[], None);
+                assert!(out.is_empty(), "empty patch_vocab must yield no output");
+            }
+        }

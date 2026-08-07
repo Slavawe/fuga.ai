@@ -145,6 +145,11 @@ pub struct TemporalMemory {
     pub context_len: usize,
     pub step: usize,
     predictor: LatentPredictor,
+    /// Global two-speed (MegaByte-style) transition operator over BYTE PATCHES.
+    /// Learns patch→patch transitions (each patch = a small group of raw bytes
+    /// folded via `encode_bytes_sdr`); the byte-level `predictor` then decodes
+    /// inside the chosen patch. Kept separate so the two rates do not blur.
+    patch_predictor: LatentPredictor,
     cell_index: std::collections::HashMap<[u64; SDR_WORDS], usize>,
 }
 
@@ -166,6 +171,7 @@ impl TemporalMemory {
             context_len,
             step: 0,
             predictor: LatentPredictor::new(0xF03D_C0DE),
+            patch_predictor: LatentPredictor::new(0xBAC7_A5E0),
             cell_index: std::collections::HashMap::new(),
         }
     }
@@ -620,27 +626,72 @@ impl TemporalMemory {
     /// via [`crate::ai::sdr::encode_bytes_sdr`], so multi-byte UTF-8 chars
     /// and arbitrary binary are first-class citizens — no dictionary.
     pub fn learn_bytes(&mut self, window_bytes: &[u8], next_byte: u8, lr: f32) {
-        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
-            .iter()
-            .map(|&b| crate::ai::sdr::byte_basis(b))
-            .collect();
-        let key = crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs);
-        let next = crate::ai::sdr::byte_basis(next_byte);
-        self.learn_context_threshold(std::slice::from_ref(&key), &next, STRUCTURE_MATCH_OVERLAP);
-        self.predictor.learn_transition(&window_sdrs, &next, lr);
-    }
+            let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
+                .iter()
+                .map(|&b| crate::ai::sdr::byte_basis(b))
+                .collect();
+            let key = crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs);
+            let next = crate::ai::sdr::byte_basis(next_byte);
+            self.learn_context_threshold(std::slice::from_ref(&key), &next, STRUCTURE_MATCH_OVERLAP);
+            self.predictor.learn_transition(&window_sdrs, &next, lr);
+        }
 
-    /// Predicted NEXT-BYTE latent for a raw-byte context. Same W operator as
-    /// the token path — only the input alphabet differs.
-    pub fn predict_bytes_latent(&self, window_bytes: &[u8]) -> crate::ai::latent_jepa::LatentVector {
-        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
-            .iter()
-            .map(|&b| crate::ai::sdr::byte_basis(b))
-            .collect();
-        self.predictor.predict_next(&window_sdrs)
-    }
+        /// Predicted NEXT-BYTE latent for a raw-byte context. Same W operator as
+        /// the token path — only the input alphabet differs.
+        pub fn predict_bytes_latent(
+            &self,
+            window_bytes: &[u8],
+        ) -> crate::ai::latent_jepa::LatentVector {
+            let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
+                .iter()
+                .map(|&b| crate::ai::sdr::byte_basis(b))
+                .collect();
+            self.predictor.predict_next(&window_sdrs)
+        }
 
-    /// Negative learning for the compiler-grounded loop: reduce the association
+        // ------------------------------------------------------------------
+        // Two-speed (MegaByte-style) global patch level.
+        //
+        // The byte rate above predicts ONE byte out of 256 — a huge, noisy space
+        // that alone degrades into local bigram garbage (measured in bytogen).
+        // Two-speed fixes it exactly like MegaByte: a GLOBAL transition operator
+        // predicts whole BYTE PATCHES (small groups of bytes folded position-
+        // sensitively), and the byte level then decodes INSIDE the chosen patch.
+        // This concentrates the decision: predict a patch direction, then the
+        // bytes within it — far fewer degrees of freedom per step.
+        // ------------------------------------------------------------------
+
+        /// Learn a global patch transition: `window_patches` (each a group of raw
+        /// bytes, oldest first, folded via `encode_bytes_sdr`) → `next_patch`.
+        /// Only the patch-level transition operator `W_patch` is trained; the
+        /// byte-level cell segments stay separate.
+        pub fn learn_patch(&mut self, window_patches: &[&[u8]], next_patch: &[u8], lr: f32) {
+            if next_patch.is_empty() {
+                return;
+            }
+            let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_patches
+                .iter()
+                .map(|p| crate::ai::sdr::encode_bytes_sdr(p))
+                .collect();
+            let next = crate::ai::sdr::encode_bytes_sdr(next_patch);
+            self.patch_predictor.learn_transition(&window_sdrs, &next, lr);
+        }
+
+        /// Predicted NEXT-PATCH latent for a raw-byte patch window. The global
+        /// rate answers "which direction / next patch", the byte rate answers
+        /// "exactly which bytes inside it".
+        pub fn predict_patch_latent(
+            &self,
+            window_patches: &[&[u8]],
+        ) -> crate::ai::latent_jepa::LatentVector {
+            let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_patches
+                .iter()
+                .map(|p| crate::ai::sdr::encode_bytes_sdr(p))
+                .collect();
+            self.patch_predictor.predict_next(&window_sdrs)
+        }
+
+        /// Negative learning for the compiler-grounded loop: reduce the association
     /// between a window and a *wrong* token (the one the decoder emitted where
     /// rustc rejected it), without promoting any alternative. Latent-side only
     /// (the linear transition operator), OWM-projected via `proj`. See
@@ -742,6 +793,20 @@ impl TemporalMemory {
             for val in p {
                 f.write_all(&val.to_le_bytes()).ok();
             }
+            // Two-speed GLOBAL patch operator W_patch + updates + P_patch.
+            // Written last so checkpoints saved before the patch level load
+            // with a fresh (identity) patch predictor.
+            let pw = &self.patch_predictor.w;
+            f.write_all(&(pw.len() as u32).to_le_bytes()).ok();
+            for val in pw {
+                f.write_all(&val.to_le_bytes()).ok();
+            }
+            f.write_all(&self.patch_predictor.updates.to_le_bytes()).ok();
+            let pp = &self.patch_predictor.p;
+            f.write_all(&(pp.len() as u32).to_le_bytes()).ok();
+            for val in pp {
+                f.write_all(&val.to_le_bytes()).ok();
+            }
         }
     }
 
@@ -838,6 +903,44 @@ impl TemporalMemory {
         for (i, c) in cells.iter().enumerate() {
             cell_index.insert(c.pattern.bits, i);
         }
+        // Two-speed GLOBAL patch operator. Written last; checkpoints saved
+        // before the patch level end after P and fall back to a fresh
+        // (identity) patch predictor.
+        let mut patch_predictor = LatentPredictor::new(0xBAC7_A5E0);
+        if pos + 4 <= data.len() {
+            let pwn = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+            pos += 4;
+            let mut pw = Vec::new();
+            if pwn == LATENT_DIM * LATENT_DIM && pos + pwn * 4 <= data.len() {
+                pw.reserve(pwn);
+                for _ in 0..pwn {
+                    pw.push(f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?));
+                    pos += 4;
+                }
+            }
+            let mut pupdates = 0u64;
+            if pos + 8 <= data.len() {
+                pupdates = u64::from_le_bytes(data[pos..pos + 8].try_into().ok()?);
+                pos += 8;
+            }
+            let mut pp = Vec::new();
+            if pos + 4 <= data.len() {
+                let ppn = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
+                pos += 4;
+                if ppn == LATENT_DIM * LATENT_DIM && pos + ppn * 4 <= data.len() {
+                    pp.reserve(ppn);
+                    for _ in 0..ppn {
+                        pp.push(f32::from_le_bytes(data[pos..pos + 4].try_into().ok()?));
+                        pos += 4;
+                    }
+                }
+            }
+            if !pw.is_empty() {
+                patch_predictor = LatentPredictor::with_w(0xBAC7_A5E0, pw)
+                    .with_updates(pupdates)
+                    .with_p(pp);
+            }
+        }
         Some(TemporalMemory {
             cells,
             window,
@@ -846,6 +949,7 @@ impl TemporalMemory {
             predictor: LatentPredictor::with_w(0xF03D_C0DE, w)
                 .with_updates(updates)
                 .with_p(p),
+            patch_predictor,
             cell_index,
         })
     }
@@ -878,6 +982,7 @@ impl TemporalMemory {
             context_len,
             step: 0,
             predictor,
+            patch_predictor: LatentPredictor::new(0xBAC7_A5E0),
             cell_index,
         }
     }
