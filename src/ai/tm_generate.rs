@@ -1037,13 +1037,30 @@ pub fn tm_generate_recurrent(
         let pred = predictor.predict_next_rnn(&window_sdrs, &h, mix);
         // Rank all 256 bytes by cosine to the recurrent latent prediction.
         let mut best = (0usize, f32::NEG_INFINITY);
+        let mut second = (0usize, f32::NEG_INFINITY);
         for (i, lat) in byte_lats.iter().enumerate() {
             let c = pred.cosine_similarity(lat);
             if c > best.1 {
+                second = best;
                 best = (i, c);
+            } else if c > second.1 {
+                second = (i, c);
             }
         }
         let byte = best.0 as u8;
+        // Confidence gap = top1 cosine - top2 cosine. When the model is
+        // UNSURE (small gap), the hidden state is noise — forget it hard
+        // (phi -> 0); when confident, keep the memory (phi -> full). This is
+        // the "temperature-decayed memory" lever of the exposure-bias plan.
+        let gap = best.1 - second.1;
+        let phi_eff = if gap >= 0.30 {
+            phi
+        } else if gap <= 0.10 {
+            0.05
+        } else {
+            // linear interpolation 0.10..0.30 -> 0.05..phi
+            0.05 + (phi - 0.05) * (gap - 0.10) / 0.20
+        };
         // Stop on a repeated identical byte (avoid single-byte stall).
         if !out.is_empty() && out.last() == Some(&byte) && out.len() > 2 {
             break;
@@ -1051,7 +1068,8 @@ pub fn tm_generate_recurrent(
         out.push(byte);
         state.push(byte);
         // Advance the hidden state with the emitted byte (leaky integration).
-        h = predictor.advance_h(h, &crate::ai::sdr::byte_basis(byte), phi);
+        // phi_eff = gap-adaptive: uncertain steps forget the noisy state hard.
+        h = predictor.advance_h(h, &crate::ai::sdr::byte_basis(byte), phi_eff);
     }
     out
 }
