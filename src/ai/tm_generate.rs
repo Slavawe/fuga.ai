@@ -368,6 +368,11 @@ pub fn tm_generate_two_speed(
     let mut guard: usize = 0;
     let mut last_patch: Vec<u8> = Vec::new();
     let mut repeat_run: usize = 0;
+    // No-repeat window: a patch may not be re-emitted within the last N picks
+    // (unless nothing else clears the gate). This is the decode-side iterator
+    // that breaks top-1 frequency loops ('er er', ') { ) {').
+    let no_repeat: usize = 2;
+    let mut recent: Vec<Vec<u8>> = Vec::new();
 
     while out.len() < steps_patches * psize && guard < steps_patches * 2 {
         guard += 1;
@@ -393,6 +398,10 @@ pub fn tm_generate_two_speed(
                     continue;
                 }
             }
+            // Decode-side no-repeat (window N).
+            if recent.contains(patch) {
+                continue;
+            }
             let score = pred.cosine_similarity(lat);
             if score < min_cosine {
                 continue;
@@ -407,6 +416,11 @@ pub fn tm_generate_two_speed(
         };
         if score < min_cosine {
             break;
+        }
+        // No-repeat bookkeeping: keep the last N picked patches.
+        recent.push(patch.clone());
+        if recent.len() > no_repeat.max(1) {
+            recent.remove(0);
         }
         // Anti-repeat: a well-formed decoder must not loop. Detect BOTH a
         // repeat of one identical patch AND any short period-2..4 cycle in
@@ -485,6 +499,7 @@ pub fn tm_generate_two_speed_calib(
     patch_vocab: &[Vec<u8>],
     eligible: Option<&HashSet<u8>>,
     min_cosine: f32,
+    no_repeat_patches: usize,
 ) -> Vec<u8> {
     fn patches_from(state: &[u8], size: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
@@ -522,6 +537,7 @@ pub fn tm_generate_two_speed_calib(
     let mut guard: usize = 0;
     let mut last_patch: Vec<u8> = Vec::new();
     let mut repeat_run: usize = 0;
+    let mut recent: Vec<Vec<u8>> = Vec::new();
 
     while out.len() < steps_patches * psize && guard < steps_patches * 2 {
         guard += 1;
@@ -545,6 +561,10 @@ pub fn tm_generate_two_speed_calib(
                     continue;
                 }
             }
+            // Decode-side no-repeat (window N) — the calibration knob.
+            if no_repeat_patches > 0 && recent.contains(patch) {
+                continue;
+            }
             let score = pred.cosine_similarity(lat);
             if score < min_cosine {
                 continue;
@@ -559,6 +579,13 @@ pub fn tm_generate_two_speed_calib(
         };
         if score < min_cosine {
             break;
+        }
+        // No-repeat bookkeeping.
+        if no_repeat_patches > 0 {
+            recent.push(patch.clone());
+            if recent.len() > no_repeat_patches.max(1) {
+                recent.remove(0);
+            }
         }
         // Anti-repeat guard (same as tm_generate_two_speed).
         if !last_patch.is_empty() && patch == last_patch {
@@ -575,6 +602,266 @@ pub fn tm_generate_two_speed_calib(
         }
         out.extend_from_slice(&patch);
         state.extend_from_slice(&patch);
+    }
+    out
+}
+
+/// Entropy-patched two-speed decoder (BLT-style dynamic patching).
+///
+/// Fixed patching (MegaByte) groups bytes by a constant size; BLT instead
+/// sizes patches BY PREDICTABILITY. Here the LOCAL byte W operator gives a
+/// cosine distribution over the fixed 256-byte alphabet; its normalized
+/// entropy decides the patch rate per step:
+///
+///   - LOW entropy  (predictable run: 'let ', 'fn ', common keywords)
+///     → emit the argmax byte locally; the patch GROWS (coarse rate).
+///   - HIGH entropy (rare identifier, mixed code, a typo)
+///     → hand over to the GLOBAL patch operator: pick the closest patch in
+///       `patch_vocab` and emit it (fine rate), then resume byte-wise.
+///
+/// Entropy-gap two-speed decoder (BLT-style dynamic patching).
+///
+/// Fixed patching (MegaByte) groups bytes by a constant size; BLT instead
+/// sizes patches BY PREDICTABILITY. Here the LOCAL byte W operator gives a
+/// cosine distribution over the fixed 256-byte alphabet; the separation
+/// (confidence gap) between the top-1 and top-2 predicted bytes decides the
+/// rate per step:
+///
+///   - STRONG top-1 (large gap, predictable run: 'let ', 'fn ', keywords)
+///     → emit the argmax byte locally; the patch GROWS (coarse rate).
+///   - WEAK top-1 (small gap, rare identifier, mixed code, a typo)
+///     → hand over to the GLOBAL patch operator: pick the closest patch in
+///       `patch_vocab` and emit it (fine rate), then resume byte-wise.
+///
+/// This is the VSA equivalent of the BLT patcher without a learned patcher
+/// net, using the model's own W distributions and a gap threshold instead of
+/// raw softmax entropy (which saturates at ~1.0 because 256 byte candidates
+/// all carry a small cosine baseline — measured 0.999 even on a clean 'a'→'b').
+pub fn tm_generate_two_speed_entropy(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    gap_threshold: f32,
+    patch_vocab: &[Vec<u8>],
+) -> Vec<u8> {
+    // Pre-encode the fixed byte alphabet latents (frozen encoder).
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            tm.latent_of_sdr(&sdr)
+        })
+        .collect();
+    // Global patch grammar (same as tm_generate_two_speed).
+    let patch_lats: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    let psize = patch_vocab
+        .iter()
+        .map(|p| p.len())
+        .min()
+        .unwrap_or(4)
+        .max(1);
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+    let mut recent: Vec<Vec<u8>> = Vec::new();
+    let no_repeat: usize = 2;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        // Local byte-rate distribution over the 256-byte alphabet.
+        let win_lo = state.len().saturating_sub(window_bytes.max(1));
+        let pred = tm.predict_bytes_latent(&state[win_lo..]);
+        // Find top-1 and top-2 cosine bytes in one pass.
+        let mut top1 = (0usize, f32::MIN);
+        let mut top2 = (0usize, f32::MIN);
+        for (b, lat) in byte_lats.iter().enumerate() {
+            let c = pred.cosine_similarity(lat);
+            if c > top1.1 {
+                top2 = top1;
+                top1 = (b, c);
+            } else if c > top2.1 {
+                top2 = (b, c);
+            }
+        }
+        let gap = top1.1 - top2.1; // top-1 dominance; low = ambiguous
+
+        if gap >= gap_threshold {
+            // Predictable (top byte clearly dominant) → local emission.
+            let b = top1.0 as u8;
+            // Break on a repeated identical byte (avoid single-byte stall).
+            if !out.is_empty() && out.last() == Some(&b) && out.len() > 2 {
+                break;
+            }
+            out.push(b);
+            state.push(b);
+        } else {
+            // Ambiguous → global patch operator picks the next patch.
+            let patches: Vec<Vec<u8>> = state
+                .chunks(psize)
+                .filter(|c| !c.is_empty())
+                .map(|c| c.to_vec())
+                .collect();
+            let window: Vec<&[u8]> = patches
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
+                .map(|p| p.as_slice())
+                .collect();
+            let pred_p = tm.predict_patch_latent(&window);
+            let mut best: Option<(f32, Vec<u8>)> = None;
+            for (patch, lat) in patch_lats.iter() {
+                if recent.contains(patch) {
+                    continue;
+                }
+                let score = pred_p.cosine_similarity(lat);
+                if score < LATENT_MIN_COSINE {
+                    continue;
+                }
+                if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                    best = Some((score, patch.clone()));
+                }
+            }
+            let (score, patch) = match best {
+                Some(b) => b,
+                None => break,
+            };
+            if score < LATENT_MIN_COSINE {
+                break;
+            }
+            recent.push(patch.clone());
+            if recent.len() > no_repeat.max(1) {
+                recent.remove(0);
+            }
+            out.extend_from_slice(&patch);
+            state.extend_from_slice(&patch);
+        }
+    }
+    out
+}
+
+/// Speculative (draft → verify) byte decoder.
+///
+/// Mirrors speculative decoding: a fast DRAFT rate — the global patch W
+/// operator (`predict_patch_latent`) — proposes a whole next byte-patch in
+/// ONE step (coarse, cheap). A careful VERIFIER — the local byte W operator
+/// (`predict_bytes_latent`) — then checks each proposed byte independently:
+/// if the local model is more confident (gap ≥ threshold) about a DIFFERENT
+/// byte, the verifier overwrites the draft (correcting rare chars / typos).
+/// This gives patch-rate drafting with byte-rate accuracy — the ByT5/Subword
+/// speed–precision tradeoff realised in VSA. No learned draft net: the global
+/// W is the drafter, the local W is the verifier.
+pub fn tm_generate_speculative(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    verify_gap: f32,
+    patch_vocab: &[Vec<u8>],
+) -> Vec<u8> {
+    // Fixed byte alphabet latents (verifier's hypothesis space).
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            tm.latent_of_sdr(&sdr)
+        })
+        .collect();
+    // Global draft grammar.
+    let patch_lats: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    let psize = patch_vocab
+        .iter()
+        .map(|p| p.len())
+        .min()
+        .unwrap_or(2)
+        .max(1);
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        // DRAFT: global W proposes the next patch (one coarse decision).
+        let patches: Vec<Vec<u8>> = state
+            .chunks(psize)
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_vec())
+            .collect();
+        let window: Vec<&[u8]> = patches
+            .iter()
+            .rev()
+            .take(4)
+            .rev()
+            .map(|p| p.as_slice())
+            .collect();
+        let draft = tm.predict_patch_latent(&window);
+        let mut best_patch: Option<Vec<u8>> = None;
+        for (patch, lat) in patch_lats.iter() {
+            let s = draft.cosine_similarity(lat);
+            if s >= LATENT_MIN_COSINE && best_patch.is_none() {
+                best_patch = Some(patch.clone());
+            }
+        }
+        let proposed: Vec<u8> = best_patch.unwrap_or_else(|| {
+            // No confident draft → propose a single most-likely byte locally.
+            let pred = tm.predict_bytes_latent(&state[state.len().saturating_sub(window_bytes.max(1))..]);
+            let mut top = (0usize, f32::MIN);
+            for (i, lat) in byte_lats.iter().enumerate() {
+                let c = pred.cosine_similarity(lat);
+                if c > top.1 {
+                    top = (i, c);
+                }
+            }
+            vec![top.0 as u8]
+        });
+
+        // VERIFY: check each proposed byte against the local byte W.
+        for &b in proposed.iter() {
+            let tail = &state[state.len().saturating_sub(window_bytes.max(1))..];
+            let pred = tm.predict_bytes_latent(tail);
+            let mut top1 = (0usize, f32::MIN);
+            let mut top2 = (0usize, f32::MIN);
+            for (i, lat) in byte_lats.iter().enumerate() {
+                let c = pred.cosine_similarity(lat);
+                if c > top1.1 {
+                    top2 = top1;
+                    top1 = (i, c);
+                } else if c > top2.1 {
+                    top2 = (i, c);
+                }
+            }
+            let gap = top1.1 - top2.1;
+            // The verifier overrides the draft only when IT is clearly sure
+            // (large gap) and disagrees — correcting rare/typo'd bytes.
+            let byte = if gap >= verify_gap && top1.0 as u8 != b && !out.is_empty() {
+                top1.0 as u8
+            } else {
+                b
+            };
+            if !out.is_empty() && out.last() == Some(&byte) && out.len() > 2 {
+                continue; // skip a repeated identical byte (no stall)
+            }
+            out.push(byte);
+            state.push(byte);
+            if out.len() >= max_bytes {
+                break;
+            }
+        }
     }
     out
 }
@@ -723,4 +1010,28 @@ mod tests {
                 let out = tm_generate_two_speed(&tm, b"fn", 4, 2, &[], None);
                 assert!(out.is_empty(), "empty patch_vocab must yield no output");
             }
-        }
+
+            #[test]
+            fn speculative_draft_verify_decodes_predictable_run() {
+                let mut tm = TemporalMemory::new(64, 4);
+                // Learn a very regular byte pattern with the decoder's sliding window.
+                let seq = b"abababababababababab";
+                for w in 0..seq.len().saturating_sub(1) {
+                    let win_lo = w.saturating_sub(3);
+                    tm.learn_bytes(&seq[win_lo..w + 1], seq[w + 1], 0.2);
+                }
+                // Draft grammar of two patches.
+                let vocab: Vec<Vec<u8>> = ["ab", "ba"].iter().map(|s| s.as_bytes().to_vec()).collect();
+                let out = tm_generate_speculative(&tm, b"a", 200, 4, 0.60, &vocab);
+                // The draft proposes patches, the verifier confirms each byte; a
+                // predictable run must emit several bytes (not stall at one).
+                assert!(
+                    out.len() >= 2,
+                    "speculative decoder should continue a predictable run, got {:?}",
+                    String::from_utf8_lossy(&out)
+                );
+                // Empty draft grammar must not stop the verifier's local fallback.
+                let out2 = tm_generate_speculative(&tm, b"a", 20, 4, 0.60, &[]);
+                assert!(out2.len() >= 1, "empty grammar must not stop the byte rate");
+            }
+            }

@@ -119,24 +119,46 @@ fn main() {
 
     // Two-speed decode at a sweep of cosine thresholds (honest calibration).
     let n_patch_steps = 50_usize;
-    let thresholds = [0.05f32, 0.10, 0.15, 0.20, 0.25];
-    println!("├─ two-speed threshold sweep (patch_vocab={}):", patch_vocab.len());
-    let mut best_str: String = String::new();
-    let mut best_len = 0usize;
-    for &mc in &thresholds {
+    println!("├─ two-speed no-repeat sweep (patch_vocab={}):", patch_vocab.len());
+    let nr_values = [0usize, 2, 4];
+    for &nr in &nr_values {
         let d0 = Instant::now();
-        let out = fuga::tm_generate_two_speed_calib(&tm, &seed, n_patch_steps, 4, &patch_vocab, None, mc);
+        let out = fuga::tm_generate_two_speed_calib(&tm, &seed, n_patch_steps, 4, &patch_vocab, None, 0.05, nr);
         let secs = d0.elapsed().as_secs_f64();
         let s = String::from_utf8_lossy(&out).to_string();
         let printable: f64 = out.iter().filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace()).count() as f64;
         let pct = if out.is_empty() { 0.0 } else { 100.0 * printable / out.len() as f64 };
-        println!("  thresh={:.2} bytes={} ({:.1}%) {:.1}s :: {}", mc, out.len(), pct, secs,
-            s.chars().take(90).collect::<String>());
-        if out.len() > best_len {
-            best_len = out.len();
-            best_str = s;
-        }
-    }
+        println!("  no_repeat={} bytes={} ({:.1}%) {:.1}s :: {}", nr, out.len(), pct, secs,
+                    s.chars().take(90).collect::<String>());
+            }
+            // Entropy-gap (BLT) decoder: dynamic patch boundaries by predictability.
+            let d0e = Instant::now();
+            let entropy_out = fuga::tm_generate_two_speed_entropy(&tm, &seed, 200, 4, 0.60, &patch_vocab);
+            let entropy_secs = d0e.elapsed().as_secs_f64();
+            let entropy_str = String::from_utf8_lossy(&entropy_out).to_string();
+            let entropy_printable: f64 = entropy_out
+                .iter()
+                .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                .count() as f64;
+            let entropy_pct = if entropy_out.is_empty() { 0.0 } else { 100.0 * entropy_printable / entropy_out.len() as f64 };
+            println!("├─ entropy(BLT gap=0.60) decoded ({} bytes):", entropy_out.len());
+            println!("└─ {}", entropy_str.chars().take(120).collect::<String>());
+            println!("BENCH entropy_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", entropy_out.len(), entropy_pct,
+                    entropy_secs, entropy_out.len() as f64 / entropy_secs.max(1e-4));
+                // Speculative (draft→verify): global W drafts patches, local W verifies bytes.
+                let d0s = Instant::now();
+                let spec_out = fuga::tm_generate_speculative(&tm, &seed, 200, 4, 0.60, &patch_vocab);
+                let spec_secs = d0s.elapsed().as_secs_f64();
+                let spec_str = String::from_utf8_lossy(&spec_out).to_string();
+                let spec_printable: f64 = spec_out
+                    .iter()
+                    .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                    .count() as f64;
+                let spec_pct = if spec_out.is_empty() { 0.0 } else { 100.0 * spec_printable / spec_out.len() as f64 };
+                println!("├─ speculative(draft→verify) decoded ({} bytes):", spec_out.len());
+                println!("└─ {}", spec_str.chars().take(120).collect::<String>());
+                println!("BENCH speculative_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", spec_out.len(), spec_pct,
+                    spec_secs, spec_out.len() as f64 / spec_secs.max(1e-4));
     // Keep the default-path decode for the canonical PASS line (same as prod).
     let d0default = Instant::now();
     let bytes_out = fuga::tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
