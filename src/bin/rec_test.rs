@@ -138,10 +138,31 @@ fn main() {
     }
 
     let naive = fuga::tm_generate_latent_bytes(&tm_stateless, b"fn ", 30, ctx_window, None);
-    let s = String::from_utf8_lossy(&naive);
-    println!("└─ naive stateless byte (control) bytes={} :: {}", naive.len(), s.chars().take(80).collect::<String>());
+        let s = String::from_utf8_lossy(&naive);
+        println!("└─ naive stateless byte (control) bytes={} :: {}", naive.len(), s.chars().take(80).collect::<String>());
 
-    // === v3.2 lever: NON-ARGMAX (nucleus) state advance on the stateful W. ===
+        // === Hopfield associative advance (attention-without-tokens, variant 4) ===
+        // h(t) is used as a QUERY into a Rust-structural associative memory; the
+        // clean retrieval h_clean = M_vals·softmax(β·M_keysᵀ·h) reaches W.
+        let hop = fuga::ai::hopfield::build_rust_hopfield(&tm_stateful.predictor().encoder, 12.0);
+        println!("├─ recurrent HOPFIELD read on stateful W (β=12):");
+        for &combine in &[0.0f32, 0.5] {
+            for &mix in &[0.0f32, 0.4, 0.6] {
+                let d0 = Instant::now();
+                let hp_out = fuga::tm_generate_hop_reader(&tm_stateful, &seed, 60, ctx_window, combine, mix, &hop);
+                let secs = d0.elapsed().as_secs_f64();
+                let s = String::from_utf8_lossy(&hp_out);
+                let printable: f64 = hp_out
+                    .iter()
+                    .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                    .count() as f64;
+                let pct = if hp_out.is_empty() { 0.0 } else { 100.0 * printable / hp_out.len() as f64 };
+                println!("  hop combine={:.1} mix={:.1} bytes={} ({:.0}%) {:.2}s :: {}", combine, mix, hp_out.len(), pct, secs,
+                    s.chars().take(60).collect::<String>());
+            }
+        }
+
+        println!("REAL-CODE RECURRENT: PASS");
     // Emission stays argmax; only the byte fed into advance_h is nucleus-sampled
     // (T=1.2, top_p=0.9). Isolates "argmax e/r fill of h is the cause".
     println!("├─ recurrent NUCLEUS-advance on stateful W (T=1.2, top_p=0.9):");

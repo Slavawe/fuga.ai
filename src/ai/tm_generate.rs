@@ -1190,6 +1190,90 @@ pub fn tm_generate_recurrent_nucleus(
     out
 }
 
+/// Recurrent byte decoder with MODERN HOPFIELD associative state advance.
+///
+/// Implements the attention-without-tokens plan (punct/dev 1): instead of
+/// mixing a drifting hidden state straight into `W`, `h(t)` is used as a QUERY
+/// into a Hopfield memory, and only the CLEAN retrieved vector reaches W:
+///
+///   h_clean = M_vals · softmax(β · M_keysᵀ · h)
+///
+/// Even if `h` drifts due to accumulated autoregressive errors, the softmax
+/// attracts it to the nearest stable memory cell (structural Rust templates),
+/// so what W receives is back inside the training distribution. At decode we
+/// call `predict_next_rnn(win, &mem.read(&h), mix)`; training must use the SAME
+/// `read` (rec_test hopfield path) for train/spec parity.
+pub fn tm_generate_hop_reader(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    combine: f32,
+    mix: f32,
+    hopfield: &crate::ai::hopfield::HopfieldMemory,
+) -> Vec<u8> {
+    let predictor = tm.predictor();
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b: u16| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            predictor.encoder.encode(&sdr)
+        })
+        .collect();
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut h = crate::ai::latent_jepa::LatentVector::zero();
+    let mut guard: usize = 0;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        let win_lo = state.len().saturating_sub(window_bytes.max(1));
+        let window_byte = &state[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_byte
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        // h_clean = hopfield.read(h) — attract back toward structural templates.
+        let h_clean = if hopfield.len() > 0 {
+            hopfield.read(&h)
+        } else {
+            h.clone()
+        };
+        // combine: 0 = pure hop-clean state, 1 = pure raw h (baseline).
+        let h_used = if combine > 0.0 && hopfield.len() > 0 {
+            let mut merged = crate::ai::latent_jepa::LatentVector::zero();
+            for d in 0..crate::ai::latent_jepa::LATENT_DIM {
+                merged.values[d] =
+                    (1.0 - combine) * h_clean.values[d] + combine * h.values[d];
+            }
+            merged
+        } else {
+            h_clean
+        };
+        let pred = predictor.predict_next_rnn(&window_sdrs, &h_used, mix);
+        // Rank 256 bytes.
+        let mut best = (0usize, f32::NEG_INFINITY);
+        let mut second = (0usize, f32::NEG_INFINITY);
+        for (i, lat) in byte_lats.iter().enumerate() {
+            let c = pred.cosine_similarity(lat);
+            if c > best.1 {
+                second = best;
+                best = (i, c);
+            } else if c > second.1 {
+                second = (i, c);
+            }
+        }
+        let byte = best.0 as u8;
+        if !out.is_empty() && out.last() == Some(&byte) && out.len() > 2 {
+            break;
+        }
+        out.push(byte);
+        state.push(byte);
+        h = predictor.advance_h(h, &crate::ai::sdr::byte_basis(byte), 0.9);
+    }
+    out
+}
+
 /// Instead of greedy top-1, keeps `beam_width` hypotheses, each with an
 /// accumulated log-probability score. At every step every hypothesis expands
 /// with its top-M bytes (by the softmax-normalized cosine distribution over
@@ -1481,6 +1565,26 @@ mod tests {
                     let out2 = tm_generate_beam(&tm, b"a", 0, 4, 4, 3);
                     assert_eq!(out2, b"a");
                 }
+
+            #[test]
+            fn hop_reader_decoder_continues_with_attractors() {
+                let mut tm = TemporalMemory::new(64, 4);
+                // Learn a hard 2-byte alternation 'ab' (same as recurrent test).
+                let seq = b"abababababababababab";
+                for w in 0..seq.len().saturating_sub(1) {
+                    tm.learn_bytes(&seq[w..w + 1], seq[w + 1], 0.4);
+                }
+                // Hopfield bank over Rust templates; hop-read must not stall
+                // the decoder on this regular pattern (structural attractors
+                // keep the state anchored even when h is raw).
+                let hop = crate::ai::hopfield::build_rust_hopfield(&tm.predictor().encoder, 12.0);
+                let out = tm_generate_hop_reader(&tm, b"a", 60, 2, 0.0, 0.6, &hop);
+                assert!(
+                    out.len() > 1,
+                    "hop reader should continue a predictable run, got {:?}",
+                    String::from_utf8_lossy(&out)
+                );
+            }
 
             #[test]
             fn recurrent_decoder_continues_predictable_run() {

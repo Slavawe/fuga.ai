@@ -7,6 +7,7 @@ pub mod core;
 pub mod decoder;
 pub mod hierarchical_jepa;
 pub mod hnsw;
+pub mod hopfield;
 pub mod htm_temporal;
 pub mod jepa;
 pub mod memory_store;
