@@ -1074,8 +1074,122 @@ pub fn tm_generate_recurrent(
     out
 }
 
-/// Beam-search byte decoder (beam-N over the local byte W operator).
+/// Recurrent byte decoder with NON-ARGMAX state advance (v3.2 lever 1).
 ///
+/// Same as [`tm_generate_recurrent`] — same stateful W, same local+state mix
+/// before the operator — but the byte fed into `advance_h` is NOT the argmax.
+/// Instead it is drawn by nucleus (top-p) sampling over the temperature-scaled
+/// cosine distribution: `p(b) ∝ exp(cos(b)/T)`, keep tokens until cumulative
+/// prob ≥ top_p. Directly attacks the measured failure of 3.1: the argmax
+/// byte is almost always the frequent e/r, so pure-argmax advance floods h
+/// with the dominant attractor. Sampling keeps h structurally diverse, so the
+/// recurrent read is less chained to e→r.
+///
+/// Emission (the decoder's output byte) is still the argmax — we only change
+/// what the memory is fed, isolating the hypothesis "e-fill of h is the cause".
+/// `rng_seed` (non-zero) makes the nucleus draws reproducible across runs.
+pub fn tm_generate_recurrent_nucleus(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    mix: f32,
+    phi: f32,
+    temperature: f32,
+    top_p: f32,
+    rng_seed: u64,
+) -> Vec<u8> {
+    let predictor = tm.predictor();
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            predictor.encoder.encode(&sdr)
+        })
+        .collect();
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut h = crate::ai::latent_jepa::LatentVector::zero();
+    let mut guard: usize = 0;
+    let mut x: u64 = rng_seed ^ 0x9E3779B97F4A7C15;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        let win_lo = state.len().saturating_sub(window_bytes.max(1));
+        let window_byte = &state[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_byte
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let pred = predictor.predict_next_rnn(&window_sdrs, &h, mix);
+
+        // Cosine scores over the 256-byte alphabet.
+        let mut cos = [0.0f32; 256];
+        let mut best = (0usize, f32::NEG_INFINITY);
+        let mut second = (0usize, f32::NEG_INFINITY);
+        for (i, lat) in byte_lats.iter().enumerate() {
+            let c = pred.cosine_similarity(lat);
+            cos[i] = c;
+            if c > best.1 {
+                second = best;
+                best = (i, c);
+            } else if c > second.1 {
+                second = (i, c);
+            }
+        }
+        let emit_byte = best.0 as u8;
+
+        // Nucleus sample for the state advance.
+        let temp = temperature.max(0.1);
+        let mut probs = [0.0f32; 256];
+        let mut sum_exp = 0.0f32;
+        for i in 0..256 {
+            probs[i] = (cos[i] / temp).exp();
+            sum_exp += probs[i];
+        }
+        for p in probs.iter_mut() {
+            *p /= sum_exp.max(1e-12);
+        }
+        // Top-p (nucleus) truncation: sort, keep smallest set with cum prob ≥ top_p.
+        let mut order: Vec<usize> = (0..256).collect();
+        order.sort_unstable_by(|&a, &b| probs[b].partial_cmp(&probs[a]).unwrap_or(std::cmp::Ordering::Equal));
+        let mut cum = 0.0f32;
+        let mut nucleus_len = 1usize;
+        for &idx in &order {
+            cum += probs[idx];
+            if cum >= top_p.min(0.999) && nucleus_len >= 1 {
+                break;
+            }
+            nucleus_len += 1;
+        }
+        nucleus_len = nucleus_len.max(1).min(256);
+        // Draw from the nucleus subset, weighted by (truncated) prob.
+        x = x
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let r = (x >> 33) as f64 / (1u64 << 31) as f64;
+        let mut acc = 0.0f32;
+        let mut state_byte = order[0] as u8;
+        for &idx in order.iter().take(nucleus_len) {
+            acc += probs[idx];
+            if acc >= r as f32 {
+                state_byte = idx as u8;
+                break;
+            }
+        }
+
+        // Stop on repeated identical emitted byte (avoid single-byte stall).
+        if !out.is_empty() && out.last() == Some(&emit_byte) && out.len() > 2 {
+            break;
+        }
+        out.push(emit_byte);
+        state.push(emit_byte);
+        // Advance memory with the NUCLEUS-sampled byte (not the argmax).
+        h = predictor.advance_h(h, &crate::ai::sdr::byte_basis(state_byte), phi);
+    }
+    out
+}
+
 /// Instead of greedy top-1, keeps `beam_width` hypotheses, each with an
 /// accumulated log-probability score. At every step every hypothesis expands
 /// with its top-M bytes (by the softmax-normalized cosine distribution over

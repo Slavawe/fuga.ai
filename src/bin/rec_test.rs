@@ -141,5 +141,20 @@ fn main() {
     let s = String::from_utf8_lossy(&naive);
     println!("└─ naive stateless byte (control) bytes={} :: {}", naive.len(), s.chars().take(80).collect::<String>());
 
+    // === v3.2 lever: NON-ARGMAX (nucleus) state advance on the stateful W. ===
+    // Emission stays argmax; only the byte fed into advance_h is nucleus-sampled
+    // (T=1.2, top_p=0.9). Isolates "argmax e/r fill of h is the cause".
+    println!("├─ recurrent NUCLEUS-advance on stateful W (T=1.2, top_p=0.9):");
+    for &mix in &[0.0f32, 0.4, 0.6, 0.8] {
+        for &seed_rng in &[7u64, 13] {
+            let rec_out = fuga::tm_generate_recurrent_nucleus(
+                &tm_stateful, &seed, 60, ctx_window, mix, phi, 1.2, 0.9, seed_rng,
+            );
+            let s = String::from_utf8_lossy(&rec_out);
+            println!("  nucleus mix={:.1} rng={} bytes={} :: {}", mix, seed_rng, rec_out.len(),
+                s.chars().take(60).collect::<String>());
+        }
+    }
+
     println!("REAL-CODE RECURRENT: PASS");
 }
