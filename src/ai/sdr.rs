@@ -422,6 +422,72 @@ pub fn structure_sdr_from_sdrs(tokens: &[SdrVector]) -> SdrVector {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Byte-level alphabet (ByT5 / MegaByte style raw-byte models).
+//
+// Unlike the token path (`encode_text` hashes through `weaver::token_id`), the
+// byte layer works on RAW UTF-8 BYTES and owns a FIXED 256-entry alphabet — no
+// vocabulary, no HMM/subword dictionary, corpus-independent. This is the
+// dictionary-free core of the tokenless generator: it accepts any language and
+// any code, and a single-byte typo shifts only a small part of the encoding
+// (position-folded), so byte-similar strings stay cosine-similar.
+//
+// Fixed per-byte sparse SDRs. Deterministic via fnv1a(byte) so the alphabet is
+// the same on every run and does not depend on which corpus was loaded.
+// ---------------------------------------------------------------------------
+
+/// Sparse per-byte SDR for one UTF-8 byte value (0..=255).
+pub fn byte_basis(b: u8) -> SdrVector {
+    let h = crate::ai::crystal::fnv1a(&[b]);
+    sparsify(&deterministic_hv(h))
+}
+
+/// Position-sensitive byte-sequence fold: each byte's own [Self::byte_basis]
+/// is circularly shifted by [`structure_shift`] of its index, then the
+/// union is kept to a fixed density. Analog of [structure_sdr_from_sdrs] but
+/// over raw bytes — ORDER is part of the representation while shared prefixes
+/// stay similar. Works for any valid UTF-8 (multi-byte chars fold across bytes
+/// naturally) and for arbitrary non-text bytes.
+pub fn encode_bytes_sdr(bytes: &[u8]) -> SdrVector {
+    if bytes.is_empty() {
+        return SdrVector::zero();
+    }
+    let mut counts = vec![0u32; SDR_DIM];
+    for (pos, &b) in bytes.iter().enumerate() {
+        let base = byte_basis(b);
+        let shift = structure_shift(pos);
+        for (wi, &w) in base.bits.iter().enumerate() {
+            let base_bit = wi * 64;
+            let mut x = w;
+            while x != 0 {
+                let bi = x.trailing_zeros() as usize;
+                counts[(base_bit + bi + shift) % SDR_DIM] += 1;
+                x &= x - 1;
+            }
+        }
+    }
+    let target = (SDR_DIM as f64 * SDR_DENSITY).ceil() as usize;
+    let mut scored: Vec<(usize, u32, u64)> = counts
+        .iter()
+        .enumerate()
+        .filter(|&(_, &c)| c > 0)
+        .map(|(bit, &c)| {
+            let h = crate::ai::crystal::fnv1a(&(bit as u64).to_le_bytes());
+            (bit, c, h)
+        })
+        .collect();
+    if scored.len() > target {
+        scored.select_nth_unstable_by(target, |a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+        scored.truncate(target);
+    }
+    scored.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    let mut out = SdrVector::zero();
+    for &(bit, _, _) in &scored {
+        out.bits[bit / 64] |= 1u64 << (bit % 64);
+    }
+    out
+}
+
 pub struct SdrIndex {
     pub nodes: Vec<SdrVector>,
     pub texts: Vec<String>,

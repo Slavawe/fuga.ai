@@ -10,6 +10,17 @@
 
 ## Что нового в 2.1
 
+### Byte-level модель (ByT5 / MegaByte)
+Отказ от токенного словаря как зависимости. Модель принимает **сырые UTF-8 байты** напрямую (как ByT5/MegaByte), поэтому работает с любым языком и любым кодом без словарей и устойчива к опечаткам. Для VSA это дешевле, чем для Attention: у нас линейный permute+bind, а не квадратичное внимание.
+- **Алфавит** = фиксированные **256 байтовых гипервекторов** (`byte_basis`, sdr.rs) — не зависит от корпуса
+- **Позиционная свертка** `encode_bytes_sdr` — порядок в представлении, shared-префиксы похожи
+- **Байтовые переходы TM** `learn_bytes`/`predict_bytes_latent` (htm_temporal.rs) — тот же W-оператор, другой алфавит
+- **Непрерывный байт-декод** `tm_generate_latent_bytes` — предсказывает следующий байт через cosine к 256 байт-латентам, гейт = LATENT_MIN_COSINE + коридор
+- Опечаткоустойчивость: один байт смещает малую часть свертки → "hεllo" ~ "hello"
+- **Снимает** previous hardcode-баг токенного словаря (`build_token_vocab_from_files` хардкодил allowed_dirs)
+
+**Проверено на деле** (реальный Rust-корпус, сырые байты): при обучении 665K байт-шагов W-оператор **сходится** — max cosine к 256-байтному алфавиту растёт 0.34→0.54, различимых кандидатов 116→54/256, декод 1460 b/s. **Честное ограничение**: наивный вывод «один байт из 256» без глобального уровня деградирует в повторяющиеся биграммы — для осмысленного кода нужна two-speed структура как в MegaByte (глобальные патчи → байты внизу), это следующая задача.
+
 ### Непрерывная (tokenless) генерация
 Вместо argmax по словарю — **ранжирование кандидатов по cosine-близости в латентном пространстве**:
 - `tm_generate_latent()` (src/ai/tm_generate.rs) — предсказывает следующий латент через `predict_latent` (W-оператор LatentJEPA), ранжирует по `LatentVector::cosine_similarity`
@@ -40,8 +51,8 @@
 | **Hypervector** | `src/core/hypervector.rs` | 8192-бит, ~2% плотности (~164 активных), XOR bind / sum bundle / permute |
 | **Hierarchical JEPA** | `src/ai/hierarchical_jepa.rs` | L0/L1/L2 с `ls_bind` фазовым сдвигом, контексты 4/3/2, strides 1/3/5 |
 | **Temporal Memory** | `src/ai/htm_temporal.rs` | Ячейки + DendriteSegments, learn/reinforce/prune/predict_next, латентный переход W |
-| **Латентный декодер** | `src/ai/tm_generate.rs` | `tm_generate_latent`: predict_latent → cosine по vocab → gate/corridor, порог 0.05 |
-| **SDR** | `src/ai/sdr.rs` | `encode_text()` → хеш-разрежённый бинарный вектор, STRUCTURE_STRIDE=977 (coprime) |
+| **Латентный декодер** | `src/ai/tm_generate.rs` | `tm_generate_latent`: predict_latent → cosine по vocab → gate/corridor, порог 0.05; `tm_generate_latent_bytes`: byte-level декод по 256 сырым байтам без словаря |
+| **SDR** | `src/ai/sdr.rs` | `encode_text()` → хеш-разрежённый бинарный вектор, STRUCTURE_STRIDE=977 (coprime); `byte_basis`/`encode_bytes_sdr` — фиксированный 256-байтовый алфавит (ByT5/MegaByte) |
 | **PhaseCrystal** | `src/ai/crystal.rs` | VSA-память L0/L1/L2, `learn()`/`query()`, FNV-1a индекс, резонанс-порог |
 | **Tokenizer Bridge** | `src/core/tokenizer_bridge.rs` | N-граммный permute-bind, позиционно-инвариантный, dedup грамм |
 | **Circuit Breaker** | `src/safety/circuit_breaker.rs` | Детекция анти-обучения: loss > 1.15 → reset, ≤ 0.86 → Warning (lr×0.5) |
@@ -285,7 +296,7 @@ cargo test --test moe_routing_test
 ## Следующие шаги
 
 1. **Калибровка непрерывного декодера**: поднять порог LATENT_MIN_COSINE (0.05 → 0.15?), добавить OWM-защиту W-оператора от забывания на большом корпусе
-2. **A/B старого vs нового пути**: сравнить `tm_generate` (весовой) vs `tm_generate_latent` (латентный) на одном корпусе
+2. **A/B старого vs нового пути**: сравнить `tm_generate` (весовой) vs `tm_generate_latent` (латентный) vs `tm_generate_latent_bytes` (byte-level) на одном корпусе
 3. **Corridor-мост аудит**: замерить реальный размер промпта в necli, проверить «~9K симв./690 токенов мусора»
 
 ---

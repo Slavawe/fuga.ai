@@ -605,6 +605,41 @@ impl TemporalMemory {
         self.predictor.learn_transition_with_p(&window_sdrs, &next, lr, proj);
     }
 
+    // ---------------------------------------------------------------------
+    // Byte-level (ByT5 / MegaByte style) transitions.
+    //
+    // Same TM machinery, but the alphabet is the FIXED 256 raw UTF-8 bytes
+    // instead of a corpus-derived token vocabulary. `learn_bytes` trains both
+    // the structural segment (context → next byte) and the latent transition
+    // operator W on byte SDRs; `predict_bytes_latent` returns the predicted
+    // next-byte latent for cosine decode against the 256-byte alphabet.
+    // ---------------------------------------------------------------------
+
+    /// Learn a raw-byte transition: `window_bytes` (recent UTF-8 bytes,
+    /// oldest first) → `next_byte`. Context is folded position-sensitively
+    /// via [`crate::ai::sdr::encode_bytes_sdr`], so multi-byte UTF-8 chars
+    /// and arbitrary binary are first-class citizens — no dictionary.
+    pub fn learn_bytes(&mut self, window_bytes: &[u8], next_byte: u8, lr: f32) {
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let key = crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs);
+        let next = crate::ai::sdr::byte_basis(next_byte);
+        self.learn_context_threshold(std::slice::from_ref(&key), &next, STRUCTURE_MATCH_OVERLAP);
+        self.predictor.learn_transition(&window_sdrs, &next, lr);
+    }
+
+    /// Predicted NEXT-BYTE latent for a raw-byte context. Same W operator as
+    /// the token path — only the input alphabet differs.
+    pub fn predict_bytes_latent(&self, window_bytes: &[u8]) -> crate::ai::latent_jepa::LatentVector {
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        self.predictor.predict_next(&window_sdrs)
+    }
+
     /// Negative learning for the compiler-grounded loop: reduce the association
     /// between a window and a *wrong* token (the one the decoder emitted where
     /// rustc rejected it), without promoting any alternative. Latent-side only

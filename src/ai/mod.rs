@@ -46,8 +46,8 @@ pub use prompts::PromptVectors;
 pub use resonance_attention::{AttentionCell, ResonanceAttention};
 pub use router::{DynamicRouter, ExpertConfig, TargetExpert};
 pub use sdr::{
-    SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrIndex, SdrVector, domain_sdr, encode_text, sparsify,
-    structure_sdr,
+    SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrIndex, SdrVector, byte_basis, domain_sdr,
+    encode_bytes_sdr, encode_text, sparsify, structure_sdr,
 };
 pub use sdr_store::SdrStore;
 pub mod crystal;

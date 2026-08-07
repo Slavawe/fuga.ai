@@ -92,12 +92,13 @@ pub use ai::{
         dim_for_kind, fnv1a, permute_phase, project_phase,
     },
     domain_sdr, encode_text, generate_code, generate_safe, inject_noise_sdr, observe,
+    byte_basis, encode_bytes_sdr,
     self_mirror::{
         AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, PhaseNode, RawChunk, SelfMirror,
     },
     sparsify,
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
-    tm_generate::{tm_generate, tm_generate_latent},
+    tm_generate::{tm_generate, tm_generate_latent, tm_generate_latent_bytes},
     transpile::{
         Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,
         WeightSketch, binarize_tensor, hf_resolve_url, is_repo_id, kind_for_name, list_hf_shards,

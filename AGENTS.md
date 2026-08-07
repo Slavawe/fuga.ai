@@ -4,6 +4,11 @@
 Собственный «агентский стек» без внешних LLM: `necli/` (локальный каталог/CLI) → OpenAI-совместимый маск `fuga-web` → генерация кода → гейты (compile + relevance) → рекурсивное дообучение на уроках, прошедших гейты.
 Двухскоростная генерация: **H-JEPA task-коридор (`eligible`) держит содержание, TM-авторегрессор держит порядок**. Мост в CLI (`tm-gen`) и в маск (`handle_code_generate`).
 **Непрерывный (tokenless) декод**: `tm_generate_latent` (tm_generate.rs) — ранжирует кандидатов по cosine в латентном пространстве (predict_latent → LatentVector), словарь остаётся только gate/коридор. Подключён в `omni-web.rs:486` (`handle_code_generate`). Старый `tm_generate`/`decode_weighted` (веса по битам) остаётся для CLI `tm-gen`.
+**Byte-level (ByT5/MegaByte) путь (07.08)**: отказ от токенного словаря как зависимости. Фиксированный алфавит **256 сырых UTF-8 байтов** (`byte_basis`, sdr.rs), позиционная свертка `encode_bytes_sdr`, байтовые переходы TM (`learn_bytes`/`predict_bytes_latent`, htm_temporal.rs) и непрерывный байт-декод `tm_generate_latent_bytes` (tm_generate.rs) — ранжирует 256 байт-кандидатов по cosine в латентном, гейт = LATENT_MIN_COSINE + коридор байт. Никакого словаря — любой язык и код, опечаткоустойчивость (один байт смещает малую часть свертки). Тесты: `byte_basis_is_fixed_and_position_sensitive`, `tm_generate_latent_bytes_reproduces_text_without_dictionary`. lib-набор теперь **123/123**.
+   **Проверено на деле (стенд `src/bin/byte_gen_test.rs`)** — реальный Rust-корпус corpus_doc_code_pairs.jsonl, сырые UTF-8 байты:
+   - 600 сниппетов: 108K байт-шагов, max byte-cosine 0.337 (116/256 за порогом), выход 3 байта.
+   - 3000 сниппетов: 665K байт-шагов (969 b/s), **max byte-cosine 0.543**, 54/256 различимых, декод 1460 b/s, выход 200 байт.
+   - **ЧЕСТНОЕ ОГРАНИЧЕНИЕ**: инфраструктура работает и W сходится (cosine растёт острее), но выдача — повторяющийся локальный мусор (`ele ocrane)e}e...`): наивный вывод по одному байту из 256 без ГЛОБАЛЬНОГО уровня деградирует в местные биграммы. Для осмысленного кода нужна two-speed как в MegaByte (глобальные патчи → байты внизу) — это задача `A` (следующая итерация). Итерация `B` (данная): инфраструктура подтверждена, ограничение задокументировано.
 
 ## Команды
 - Сборка: `cargo build --release --bin fuga-web` (или `--bin fuga`)
@@ -49,8 +54,8 @@
 - `src/vsa/topology.rs`: `ls_bind` (3), `phase_smooth` (87).
 - `src/bin/audit_l2.rs` (не закоммичен, временный): EMA+гистограмма+счётчик resets.
 - `src/bin/omni-web.rs`: `find_lesson` (324), мост C2 (`handle_code_generate` 386), `meaningful_tokens` (306).
-- `src/ai/sdr.rs`: `STRUCTURE_STRIDE=977` (17), `structure_shift` + `euclid_gcd` (20-42), `encode_text` (253), тест `structure_stride_is_coprime_and_mixes`.
-- `src/ai/tm_generate.rs`: `tm_generate` (весовой, CLI), `tm_generate_latent` (непрерывный через латент, прод-мост), `decode_weighted` hard gate, `MIN_AVG_WEIGHT=6`, `LATENT_MIN_COSINE=0.05`; тест `tm_generate_latent_uses_continuous_decode_and_respects_gate`.
+- `src/ai/sdr.rs`: `STRUCTURE_STRIDE=977` (17), `structure_shift` + `euclid_gcd` (20-42), `encode_text` (253), `byte_basis`/`encode_bytes_sdr` (байтовый алфавит, ~426+), тест `structure_stride_is_coprime_and_mixes`, `byte_basis_is_fixed_and_position_sensitive`.
+- `src/ai/tm_generate.rs`: `tm_generate` (весовой, CLI), `tm_generate_latent` (непрерывный через латент, прод-мост), `tm_generate_latent_bytes` (byte-level декол по 256 байтам, без словаря), `decode_weighted` hard gate, `MIN_AVG_WEIGHT=6`, `LATENT_MIN_COSINE=0.05`; тесты `tm_generate_latent_uses_continuous_decode_and_respects_gate`, `tm_generate_latent_bytes_reproduces_text_without_dictionary`, `byte_basis_is_fixed_and_position_sensitive`.
 - `necli/src/system_prompt.py` (270).
 - Данные: `fuga_stack_tm.bin` (394MB), `fuga_hjepa.bin`, `agent_lessons.jsonl` (1 урок factorial), `corpus*.jsonl`, `/tmp/cs.jsonl`.
 
