@@ -2,6 +2,7 @@ pub mod agent;
 pub mod anomaly;
 pub mod answer_engine;
 pub mod autonomous_mind;
+pub mod byte_lstm;
 pub mod codegen;
 pub mod core;
 pub mod decoder;
