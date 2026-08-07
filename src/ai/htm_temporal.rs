@@ -636,6 +636,29 @@ impl TemporalMemory {
             self.predictor.learn_transition(&window_sdrs, &next, lr);
         }
 
+        /// Recurrent byte transition learn (SSM-lite): feeds the hidden state `h`
+        /// into the W input alongside the local window, so W learns how to use the
+        /// running memory — NOT just the fixed byte window. This is the training
+        /// counterpart of [`LatentPredictor::predict_next_rnn`]; using it (rather
+        /// than the stateless `learn_bytes`) during training is what lets the
+        /// recurrent decoder break the local-attractor ceiling. Requires the caller
+        /// to advance `h` between steps via `LatentPredictor::advance_h`.
+        pub fn learn_bytes_rnn(
+            &mut self,
+            window_bytes: &[u8],
+            h: &LatentVector,
+            next_byte: u8,
+            lr: f32,
+            mix: f32,
+        ) -> f32 {
+            let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_bytes
+                .iter()
+                .map(|&b| crate::ai::sdr::byte_basis(b))
+                .collect();
+            let next = crate::ai::sdr::byte_basis(next_byte);
+            self.predictor.learn_transition_rnn(&window_sdrs, h, &next, lr, mix)
+        }
+
         /// Predicted NEXT-BYTE latent for a raw-byte context. Same W operator as
         /// the token path — only the input alphabet differs.
         pub fn predict_bytes_latent(
@@ -988,6 +1011,12 @@ impl TemporalMemory {
     }
 
     pub fn predictor_w(&self) -> &[f32] { &self.predictor.w }
+
+    /// Borrow the latent predictor directly (encoder, W) — used by the
+    /// recurrent / SSM-lite decoders that mix a hidden state into the W input.
+    pub fn predictor(&self) -> &LatentPredictor {
+        &self.predictor
+    }
 
     pub fn predictor_p(&self) -> &[f32] { &self.predictor.p }
 

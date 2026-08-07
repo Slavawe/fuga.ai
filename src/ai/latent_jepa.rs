@@ -377,6 +377,124 @@ impl LatentPredictor {
         self.apply_w(&self.encoder.encode(&structure_sdr_from_sdrs(context)))
     }
 
+    /// Recurrent (SSM-lite) next-latent: mixes the local window context with
+    /// a global hidden state `h` before applying `W`. The state (accumulated
+    /// leaky summary of the distant past) is added into the W input, so W
+    /// can condition its direction on BOTH the fixed byte window AND the
+    /// running memory — this is what breaks the "no state => falls into the
+    /// most frequent local attractor (e->r)" failure the stateless byte W
+    /// exhibits. `mix` weights the state vs the local context (0 = stateless).
+    pub fn predict_next_rnn(
+        &self,
+        context: &[SdrVector],
+        h: &LatentVector,
+        mix: f32,
+    ) -> LatentVector {
+        if context.is_empty() {
+            return h.clone();
+        }
+        let local = self.encoder.encode(&structure_sdr_from_sdrs(context));
+        // input = local + mix·h, renormalized so W sees a unit vector.
+        let mut input = local.clone();
+        for i in 0..LATENT_DIM {
+            input.values[i] += mix * h.values[i];
+        }
+        let n = input.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut input.values {
+            *v /= n;
+        }
+        self.apply_w(&input)
+    }
+
+    /// SSM-lite byte-transition learn: Widrow-Hoff delta on the MIXED input
+    /// (local context + state), so W learns how to use the running memory.
+    /// Mirrors [`Self::learn_transition_with_p`] but the input direction is
+    /// the state-augmented latent instead of the bare window projection.
+    pub fn learn_transition_rnn(
+        &mut self,
+        context: &[SdrVector],
+        h: &LatentVector,
+        actual: &SdrVector,
+        lr: f32,
+        mix: f32,
+    ) -> f32 {
+        if context.is_empty() {
+            return 0.0;
+        }
+        const UPDATE_STRIDE: u64 = 4;
+        self.updates += 1;
+        let apply_delta = self.updates % UPDATE_STRIDE == 0;
+
+        let mut input = self.encoder.encode(&structure_sdr_from_sdrs(context));
+        for i in 0..LATENT_DIM {
+            input.values[i] += mix * h.values[i];
+        }
+        let n = input.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut input.values {
+            *v /= n;
+        }
+
+        let target = self.encoder.encode(actual);
+        let pred = if apply_delta {
+            self.apply_w(&input)
+        } else {
+            input.clone()
+        };
+        let px = if apply_delta {
+            self.apply_p_with(&input, &self.p)
+        } else {
+            input.clone()
+        };
+        let mut err_norm = 0.0f32;
+        for o in 0..LATENT_DIM {
+            let error = target.values[o] - pred.values[o];
+            err_norm += error * error;
+            if apply_delta {
+                let row = o * LATENT_DIM;
+                for i in 0..LATENT_DIM {
+                    self.w[row + i] += lr * error * px.values[i];
+                }
+            }
+        }
+        const CAP_EVERY: u64 = 50;
+        const ROW_NORM_CAP: f32 = 2.0;
+        if apply_delta && self.updates % CAP_EVERY == 0 {
+            for o in 0..LATENT_DIM {
+                let row = o * LATENT_DIM;
+                let mut sq = 0.0f32;
+                for i in 0..LATENT_DIM {
+                    sq += self.w[row + i] * self.w[row + i];
+                }
+                if sq > ROW_NORM_CAP {
+                    let scale = (ROW_NORM_CAP / sq.max(1e-8)).sqrt();
+                    for i in 0..LATENT_DIM {
+                        self.w[row + i] *= scale;
+                    }
+                }
+            }
+        }
+        err_norm
+    }
+
+    /// Leaky hidden-state (SSM) update: `h' = φ·h + (1-φ)·enc(next)` with a
+    /// soft renormalization so the accumulated memory stays a unit latent.
+    pub fn advance_h(
+        &self,
+        mut h: LatentVector,
+        next: &SdrVector,
+        phi: f32,
+    ) -> LatentVector {
+        let enc = self.encoder.encode(next);
+        for i in 0..LATENT_DIM {
+            h.values[i] = phi * h.values[i] + (1.0 - phi) * enc.values[i];
+        }
+        let n = h.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut h.values {
+            *v /= n;
+        }
+        h
+    }
+
     pub fn cosine_loss(&self, context: &[SdrVector], actual: &SdrVector) -> f32 {
         self.predict_next(context).cosine_loss(&self.encoder.encode(actual))
     }

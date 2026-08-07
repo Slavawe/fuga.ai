@@ -991,6 +991,71 @@ pub fn tm_generate_speculative_stats(
     (out, rate)
 }
 
+/// Recurrent (SSM-lite) byte decoder.
+///
+/// Breaks the stateless `W` attractor failure (e→r garbage): instead of
+/// predicting each byte from ONLY the fixed local window, it maintains a
+/// leaky hidden state `h` (a unit latent) that accumulates the whole distant
+/// past. Each step starts from context = seed + emitted bytes, encodes the
+/// local window, and runs `predict.next_rnn(window_sdrs, &h, mix)` — the same
+/// W-as-matrix, but fed `local ⊕ mix·h` so it can condition on BOTH the
+/// window AND the running memory. After emitting a byte, `h` is advanced as
+/// `h' = φ·h + (1-φ)·enc(byte)` (Mamba-style state). Returns the emitted bytes.
+///
+/// Being the first tokenless-attention (recurrent state) decoder, this is the
+/// natural next architectural step after the stateless Beam/BLT/speculative
+/// family that all hit the same local-W ceiling.
+pub fn tm_generate_recurrent(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    mix: f32,
+    phi: f32,
+) -> Vec<u8> {
+    let predictor = tm.predictor();
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            predictor.encoder.encode(&sdr)
+        })
+        .collect();
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut h = crate::ai::latent_jepa::LatentVector::zero();
+    let mut guard: usize = 0;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        let win_lo = state.len().saturating_sub(window_bytes.max(1));
+        let window_byte = &state[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window_byte
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let pred = predictor.predict_next_rnn(&window_sdrs, &h, mix);
+        // Rank all 256 bytes by cosine to the recurrent latent prediction.
+        let mut best = (0usize, f32::NEG_INFINITY);
+        for (i, lat) in byte_lats.iter().enumerate() {
+            let c = pred.cosine_similarity(lat);
+            if c > best.1 {
+                best = (i, c);
+            }
+        }
+        let byte = best.0 as u8;
+        // Stop on a repeated identical byte (avoid single-byte stall).
+        if !out.is_empty() && out.last() == Some(&byte) && out.len() > 2 {
+            break;
+        }
+        out.push(byte);
+        state.push(byte);
+        // Advance the hidden state with the emitted byte (leaky integration).
+        h = predictor.advance_h(h, &crate::ai::sdr::byte_basis(byte), phi);
+    }
+    out
+}
+
 /// Beam-search byte decoder (beam-N over the local byte W operator).
 ///
 /// Instead of greedy top-1, keeps `beam_width` hypotheses, each with an
@@ -1284,4 +1349,23 @@ mod tests {
                     let out2 = tm_generate_beam(&tm, b"a", 0, 4, 4, 3);
                     assert_eq!(out2, b"a");
                 }
+
+            #[test]
+            fn recurrent_decoder_continues_predictable_run() {
+                let mut tm = TemporalMemory::new(64, 4);
+                // Learn a hard 2-byte alternation 'ab' so the a->b transition is
+                // unambiguous under a 1-byte window; the recurrent hidden state
+                // must NOT break (or stall) the decoder on this regular pattern.
+                let seq = b"abababababababababab";
+                for w in 0..seq.len().saturating_sub(1) {
+                    tm.learn_bytes(&seq[w..w + 1], seq[w + 1], 0.4);
+                }
+                // mix=0 ≈ stateless byte argmax; mix>0 activates the h(t) memory.
+                let out_stateless = tm_generate_recurrent(&tm, b"a", 60, 2, 0.0, 0.9);
+                assert!(out_stateless.len() > 1, "stateless recurrent must continue, got {:?}", String::from_utf8_lossy(&out_stateless));
+                let out_stateful = tm_generate_recurrent(&tm, b"a", 60, 2, 0.6, 0.9);
+                assert!(out_stateful.len() > 1, "stateful recurrent must continue, got {:?}", String::from_utf8_lossy(&out_stateful));
+                // Any output must be valid UTF-8 (dictionary-free byte path).
+                let _ = String::from_utf8(out_stateful.clone()).unwrap();
             }
+        }

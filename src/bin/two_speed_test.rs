@@ -187,7 +187,23 @@ fn main() {
                     println!("├─ beam-3 decoded ({} bytes):", beam_out.len());
                     println!("└─ {}", beam_str.chars().take(120).collect::<String>());
                     println!("BENCH beam_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", beam_out.len(), beam_pct,
-                        beam_secs, beam_out.len() as f64 / beam_secs.max(1e-4));
+                            beam_secs, beam_out.len() as f64 / beam_secs.max(1e-4));
+                        // Recurrent (SSM-lite) decoder: hidden state h(t) mixed into the W input.
+                        for &mix in &[0.0f32, 0.4, 0.8] {
+                            let d0r = Instant::now();
+                            let rec_out = fuga::tm_generate_recurrent(&tm, &seed, 200, 4, mix, 0.9);
+                            let rec_secs = d0r.elapsed().as_secs_f64();
+                            let rec_str = String::from_utf8_lossy(&rec_out).to_string();
+                            let rec_printable: f64 = rec_out
+                                .iter()
+                                .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                                .count() as f64;
+                            let rec_pct = if rec_out.is_empty() { 0.0 } else { 100.0 * rec_printable / rec_out.len() as f64 };
+                            println!("├─ recurrent(SSM mix={:.1}) decoded ({} bytes):", mix, rec_out.len());
+                            println!("└─ {}", rec_str.chars().take(120).collect::<String>());
+                            println!("BENCH recurrent_mix={:.1} bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", mix, rec_out.len(), rec_pct,
+                                rec_secs, rec_out.len() as f64 / rec_secs.max(1e-4));
+                        }
     // Keep the default-path decode for the canonical PASS line (same as prod).
     let d0default = Instant::now();
     let bytes_out = fuga::tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
