@@ -866,6 +866,131 @@ pub fn tm_generate_speculative(
     out
 }
 
+/// Speculative decoder + acceptance-rate telemetry.
+///
+/// Returns `(bytes, acceptance_rate)`. `acceptance_rate` = fraction of
+/// draft-proposed bytes that the local verifier accepted WITHOUT overriding
+/// (i.e. the draft byte was already the local W's top choice, or the local
+/// W was not confident enough to disagree). It quantifies how cheap the
+/// draft step is: a high acceptance means the patch drafter predicted well,
+/// so verify rarely needs to second-guess it. Useful to find the minimum
+/// draft accuracy that makes speculative decoding profitable.
+pub fn tm_generate_speculative_stats(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    verify_gap: f32,
+    patch_vocab: &[Vec<u8>],
+) -> (Vec<u8>, f32) {
+    let byte_lats: Vec<crate::ai::latent_jepa::LatentVector> = (0u16..256)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            tm.latent_of_sdr(&sdr)
+        })
+        .collect();
+    let patch_lats: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    let psize = patch_vocab
+        .iter()
+        .map(|p| p.len())
+        .min()
+        .unwrap_or(2)
+        .max(1);
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+    let mut accepted = 0usize;
+    let mut checked = 0usize;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+        let patches: Vec<Vec<u8>> = state
+            .chunks(psize)
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_vec())
+            .collect();
+        let window: Vec<&[u8]> = patches
+            .iter()
+            .rev()
+            .take(4)
+            .rev()
+            .map(|p| p.as_slice())
+            .collect();
+        let draft = tm.predict_patch_latent(&window);
+        let mut best_patch: Option<Vec<u8>> = None;
+        for (patch, lat) in patch_lats.iter() {
+            let s = draft.cosine_similarity(lat);
+            if s >= LATENT_MIN_COSINE && best_patch.is_none() {
+                best_patch = Some(patch.clone());
+            }
+        }
+        let proposed: Vec<u8> = best_patch.unwrap_or_else(|| {
+            let pred = tm.predict_bytes_latent(&state[state.len().saturating_sub(window_bytes.max(1))..]);
+            let mut top = (0usize, f32::MIN);
+            for (i, lat) in byte_lats.iter().enumerate() {
+                let c = pred.cosine_similarity(lat);
+                if c > top.1 {
+                    top = (i, c);
+                }
+            }
+            vec![top.0 as u8]
+        });
+
+        for &b in proposed.iter() {
+            let tail = &state[state.len().saturating_sub(window_bytes.max(1))..];
+            let pred = tm.predict_bytes_latent(tail);
+            let mut top1 = (0usize, f32::MIN);
+            let mut top2 = (0usize, f32::MIN);
+            for (i, lat) in byte_lats.iter().enumerate() {
+                let c = pred.cosine_similarity(lat);
+                if c > top1.1 {
+                    top2 = top1;
+                    top1 = (i, c);
+                } else if c > top2.1 {
+                    top2 = (i, c);
+                }
+            }
+            let gap = top1.1 - top2.1;
+            // Acceptance: verifier leaves the draft byte alone when either it
+            // is not confident (gap < threshold) OR the draft already WAS its
+            // top choice (top1.0 == b). Only a confident disagreement overrides.
+            let accepted_here =
+                gap < verify_gap || top1.0 as u8 == b || out.is_empty();
+            checked += 1;
+            if accepted_here {
+                accepted += 1;
+            }
+            let byte = if accepted_here {
+                b
+            } else {
+                top1.0 as u8
+            };
+            if !out.is_empty() && out.last() == Some(&byte) && out.len() > 2 {
+                continue;
+            }
+            out.push(byte);
+            state.push(byte);
+            if out.len() >= max_bytes {
+                break;
+            }
+        }
+    }
+    let rate = if checked == 0 {
+        0.0
+    } else {
+        accepted as f32 / checked as f32
+    };
+    (out, rate)
+}
+
 /// Beam-search byte decoder (beam-N over the local byte W operator).
 ///
 /// Instead of greedy top-1, keeps `beam_width` hypotheses, each with an

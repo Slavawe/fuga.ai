@@ -30,6 +30,14 @@ fn main() {
         .nth(4)
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4000);
+    let ctx_window = std::env::args()
+        .nth(5)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4); // context depth for W training (bytes & patches)
+    let gap_thresh = std::env::args()
+        .nth(6)
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.60); // BLT entropy-gap threshold sweep point
     let content = std::fs::read_to_string(&corpus_path).expect("corpus");
 
     let mut tm = TemporalMemory::new(30_000, 4);
@@ -56,9 +64,9 @@ fn main() {
         if b.len() < 4 {
             continue;
         }
-        // LOCAL byte rate: sliding 4-byte window -> next byte.
+        // LOCAL byte rate: sliding ctx_window-byte window -> next byte.
         for w in 0..b.len().saturating_sub(1) {
-            let win_lo = w.saturating_sub(4);
+            let win_lo = w.saturating_sub(ctx_window);
             tm.learn_bytes(&b[win_lo..w + 1], b[w + 1], 0.15);
             bytes_seen += 1;
         }
@@ -69,7 +77,7 @@ fn main() {
             .map(|c| c.to_vec())
             .collect();
         for w in 0..patches.len().saturating_sub(1) {
-            let win_lo = w.saturating_sub(4);
+            let win_lo = w.saturating_sub(ctx_window);
             tm.learn_patch(&patches[win_lo..w + 1].iter().map(|v| v.as_slice()).collect::<Vec<_>>(), &patches[w + 1], 0.15);
             patches_seen += 1;
         }
@@ -83,8 +91,8 @@ fn main() {
         }
     }
     let train_secs = t0.elapsed().as_secs_f64();
-    eprintln!("  Trained {} Rust docs, {} byte-steps, {} patch-steps in {:.1}s ({:.0} patch-steps/s)",
-        trained, bytes_seen, patches_seen, train_secs, patches_seen as f64 / train_secs.max(1.0));
+    eprintln!("  Trained {} Rust docs (ctx_window={}), {} byte-steps, {} patch-steps in {:.1}s ({:.0} patch-steps/s)",
+        trained, ctx_window, bytes_seen, patches_seen, train_secs, patches_seen as f64 / train_secs.max(1.0));
 
     if trained == 0 {
         eprintln!("  FAIL: no training data");
@@ -132,19 +140,23 @@ fn main() {
                     s.chars().take(90).collect::<String>());
             }
             // Entropy-gap (BLT) decoder: dynamic patch boundaries by predictability.
-            let d0e = Instant::now();
-            let entropy_out = fuga::tm_generate_two_speed_entropy(&tm, &seed, 200, 4, 0.60, &patch_vocab);
-            let entropy_secs = d0e.elapsed().as_secs_f64();
-            let entropy_str = String::from_utf8_lossy(&entropy_out).to_string();
-            let entropy_printable: f64 = entropy_out
-                .iter()
-                .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                .count() as f64;
-            let entropy_pct = if entropy_out.is_empty() { 0.0 } else { 100.0 * entropy_printable / entropy_out.len() as f64 };
-            println!("├─ entropy(BLT gap=0.60) decoded ({} bytes):", entropy_out.len());
-            println!("└─ {}", entropy_str.chars().take(120).collect::<String>());
-            println!("BENCH entropy_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", entropy_out.len(), entropy_pct,
-                    entropy_secs, entropy_out.len() as f64 / entropy_secs.max(1e-4));
+                // Sweep the gap threshold on the SAME trained TM (decode is cheap;
+                // training dominates). Measures the B/s vs. connectivity inflection.
+                for &gap in &[0.30f32, 0.45, 0.60, 0.75] {
+                    let d0e = Instant::now();
+                    let entropy_out = fuga::tm_generate_two_speed_entropy(&tm, &seed, 200, ctx_window, gap, &patch_vocab);
+                    let entropy_secs = d0e.elapsed().as_secs_f64();
+                    let entropy_str = String::from_utf8_lossy(&entropy_out).to_string();
+                    let entropy_printable: f64 = entropy_out
+                        .iter()
+                        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                        .count() as f64;
+                    let entropy_pct = if entropy_out.is_empty() { 0.0 } else { 100.0 * entropy_printable / entropy_out.len() as f64 };
+                    println!("├─ entropy(BLT gap={:.2}) decoded ({} bytes):", gap, entropy_out.len());
+                    println!("└─ {}", entropy_str.chars().take(120).collect::<String>());
+                    println!("BENCH entropy_gap={:.2} bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", gap, entropy_out.len(), entropy_pct,
+                        entropy_secs, entropy_out.len() as f64 / entropy_secs.max(1e-4));
+                }
                 // Speculative (draft→verify): global W drafts patches, local W verifies bytes.
                 let d0s = Instant::now();
                 let spec_out = fuga::tm_generate_speculative(&tm, &seed, 200, 4, 0.60, &patch_vocab);
@@ -159,6 +171,9 @@ fn main() {
                 println!("└─ {}", spec_str.chars().take(120).collect::<String>());
                 println!("BENCH speculative_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", spec_out.len(), spec_pct,
                         spec_secs, spec_out.len() as f64 / spec_secs.max(1e-4));
+                    // Speculative acceptance rate: fraction of draft bytes the verifier accepted.
+                    let (spec_stat_out, spec_accept) = fuga::tm_generate_speculative_stats(&tm, &seed, 200, 4, 0.60, &patch_vocab);
+                    println!("ACCEPTANCE speculative draft-acceptance={:.3} (bytes={})", spec_accept, spec_stat_out.len());
                     // Beam search: K hypotheses with accumulated log-score vs greedy top-1.
                     let d0b = Instant::now();
                     let beam_out = fuga::tm_generate_beam(&tm, &seed, 200, 4, 3, 5);
