@@ -158,7 +158,21 @@ fn main() {
                 println!("├─ speculative(draft→verify) decoded ({} bytes):", spec_out.len());
                 println!("└─ {}", spec_str.chars().take(120).collect::<String>());
                 println!("BENCH speculative_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", spec_out.len(), spec_pct,
-                    spec_secs, spec_out.len() as f64 / spec_secs.max(1e-4));
+                        spec_secs, spec_out.len() as f64 / spec_secs.max(1e-4));
+                    // Beam search: K hypotheses with accumulated log-score vs greedy top-1.
+                    let d0b = Instant::now();
+                    let beam_out = fuga::tm_generate_beam(&tm, &seed, 200, 4, 3, 5);
+                    let beam_secs = d0b.elapsed().as_secs_f64();
+                    let beam_str = String::from_utf8_lossy(&beam_out).to_string();
+                    let beam_printable: f64 = beam_out
+                        .iter()
+                        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+                        .count() as f64;
+                    let beam_pct = if beam_out.is_empty() { 0.0 } else { 100.0 * beam_printable / beam_out.len() as f64 };
+                    println!("├─ beam-3 decoded ({} bytes):", beam_out.len());
+                    println!("└─ {}", beam_str.chars().take(120).collect::<String>());
+                    println!("BENCH beam_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", beam_out.len(), beam_pct,
+                        beam_secs, beam_out.len() as f64 / beam_secs.max(1e-4));
     // Keep the default-path decode for the canonical PASS line (same as prod).
     let d0default = Instant::now();
     let bytes_out = fuga::tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
