@@ -26,6 +26,10 @@ fn main() {
         .nth(3)
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4);
+    let vocab_cap = std::env::args()
+        .nth(4)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(4000);
     let content = std::fs::read_to_string(&corpus_path).expect("corpus");
 
     let mut tm = TemporalMemory::new(30_000, 4);
@@ -90,7 +94,7 @@ fn main() {
     // Global patch vocabulary: the distinct byte-patches observed, capped.
     let mut vocab: Vec<(Vec<u8>, usize)> = patch_freq.into_iter().collect();
     vocab.sort_by(|a, b| b.1.cmp(&a.1));
-    vocab.truncate(4000);
+    vocab.truncate(vocab_cap);
     let patch_vocab: Vec<Vec<u8>> = vocab.into_iter().map(|(p, _)| p).collect();
     eprintln!("  patch_vocab: {} distinct byte-patches (size {})", patch_vocab.len(), patch_size);
 
@@ -113,13 +117,32 @@ fn main() {
     }).count();
     eprintln!("  DIAGNOSE patch_vocab max-cosine {:.4}, patches over 0.05: {}", maxcos, over);
 
-    // Two-speed decode.
+    // Two-speed decode at a sweep of cosine thresholds (honest calibration).
     let n_patch_steps = 50_usize;
-    let d0 = Instant::now();
-    let bytes_out = tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
-    let ts_secs = d0.elapsed().as_secs_f64();
+    let thresholds = [0.05f32, 0.10, 0.15, 0.20, 0.25];
+    println!("├─ two-speed threshold sweep (patch_vocab={}):", patch_vocab.len());
+    let mut best_str: String = String::new();
+    let mut best_len = 0usize;
+    for &mc in &thresholds {
+        let d0 = Instant::now();
+        let out = fuga::tm_generate_two_speed_calib(&tm, &seed, n_patch_steps, 4, &patch_vocab, None, mc);
+        let secs = d0.elapsed().as_secs_f64();
+        let s = String::from_utf8_lossy(&out).to_string();
+        let printable: f64 = out.iter().filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace()).count() as f64;
+        let pct = if out.is_empty() { 0.0 } else { 100.0 * printable / out.len() as f64 };
+        println!("  thresh={:.2} bytes={} ({:.1}%) {:.1}s :: {}", mc, out.len(), pct, secs,
+            s.chars().take(90).collect::<String>());
+        if out.len() > best_len {
+            best_len = out.len();
+            best_str = s;
+        }
+    }
+    // Keep the default-path decode for the canonical PASS line (same as prod).
+    let d0default = Instant::now();
+    let bytes_out = fuga::tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
+    let ts_secs = d0default.elapsed().as_secs_f64();
     let ts_str = String::from_utf8_lossy(&bytes_out).to_string();
-    println!("├─ two_speed decoded ({} bytes):", bytes_out.len());
+    println!("├─ two_speed (default 0.05) decoded ({} bytes):", bytes_out.len());
     println!("└─ {}", ts_str.chars().take(200).collect::<String>());
 
     // Baseline: naive byte-by-byte decoder on the SAME tm.

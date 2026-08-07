@@ -332,6 +332,7 @@ pub fn tm_generate_two_speed(
     patch_vocab: &[Vec<u8>],
     eligible: Option<&HashSet<u8>>,
 ) -> Vec<u8> {
+    let min_cosine = LATENT_MIN_COSINE;
     fn patches_from(state: &[u8], size: usize) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         for chunk in state.chunks(size) {
@@ -342,7 +343,12 @@ pub fn tm_generate_two_speed(
         out
     }
     let psize = if patch_vocab.iter().map(|p| p.len()).max().unwrap_or(1) > 0 {
-        patch_vocab.iter().map(|p| p.len()).min().unwrap_or(4).max(1)
+        patch_vocab
+            .iter()
+            .map(|p| p.len())
+            .min()
+            .unwrap_or(4)
+            .max(1)
     } else {
         4
     };
@@ -360,6 +366,8 @@ pub fn tm_generate_two_speed(
     let mut state: Vec<u8> = seed_bytes.to_vec();
     let mut out: Vec<u8> = Vec::new();
     let mut guard: usize = 0;
+    let mut last_patch: Vec<u8> = Vec::new();
+    let mut repeat_run: usize = 0;
 
     while out.len() < steps_patches * psize && guard < steps_patches * 2 {
         guard += 1;
@@ -386,7 +394,7 @@ pub fn tm_generate_two_speed(
                 }
             }
             let score = pred.cosine_similarity(lat);
-            if score < LATENT_MIN_COSINE {
+            if score < min_cosine {
                 continue;
             }
             if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
@@ -397,9 +405,171 @@ pub fn tm_generate_two_speed(
             Some(b) => b,
             None => break,
         };
-        if score < LATENT_MIN_COSINE {
+        if score < min_cosine {
             break;
         }
+        // Anti-repeat: a well-formed decoder must not loop. Detect BOTH a
+        // repeat of one identical patch AND any short period-2..4 cycle in
+        // the recent patch tail, and stop when a cycle has already produced
+        // enough repetitions (no perpetual 'er er er' / 2-token loops).
+        if !last_patch.is_empty() {
+            if patch == last_patch {
+                repeat_run += 1;
+                if repeat_run >= 4 {
+                    break;
+                }
+            } else {
+                repeat_run = 0;
+            }
+        } else {
+            repeat_run = 0;
+        }
+        // Detect a recently-repeating window: if the next patch plus the last
+        // three already appear as a repeated unit earlier in the tail, stop.
+        if out.len() >= psize * 8 {
+            let mut tail: Vec<Vec<u8>> = Vec::new();
+            {
+                let p = patches_from(&state, psize);
+                for unit in p.iter().rev().take(6) {
+                    tail.push(unit.clone());
+                }
+            }
+            tail.push(patch.clone()); // candidate next
+            // A cycle of period 2 means tail[..4] == tail[2..6].
+            if tail.len() >= 6 {
+                let a1: Vec<u8> = tail[0].iter().chain(tail[1].iter()).cloned().collect();
+                let a2: Vec<u8> = tail[2].iter().chain(tail[3].iter()).cloned().collect();
+                let a3: Vec<u8> = tail[4].iter().chain(tail[5].iter()).cloned().collect();
+                if a1 == a2 && a2 == a3 {
+                    break;
+                }
+            }
+            // period-3: tail[0..3] == tail[3..6]
+            if tail.len() >= 6 {
+                let b1: Vec<u8> = tail[0]
+                    .iter()
+                    .chain(tail[1].iter())
+                    .chain(tail[2].iter())
+                    .cloned()
+                    .collect();
+                let b2: Vec<u8> = tail[3]
+                    .iter()
+                    .chain(tail[4].iter())
+                    .chain(tail[5].iter())
+                    .cloned()
+                    .collect();
+                if b1 == b2 {
+                    break;
+                }
+            }
+        }
+        last_patch = patch.clone();
+        if out.last() == patch.last() && !out.is_empty() && patch.len() == 1 {
+            break;
+        }
+        out.extend_from_slice(&patch);
+        state.extend_from_slice(&patch);
+    }
+    out
+}
+
+/// Calibration variant of the two-speed decoder with an explicit cosine
+/// threshold and vocabulary cap, for honest A/B sweeps of the patch rate.
+/// Identical code path to `tm_generate_two_speed`; only the gate tightness
+/// and (optionally) a top-K sampling of the patch vocab are exposed.
+pub fn tm_generate_two_speed_calib(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    steps_patches: usize,
+    window_patches: usize,
+    patch_vocab: &[Vec<u8>],
+    eligible: Option<&HashSet<u8>>,
+    min_cosine: f32,
+) -> Vec<u8> {
+    fn patches_from(state: &[u8], size: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for chunk in state.chunks(size) {
+            if !chunk.is_empty() {
+                out.push(chunk.to_vec());
+            }
+        }
+        out
+    }
+    let psize = if let Some(m) = patch_vocab.iter().map(|p| p.len()).max() {
+        patch_vocab
+            .iter()
+            .map(|p| p.len())
+            .min()
+            .unwrap_or(4)
+            .max(1)
+            .min(m)
+    } else {
+        4
+    };
+
+    // Pre-encode per-step candidate latents once (frozen encoder).
+    let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+    let mut last_patch: Vec<u8> = Vec::new();
+    let mut repeat_run: usize = 0;
+
+    while out.len() < steps_patches * psize && guard < steps_patches * 2 {
+        guard += 1;
+        let patches = patches_from(&state, psize);
+        let window: Vec<&[u8]> = patches
+            .iter()
+            .rev()
+            .take(window_patches.max(1))
+            .rev()
+            .map(|p| p.as_slice())
+            .collect();
+        if window.is_empty() {
+            break;
+        }
+        let pred = tm.predict_patch_latent(&window);
+
+        let mut best: Option<(f32, Vec<u8>)> = None;
+        for (patch, lat) in patch_latents.iter() {
+            if let Some(elig) = eligible {
+                if !patch.iter().all(|b| elig.contains(b)) {
+                    continue;
+                }
+            }
+            let score = pred.cosine_similarity(lat);
+            if score < min_cosine {
+                continue;
+            }
+            if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                best = Some((score, patch.clone()));
+            }
+        }
+        let (score, patch) = match best {
+            Some(b) => b,
+            None => break,
+        };
+        if score < min_cosine {
+            break;
+        }
+        // Anti-repeat guard (same as tm_generate_two_speed).
+        if !last_patch.is_empty() && patch == last_patch {
+            repeat_run += 1;
+            if repeat_run >= 4 {
+                break;
+            }
+        } else {
+            repeat_run = 0;
+        }
+        last_patch = patch.clone();
         if out.last() == patch.last() && !out.is_empty() && patch.len() == 1 {
             break;
         }
