@@ -27,10 +27,14 @@ fn main() {
         .unwrap_or_else(|| "corpus_doc_code_pairs.jsonl".into());
     let limit: usize = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(300);
     let seed: &[u8] = b"fn main() {";
+    // 4th optional arg: path to a BYTE-trained W sidecar (magic "FBW1").
+    // If present, attach it so the decoders use a byte-level operator instead
+    // of the checkpoint's W (which may be token-trained or identity).
+    let bytew_path = args.get(4).cloned();
 
     // 1. Load the trained checkpoint.
     let t0 = Instant::now();
-    let tm = match TemporalMemory::load(&ckpt) {
+    let mut tm = match TemporalMemory::load(&ckpt) {
         Some(tm) => tm,
         None => {
             eprintln!("FAILED to load {}", ckpt);
@@ -46,6 +50,17 @@ fn main() {
         tm.predictor_updates(),
         tm.patch_predictor().updates
     );
+    if let Some(path) = &bytew_path {
+        match TemporalMemory::load_byte_w(path) {
+            Some(w) if w.len() == tm.predictor_w().len() => {
+                tm.apply_byte_w(w);
+                println!("  attached BYTE-trained W from {} (updates={})", path, tm.predictor_updates());
+            }
+            _ => {
+                eprintln!("WARNING: could not attach byte W from {:?}; running with checkpoint W", path);
+            }
+        }
+    }
     println!("corpus slice={} seed={:?}", limit, String::from_utf8_lossy(seed));
 
     // 2. Corpus lines + patch vocabulary (2-byte patches, like the stands).

@@ -1010,6 +1010,51 @@ impl TemporalMemory {
         }
     }
 
+    /// Persist ONLY the local byte-transition operator W (LATENT_DIM² f32) to a
+    /// sidecar file. The full checkpoint (`save`) already stores W inline; this
+    /// sidecar exists so a BYTE-trained W can be attached to a checkpoint whose
+    /// W was trained on tokens (or left identity) — the "fix the byte W into
+    /// the saved state" missing link. Format: magic "FBW1" + u32 len + f32[].
+    pub fn save_byte_w(&self, path: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let w = &self.predictor.w;
+        let mut f = std::fs::File::create(path)?;
+        f.write_all(b"FBW1")?;
+        f.write_all(&(w.len() as u32).to_le_bytes())?;
+        for v in w {
+            f.write_all(&v.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Read a sidecar byte-W file (magic "FBW1" + u32 len + f32[]). Returns
+    /// `None` on bad magic/size (defensive: never panic on a foreign file).
+    pub fn load_byte_w(path: &str) -> Option<Vec<f32>> {
+        let data = std::fs::read(path).ok()?;
+        if data.len() < 8 || &data[..4] != b"FBW1" {
+            return None;
+        }
+        let n = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+        if n != LATENT_DIM * LATENT_DIM || 8 + n * 4 > data.len() {
+            return None;
+        }
+        let mut w = Vec::with_capacity(n);
+        for i in 0..n {
+            let off = 8 + i * 4;
+            w.push(f32::from_le_bytes(data[off..off + 4].try_into().ok()?));
+        }
+        Some(w)
+    }
+
+    /// Attach a byte-trained W to this TM (in-place), replacing the current
+    /// local operator. Length mismatch is ignored (keeps the existing W) —
+    /// callers can check `predictor_w().len()` before trusting the result.
+    pub fn apply_byte_w(&mut self, w: Vec<f32>) {
+        if w.len() == LATENT_DIM * LATENT_DIM {
+            self.predictor.w = w;
+        }
+    }
+
     pub fn predictor_w(&self) -> &[f32] { &self.predictor.w }
 
     /// Borrow the latent predictor directly (encoder, W) — used by the
@@ -1153,6 +1198,31 @@ mod tests {
         let loss = tm.latent_cosine_loss(&ctx, &next);
         assert!(loss.is_finite());
         assert!((0.0..=2.0).contains(&loss));
+    }
+
+    #[test]
+    fn byte_w_sidecar_roundtrip() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("fuga_byte_w_roundtrip.bin");
+        let path = tmp.to_str().unwrap();
+        // Train a small byte W so it is non-identity.
+        let mut tm = TemporalMemory::new(8, 2);
+        let seq = b"ababababab";
+        for w in 0..seq.len().saturating_sub(1) {
+            tm.learn_bytes(&seq[w..w + 1], seq[w + 1], 0.5);
+        }
+        tm.save_byte_w(path).expect("save sidecar");
+        let loaded = TemporalMemory::load_byte_w(path).expect("load sidecar");
+        assert_eq!(loaded.len(), tm.predictor_w().len());
+        // Exact bit-for-bit equality (u32 length + f32 payload).
+        assert_eq!(loaded, tm.predictor_w());
+        // Corrupt magic must fail defensively.
+        {
+            let mut f = std::fs::File::create(path).unwrap();
+            f.write_all(b"NOPE1234").unwrap();
+        }
+        assert!(TemporalMemory::load_byte_w(path).is_none());
+        let _ = std::fs::remove_file(path);
     }
 
     /// Order is part of the structural key. Two windows sharing the same
