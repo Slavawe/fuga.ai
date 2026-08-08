@@ -179,3 +179,8 @@
 - Регрессии: lib 130/130. Файлы: src/ai/core.rs (answer гибрид),
   src/ai/memory_store.rs (LEX_STOP), src/bin/dialogue_test.rs (build_text_index,
   англ. запросы), src/bin/txt_search_debug.rs (новый, диагностика лекс-канала).
+- **e2e РЕЗУЛЬТАТ (после фикса детектора lex=): 6/6 запросов с контентом; 3 из 3
+  значимых запросов дают РЕЛЕВАНТНЫЕ lex-ответы** — «vector symbolic» → lex=0.67
+  System Vector Protocol; «sorts an array» → lex=0.47 Z3+Rust Code Synthesis;
+  «temporal memory» → lex=0.33 VSA Wave Memory (было: mutex.h/jemalloc шум).
+  Функция уже отвечает содержимым памяти, а не шаблоном.

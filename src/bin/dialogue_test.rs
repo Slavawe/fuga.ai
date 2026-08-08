@@ -85,7 +85,7 @@ fn run<const N: usize, const S: usize>(cube_path: &str, dim: usize) {
         println!("\n────────────────────────────────────────────");
         println!("ВОПРОС: {}", q);
         let out = omni.ai.answer(q);
-        let has_content = out.contains("sim=") || out.contains("(text):");
+        let has_content = out.contains("sim=") || out.contains("(text):") || out.contains("lex=");
         if has_content {
             answered += 1;
         }
