@@ -125,21 +125,7 @@ fn main() {
     }).count();
     eprintln!("  DIAGNOSE patch_vocab max-cosine {:.4}, patches over 0.05: {}", maxcos, over);
 
-    // Two-speed decode at a sweep of cosine thresholds (honest calibration).
-    let n_patch_steps = 50_usize;
-    println!("├─ two-speed no-repeat sweep (patch_vocab={}):", patch_vocab.len());
-    let nr_values = [0usize, 2, 4];
-    for &nr in &nr_values {
-        let d0 = Instant::now();
-        let out = fuga::tm_generate_two_speed_calib(&tm, &seed, n_patch_steps, 4, &patch_vocab, None, 0.05, nr);
-        let secs = d0.elapsed().as_secs_f64();
-        let s = String::from_utf8_lossy(&out).to_string();
-        let printable: f64 = out.iter().filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace()).count() as f64;
-        let pct = if out.is_empty() { 0.0 } else { 100.0 * printable / out.len() as f64 };
-        println!("  no_repeat={} bytes={} ({:.1}%) {:.1}s :: {}", nr, out.len(), pct, secs,
-                    s.chars().take(90).collect::<String>());
-            }
-            // Entropy-gap (BLT) decoder: dynamic patch boundaries by predictability.
+    // Entropy-gap (BLT) decoder: dynamic patch boundaries by predictability.
                 // Sweep the gap threshold on the SAME trained TM (decode is cheap;
                 // training dominates). Measures the B/s vs. connectivity inflection.
                 for &gap in &[0.30f32, 0.45, 0.60, 0.75] {
@@ -157,38 +143,7 @@ fn main() {
                     println!("BENCH entropy_gap={:.2} bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", gap, entropy_out.len(), entropy_pct,
                         entropy_secs, entropy_out.len() as f64 / entropy_secs.max(1e-4));
                 }
-                // Speculative (draft→verify): global W drafts patches, local W verifies bytes.
-                let d0s = Instant::now();
-                let spec_out = fuga::tm_generate_speculative(&tm, &seed, 200, 4, 0.60, &patch_vocab);
-                let spec_secs = d0s.elapsed().as_secs_f64();
-                let spec_str = String::from_utf8_lossy(&spec_out).to_string();
-                let spec_printable: f64 = spec_out
-                    .iter()
-                    .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                    .count() as f64;
-                let spec_pct = if spec_out.is_empty() { 0.0 } else { 100.0 * spec_printable / spec_out.len() as f64 };
-                println!("├─ speculative(draft→verify) decoded ({} bytes):", spec_out.len());
-                println!("└─ {}", spec_str.chars().take(120).collect::<String>());
-                println!("BENCH speculative_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", spec_out.len(), spec_pct,
-                        spec_secs, spec_out.len() as f64 / spec_secs.max(1e-4));
-                    // Speculative acceptance rate: fraction of draft bytes the verifier accepted.
-                    let (spec_stat_out, spec_accept) = fuga::tm_generate_speculative_stats(&tm, &seed, 200, 4, 0.60, &patch_vocab);
-                    println!("ACCEPTANCE speculative draft-acceptance={:.3} (bytes={})", spec_accept, spec_stat_out.len());
-                    // Beam search: K hypotheses with accumulated log-score vs greedy top-1.
-                    let d0b = Instant::now();
-                    let beam_out = fuga::tm_generate_beam(&tm, &seed, 200, 4, 3, 5);
-                    let beam_secs = d0b.elapsed().as_secs_f64();
-                    let beam_str = String::from_utf8_lossy(&beam_out).to_string();
-                    let beam_printable: f64 = beam_out
-                        .iter()
-                        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
-                        .count() as f64;
-                    let beam_pct = if beam_out.is_empty() { 0.0 } else { 100.0 * beam_printable / beam_out.len() as f64 };
-                    println!("├─ beam-3 decoded ({} bytes):", beam_out.len());
-                    println!("└─ {}", beam_str.chars().take(120).collect::<String>());
-                    println!("BENCH beam_bytes={} ({:.1}%) in {:.2}s ({:.0} B/s)", beam_out.len(), beam_pct,
-                            beam_secs, beam_out.len() as f64 / beam_secs.max(1e-4));
-                        // Recurrent (SSM-lite) decoder: hidden state h(t) mixed into the W input.
+                // Recurrent (SSM-lite) decoder: hidden state h(t) mixed into the W input.
                         for &mix in &[0.0f32, 0.4, 0.8] {
                             let d0r = Instant::now();
                             let rec_out = fuga::tm_generate_recurrent(&tm, &seed, 200, 4, mix, 0.9);
@@ -205,6 +160,7 @@ fn main() {
                                 rec_secs, rec_out.len() as f64 / rec_secs.max(1e-4));
                         }
     // Keep the default-path decode for the canonical PASS line (same as prod).
+    let n_patch_steps = 50_usize;
     let d0default = Instant::now();
     let bytes_out = fuga::tm_generate_two_speed(&tm, &seed, n_patch_steps, 4, &patch_vocab, None);
     let ts_secs = d0default.elapsed().as_secs_f64();

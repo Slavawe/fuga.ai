@@ -6,7 +6,7 @@
 // EVERY decoder we built across the iterations on the identical seed:
 //
 //   naive byte W | two-speed (global W_patch + local W) | entropy BLT |
-//   recurrent h(t) | recurrent+nucleus | Hopfield read | beam-N | KAN-lite |
+//   recurrent h(t) | LSTM peer |
 //   LSTM peer
 //
 // One process, one corpus, one checkpoint — the honest "connect all
@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use fuga::ai::byte_lstm::ByteLstm;
 use fuga::ai::htm_temporal::TemporalMemory;
-use fuga::ai::kan::KanTransition;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -85,26 +84,6 @@ fn main() {
     }
     println!("patch_vocab={} (2-byte)", patch_vocab.len());
 
-    // 3. Train the KAN operator on the same corpus (same learn loop as rec_test).
-    let mut kan = KanTransition::new();
-    let tkan = Instant::now();
-    let mut kan_iters = 0usize;
-    for l in &lines {
-        let b = l.as_bytes();
-        if b.len() < 16 {
-            continue;
-        }
-        for w in 0..b.len().saturating_sub(1) {
-            let lo = w.saturating_sub(4);
-            fuga::learn_byte_kan(&mut kan, &tm, &b[lo..w + 1], b[w + 1], 0.05);
-        }
-        kan_iters += 1;
-        if kan_iters >= limit {
-            break;
-        }
-    }
-    println!("KAN trained on {} lines in {:.1}s", kan_iters, tkan.elapsed().as_secs_f64());
-
     // 4. Train the LSTM peer (classic recurrent baseline).
     let mut rng: u64 = 0xBAD0_0D1E;
     let mut lstm = ByteLstm::new(&mut rng);
@@ -116,11 +95,11 @@ fn main() {
         lstm.train_window(&all_bytes[w..end]);
         w += 8;
     }
-    println!("LSTM trained on {} bytes in {:.1}s", all_bytes.len(), tlstm.elapsed().as_secs_f64());
-
-    // 5. Hopfield bank (structural Rust templates).
-    let hop = fuga::ai::hopfield::build_rust_hopfield(&tm.predictor().encoder, 12.0);
-    println!("Hopfield bank: {} templates", hop.len());
+    println!(
+        "LSTM trained on {} bytes in {:.1}s",
+        all_bytes.len(),
+        tlstm.elapsed().as_secs_f64()
+    );
 
     // 6. Run every decoder on the identical seed.
     let win = 4usize;
@@ -140,19 +119,7 @@ fn main() {
     rows.push(("recurrent h(t) mix=0".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
     let out = fuga::tm_generate_recurrent(&tm, seed, 200, win, 0.4, 0.9);
     rows.push(("recurrent h(t) mix=0.4".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
-    // e) recurrent + nucleus advance
-    let out = fuga::tm_generate_recurrent_nucleus(&tm, seed, 200, win, 0.4, 0.9, 1.2, 0.9, 7);
-    rows.push(("recurrent+nucleus mix=0.4".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
-    // f) Hopfield read
-    let out = fuga::tm_generate_hop_reader(&tm, seed, 200, win, 0.0, 0.4, &hop);
-    rows.push(("Hopfield read mix=0.4".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
-    // g) beam-3
-    let out = fuga::tm_generate_beam(&tm, seed, 200, win, 3, 5);
-    rows.push(("beam-3".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
-    // h) KAN-lite
-    let out = fuga::tm_generate_kan(&tm, &kan, seed, 200, win);
-    rows.push(("KAN-lite".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));
-    // i) LSTM peer (classic recurrent, no VSA)
+    // e) LSTM peer (classic recurrent, no VSA)
     lstm.reset_state();
     let out = lstm.generate(seed, 200);
     rows.push(("LSTM peer (H=128)".into(), out.len(), String::from_utf8_lossy(&out).chars().take(48).collect()));

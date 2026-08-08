@@ -31,6 +31,8 @@ hound = "3.5"
 fastrand = "2"
 tiny_http = "0.12"
 libc = "0.2"
+wgpu = { version = "30", default-features = false, features = ["vulkan", "wgsl"] }
+pollster = "1.0.1"
 
 [profile.release]
 opt-level = 2

@@ -99,12 +99,9 @@ pub use ai::{
     sparsify,
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
     tm_generate::{
-        tm_generate, tm_generate_beam, tm_generate_hop_reader, tm_generate_kan, tm_generate_latent,
-        tm_generate_latent_bytes, tm_generate_recurrent, tm_generate_recurrent_nucleus,
-        tm_generate_speculative, tm_generate_speculative_stats, tm_generate_two_speed,
-        tm_generate_two_speed_calib, tm_generate_two_speed_entropy,
+        tm_generate, tm_generate_latent, tm_generate_latent_bytes, tm_generate_recurrent,
+        tm_generate_two_speed, tm_generate_two_speed_entropy,
     },
-    tm_generate::{learn_byte_kan},
     transpile::{
         Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,
         WeightSketch, binarize_tensor, hf_resolve_url, is_repo_id, kind_for_name, list_hf_shards,

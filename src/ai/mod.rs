@@ -3,15 +3,14 @@ pub mod anomaly;
 pub mod answer_engine;
 pub mod autonomous_mind;
 pub mod byte_lstm;
+pub mod gpu_ops;
 pub mod codegen;
 pub mod core;
 pub mod decoder;
 pub mod hierarchical_jepa;
 pub mod hnsw;
-pub mod hopfield;
 pub mod htm_temporal;
 pub mod jepa;
-pub mod kan;
 pub mod memory_store;
 pub mod moe;
 pub mod mentalese;
@@ -40,9 +39,8 @@ pub use core::{AIOutput, FugaAI};
 pub use decoder::{DecoderOut, logit_lens};
 pub use hierarchical_jepa::HierarchicalJEPA;
 pub use htm_temporal::{DendriteSegment, Synapse, TemporalCell, TemporalMemory, TrainStats};
-pub use kan::{KanTransition, KAN_KNOTS};
-pub use latent_jepa::LATENT_DIM;
 pub use jepa::JepaPredictor;
+pub use latent_jepa::LATENT_DIM;
 pub use latent_jepa::{LatentPredictor, LatentVector};
 pub use memory_store::{AttractorIndex, MemoryEntry, MemoryStore, NUM_ATTRACTORS};
 pub use moe::MoEStore;
@@ -51,7 +49,7 @@ pub use resonance_attention::{AttentionCell, ResonanceAttention};
 pub use router::{DynamicRouter, ExpertConfig, TargetExpert};
 pub use sdr::{
     SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrIndex, SdrVector, byte_basis, domain_sdr,
-    encode_bytes_sdr, encode_text, sparsify, structure_sdr,
+    encode_bytes_sdr, encode_text, sparsify, structure_sdr, structure_sdr_from_sdrs,
 };
 pub use sdr_store::SdrStore;
 pub mod crystal;

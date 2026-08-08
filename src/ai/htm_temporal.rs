@@ -1063,9 +1063,21 @@ impl TemporalMemory {
         &self.predictor
     }
 
+    /// Mutable borrow of the local byte-transition predictor (W). Used by the
+    /// full-training stand to learn transitions without growing TM cells.
+    pub fn predictor_mut(&mut self) -> &mut LatentPredictor {
+        &mut self.predictor
+    }
+
     /// Borrow the global two-speed patch predictor (W_patch/P_patch) directly.
     pub fn patch_predictor(&self) -> &LatentPredictor {
         &self.patch_predictor
+    }
+
+    /// Mutable borrow of the global patch predictor (W_patch). Used by the
+    /// full-training stand to learn the patch level without TM cell growth.
+    pub fn patch_predictor_mut(&mut self) -> &mut LatentPredictor {
+        &mut self.patch_predictor
     }
 
     pub fn predictor_p(&self) -> &[f32] { &self.predictor.p }
