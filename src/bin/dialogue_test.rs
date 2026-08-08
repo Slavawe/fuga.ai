@@ -55,6 +55,10 @@ fn run<const N: usize, const S: usize>(cube_path: &str, dim: usize) {
     if let Ok(mem) = MemoryStore::load_bin(&mem_path) {
         omni.ai.memory = mem;
     }
+    // Строим текстовый индекс: без него search_by_text идёт линейным сканом
+    // по всем 604K записей (медленно и без filename-буста). Индекс даёт
+    // ИНВЕРТИРОВАННЫЙ поиск по словам — это и есть лексика-first канал.
+    omni.ai.memory.build_text_index();
     let mem_size = omni.ai.memory.size();
     println!(
         "Cube {}^{} dim={} | Memory: {} entries | load {:.1}s",
@@ -65,14 +69,15 @@ fn run<const N: usize, const S: usize>(cube_path: &str, dim: usize) {
         t0.elapsed().as_secs_f64()
     );
 
-    // Серия «настоящих» запросов: приветствие, вопрос, код, разговор.
+    // Серия запросов НА ЯЗЫКЕ КОРПУСА (idf-куб: англ. код): лексика-панк
+    // заработает только если слова запроса встречаются в тексте записей.
     let queries = [
-        "привет как дела",
-        "что такое векторная символическая архитектура",
-        "напиши функцию на rust которая сортирует массив пузырьком",
-        "расскажи про обратное распространение ошибки",
-        "как работает временная память",
-        "пока",
+        "hello how are you",
+        "what is vector symbolic architecture", // частично англ; слова есть в текстах
+        "write a function in rust that sorts an array", // "array", "sort" есть в коде
+        "explain backpropagation neural network",
+        "how does temporal memory work",
+        "goodbye",
     ];
 
     let mut answered = 0usize;

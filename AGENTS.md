@@ -154,3 +154,28 @@
 ### Файлы сессии
 - `src/bin/dialogue_test.rs` (новый), `cpp/hjepa.h` (новый), `cpp/fuga_core.h` (learn_latent,
   consolidate_owm, invert_square), `cpp/decode.cpp` (beam), `cpp/train.cpp` (OWM-check)
+
+## Сессия 08.08 (ночь, продолжение): гибридный retrieval (релевантность)
+### Диагноз (из диалог-e2e, omni_cube_idf 604K записей)
+- VSA-поиск один: sim-полотно 0.52-0.75 для ЛЮБОГО запроса — весь код похож
+  в латентном, верх корпуса забит однотипными redis/jemalloc фрагментами.
+- Лексика НЕ была подключена: MemoryStore::load_bin ставит text_index=None/
+  vsa_idx=None (индексы только после build_text_index(), который НИКТО не
+  вызывал на загруженных кубах) → search_by_text шёл линейным скан 604K.
+### Улучшения (релевантный канал, FugaAI::answer core.rs:425)
+1. **Гибридный панк**: search_by_text(query) → если lex-сигнал ≥0.20 → lex-ответы
+   ПЕРВИН (с source_doc) + VSA-дополнение ТОЛЬКО ≥0.65 (мусорный топ 0.52-0.75
+   больше не засоряет). Иначе старый VSA-путь.
+2. **build_text_index() после load** в dialogue_test (и теперь обязателен в
+   стендах) — инвертированный поиск по словам + filename-буст.
+3. **Стоп-слова в search_by_text** (LEX_STOP ~70 англ+рус): how/are/you/what/
+   и т.п. тонули в лексике кода, размывая ключевые. «hello how are you» до:
+   lex=0.17 шум; с LEX_STOP: только "hello".
+- Проверено: запрос «what is vector symbolic architecture» дал lex=0.25
+  (SFMT-alti.h), «sorts an array» — lex=0.50 (lua.h) — лексика работать может.
+- Честно: на 604K-фрагментах кода (обрезанные тексты чанков) слова hello/how
+  часто отсутствуют в текстах записей — лексика-канал ограничен ДАННЫМИ,
+  не кодом. На книжном корпусе (403K слов corpus.jsonl) — данные чище.
+- Регрессии: lib 130/130. Файлы: src/ai/core.rs (answer гибрид),
+  src/ai/memory_store.rs (LEX_STOP), src/bin/dialogue_test.rs (build_text_index,
+  англ. запросы), src/bin/txt_search_debug.rs (новый, диагностика лекс-канала).

@@ -251,10 +251,23 @@ impl MemoryStore {
         query_text: &str,
         top_k: usize,
     ) -> Vec<(usize, f64, &MemoryEntry)> {
+        // Стоп-слова: частотные служебные тонут в лексике 604K-записей кода
+        // (any/how/are/you — в каждом C-headere), расталкивая ключевые.
+        // Оставляем только значимые слова запроса (08.08, диалог-диагноз).
+        const LEX_STOP: &[&str] = &[
+            "the", "and", "for", "that", "this", "with", "from", "was", "are", "not", "have",
+            "has", "its", "but", "than", "them", "then", "they", "were", "will", "into", "more",
+            "most", "some", "would", "their", "there", "which", "been", "what", "when", "where",
+            "your", "is", "of", "to", "in", "if", "a", "or", "as", "at", "it", "we", "he", "she",
+            "his", "her", "be", "how", "you", "does", "do", "can", "why", "who", "only", "very",
+            "just", "also", "about", "between", "over", "under", "during", "before", "after",
+            "а", "в", "и", "на", "с", "о", "не", "как", "что", "для", "по", "из", "у",
+        ];
         let words: Vec<String> = query_text
             .split_whitespace()
             .filter(|w| w.len() > 2)
             .map(|w| w.to_lowercase())
+            .filter(|w| !LEX_STOP.contains(&w.as_str()))
             .collect();
         if words.is_empty() {
             return vec![];

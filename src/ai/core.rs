@@ -447,7 +447,46 @@ impl<const N: usize, const S: usize> FugaAI<N, S> {
         result.push_str(&format!("Route: {}\n", output.route.name()));
         result.push('\n');
 
+        // Гибридный панк (релевантность, 08.08): лексика-first, VSA фолбэк.
+        // Ключевые слова запроса — сильнее VSA-шума на больших корпусах
+        // (весь код похож в латентном, sim-полотно 0.52+, верх забит
+        // однотипными redis/jemalloc файлами). Лексика различает.
         let mut seen_texts = std::collections::HashSet::new();
+        let text_hits = self.memory.search_by_text(query, 3);
+        // Порог лексического сигнала: 0.20 = ~1 значимое слово из 4+ в запросе
+        // нашлось в тексте записи (с filename-бустом). 0.30 резало
+        // короткие запросы («hello how are you» → 0.25 → фолбэк на VSA-шум).
+        let text_has_signal = text_hits.iter().any(|(_, s, _)| *s >= 0.20);
+        if text_has_signal {
+            for (_idx, score, entry) in &text_hits {
+                if seen_texts.contains(&entry.text) {
+                    continue;
+                }
+                seen_texts.insert(entry.text.clone());
+                result.push_str(&format!("[{}] (lex={:.2})\n", entry.source_doc, score));
+                result.push_str(&entry.text);
+                result.push('\n');
+            }
+            // После лексических добавляем ТОЛЬКО сильные VSA-совпадения
+            // (≥0.65): иначе шумовой топ (0.52-0.75 на любом коде) снова
+            // засоряет ответ. Лексика остаётся главным каналом.
+            for st in &output.super_tokens {
+                let results = self.memory.search(&st.vector, 5);
+                for (_idx, sim, entry) in &results {
+                    if seen_texts.contains(&entry.text) {
+                        continue;
+                    }
+                    if *sim < 0.65 {
+                        continue;
+                    }
+                    seen_texts.insert(entry.text.clone());
+                    result.push_str(&format!("[{}] (sim={:.3})\n", entry.source_doc, sim));
+                    result.push_str(&entry.text);
+                    result.push('\n');
+                }
+            }
+            return result;
+        }
 
         for st in &output.super_tokens {
             let results = self.memory.search(&st.vector, 3);
