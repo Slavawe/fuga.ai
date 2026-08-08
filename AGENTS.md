@@ -113,3 +113,44 @@
 - `src/ai/gpu_ops.rs` — +cap-шейдер/метод; `src/ai/mod.rs` — hopfield/kan восстановлены
 - `cpp/*` — C++ ядро (бета-тест C++, выложено на GitHub в fuga.ai, description=«бета тест C++»)
 - `py/train_cpp.py` — Python-оркестратор (train/vocab/decode)
+
+## Сессия 08.08 (ночь): настоящая проверка обучения + C++ beam/H-JEPA/OWM
+### Настоящая проверка обучения (диалоговый e2e, `src/bin/dialogue_test.rs`)
+- Стенд грузит реальные кубы (peek_cube_header → динамический N,S), прогоняет
+  omni.ai.answer() (FugaAI::answer, core.rs:425: think → route → memory.search + 
+  retrieve_context + text-fallback) на 6 запросах (привет/вопрос/код/разговор).
+- Результаты (ЧЕСТНО):
+  - omni_cube.bin (N3S4, память 3932 записи — физика/propulsion): retrieval РАБОТАЕТ,
+    все ответы содержательные (sim=0.51-0.52), НО релевантность НЕ РАЗЛИЧАЕТ ТЕМЫ:
+    «привет» → Mach Effect Thruster; «сортировка» → Quantum Field Theory; корпус
+    однородный (вся физика) → всё резонирует ~равно.
+  - omni_cube_idf.bin (N4S8, 604 869 записей, 1.2GB — redis/etcd/gin/jemalloc):
+    sim поднялся до 0.74-0.75, но ответы — СЫРЫЕ дампы исходников, нерелевантные
+    («временная память» → mutex.h 0.751, «сортировка» → gin/context.go).
+  - **ГЛАВНЫЙ ДИАГНОЗ**: инфраструктура (VSA-роутинг + retrieval + домены) жива,
+    но релевантность ранжирования низкая — VSA-эмбеддинг кода схлопывается
+    (весь код похож, sim-полотность 0.52+), верх корпуса забит одинаковыми
+    файлами. Нужно (next): домен-first классификатор + IDF/лексика-буст +
+    порог отсечения очень высоких шумовых sim. Порог DEFAULT_RESONANCE=0.35
+    слишком низкий; реально различает только >0.6-0.65 на тренированном кубе.
+- Память памяти: FugaAI::answer показывает Route для каждого запроса — роутинг
+  работает (все general). 604 869 entries загрузились за 1.9s.
+
+### C++: beam / H-JEPA / OWM (порты)
+- **beam** (cpp/decode.cpp --decoder beam): классический beam-3 top_m=5, логирование
+  log-score гипотез, стоп-на-повторе. Реальный прогон на Rust-W (fuga_byte_w_800):
+  **10 B** — совпадает с честным Rust-отчётом (beam=12-13 B seed-эхо). Работает.
+- **H-JEPA** (cpp/hjepa.h): 3 уровня (ctx 4/3/2, stride 1/3/5), каждый = LatentPredictor
+  с learn_latent (Widrow-Hoff латент→латент — новый метод core.h), predict_refined:
+  L0-trajectory → L1-pred → err_traj (bind) → L2-corrected → dampen (0.5/0.5),
+  converge = средней cosine коррекций. Смог-test: обучение всех 3 уровней на
+  байтовых латентах → **converge=0.9986**, коррекции нормой 1 (не нули).
+- **OWM** (cpp/fuga_core.h): consolidate_owm + invert_square (Гаусс, partial pivot) —
+  Woodbury P ← P−PA^T(AP A^T+αI)⁻¹AP, Gram-Schmidt редукция до top_k.
+  Смок: **consolidated=4** (4 направления защищены).
+### Регрессии
+- Rust lib 130/130 после всех правок. C++ make — 0 ошибок (2 косметик-warnings
+  многострочный комментарий). Всё закоммичено.
+### Файлы сессии
+- `src/bin/dialogue_test.rs` (новый), `cpp/hjepa.h` (новый), `cpp/fuga_core.h` (learn_latent,
+  consolidate_owm, invert_square), `cpp/decode.cpp` (beam), `cpp/train.cpp` (OWM-check)

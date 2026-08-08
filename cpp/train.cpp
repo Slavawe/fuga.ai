@@ -212,6 +212,19 @@ int main(int argc, char **argv) {
     std::cout << "  [diag] local W norm=" << std::sqrt(sq)
               << " patch W norm=" << std::sqrt(pq) << "\n";
 
+    // --- OWM-consolidate: защищаем направления последних окон (проверка порта) ---
+    std::vector<std::vector<float>> dirs;
+    for (int i = 0; i < 8 && i < ctx + 2; ++i) {
+        // направление = латент последнего окна (проекция энкодера)
+        std::vector<Sdr> tmp_win;
+        tmp_win.push_back(basis((uint8_t)('a' + i)));
+        tmp_win.push_back(basis((uint8_t)('a' + i + 1)));
+        tmp_win.push_back(basis((uint8_t)('a' + i + 2)));
+        dirs.push_back(local.encoder.encode(structure_sdr_from_sdrs(tmp_win)));
+    }
+    int consolidated = local.consolidate_owm(dirs, 4, 0.9f);
+    std::cout << "  [diag] OWM consolidated=" << consolidated << " (порт проверен)\n";
+
     // Save FBAR sidecar(s)
     save_byte_w(out_path, local.w);
     std::string patch_path = out_path.substr(0, out_path.size() - 4) + "_patch.bin";

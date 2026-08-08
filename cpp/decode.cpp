@@ -230,6 +230,70 @@ int main(int argc, char **argv) {
                 state.insert(state.end(), patch.begin(), patch.end());
             }
         }
+    } else if (decoder == "beam") {
+        // Классический beam-N: держит K гипотез с накопленным log-score
+        // вместо greedy top-1 (порт Rust tm_generate_beam; AGENTS.md:
+        // beam=3, top_m=5; реальный A/B дал 13 B — seed-эхо, см. отчёт).
+        const int beam_k = 3, top_m = 5;
+        struct Hyp {
+            std::vector<uint8_t> state; // сгенерированные байты (с seed)
+            std::vector<uint8_t> out;    // эмиссия без seed
+            float log_score = 0.0f;
+        };
+        Hyp init;
+        init.state.assign(seed.begin(), seed.end());
+        std::vector<Hyp> beam_hs{init};
+        int guard = 0;
+        const int budget = max_bytes;
+        while (guard++ < budget * 4) {
+            // для каждой гипотезы берём top_m кандидатов байт
+            std::vector<Hyp> next;
+            for (auto &h : beam_hs) {
+                size_t win_lo = h.state.size() > (size_t)ctx ? h.state.size() - ctx : 0;
+                std::vector<Sdr> ws;
+                for (size_t j = win_lo; j < h.state.size(); ++j) ws.push_back(byte_basis(h.state[j]));
+                std::vector<float> pred = local.apply_w(enc.encode(structure_sdr_from_sdrs(ws)));
+                // top_m байт по cosine
+                std::vector<std::pair<float, int>> ranked;
+                for (int b = 0; b < 256; ++b) {
+                    float c = cosine(pred, byte_lats[b]);
+                    if (c < LATENT_MIN_COSINE) continue;
+                    ranked.push_back({c, b});
+                }
+                std::sort(ranked.begin(), ranked.end(),
+                          [](auto &a, auto &b) { return a.first > b.first; });
+                if (ranked.size() > (size_t)top_m) ranked.resize(top_m);
+                for (auto &[c, b] : ranked) {
+                    Hyp nh = h;
+                    nh.out.push_back((uint8_t)b);
+                    nh.state.push_back((uint8_t)b);
+                    nh.log_score += std::log(c > 0 ? c : 1e-6f);
+                    next.push_back(nh);
+                }
+            }
+            if (next.empty()) break;
+            // beam-prune: top-beam по log_score, стоп при повторе последнего байта
+            std::sort(next.begin(), next.end(),
+                      [](auto &a, auto &b) { return a.log_score > b.log_score; });
+            if (next.size() > (size_t)beam_k) next.resize(beam_k);
+            // повторная эмиссия (последний байт одинаковый) -> стоп лучшей
+            bool repeated = false;
+            if (!next[0].out.empty() && next[0].out.size() > 2) {
+                repeated = next[0].out.back() == next[0].out[next[0].out.size() - 2];
+            }
+            bool all_over = true;
+            for (auto &h : next) if ((int)h.out.size() < max_bytes) all_over = false;
+            if (all_over || repeated) {
+                beam_hs = next;
+                break;
+            }
+            beam_hs = std::move(next);
+        }
+        if (!beam_hs.empty()) {
+            auto best = std::max_element(beam_hs.begin(), beam_hs.end(),
+                [](auto &a, auto &b) { return a.log_score < b.log_score; });
+            out = best->out;
+        }
     } else {
         std::cerr << "unknown decoder: " << decoder << "\n";
         return 3;

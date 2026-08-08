@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -310,6 +311,166 @@ struct LatentPredictor {
             }
         }
         return std::sqrt(err_norm);
+    }
+
+    // Widrow-Hoff НАПРЯМУЮ в латентном пространстве (латент → латент):
+    // для JEPA-уровней, которые предсказывают гипервекторы из гипервекторов.
+    // x — латент окна (усреднение входа), target — латент e.g. следующего шага.
+    // Тот же delta-rule и cap, что и learn_transition, но вход уже латент.
+    float learn_latent(const std::vector<float> &x, const std::vector<float> &target, float lr) {
+        updates += 1;
+        bool apply_delta = (updates % UPDATE_STRIDE == 0);
+        std::vector<float> pred = apply_delta ? apply_w(x) : x;
+        float err_norm = 0.0f;
+        for (int o = 0; o < LATENT_DIM; ++o) {
+            float error = target[o] - pred[o];
+            err_norm += error * error;
+            if (apply_delta) {
+                float *row = &w[o * LATENT_DIM];
+                for (int i = 0; i < LATENT_DIM; ++i) row[i] += lr * error * x[i];
+            }
+        }
+        if (apply_delta && (updates % CAP_EVERY == 0)) {
+            for (int o = 0; o < LATENT_DIM; ++o) {
+                float *row = &w[o * LATENT_DIM];
+                float sq = 0.0f;
+                for (int i = 0; i < LATENT_DIM; ++i) sq += row[i] * row[i];
+                if (sq > ROW_NORM_CAP) {
+                    cap_firings += 1;
+                    float scale = std::sqrt(ROW_NORM_CAP / sq);
+                    for (int i = 0; i < LATENT_DIM; ++i) row[i] *= scale;
+                }
+            }
+        }
+        return std::sqrt(err_norm);
+    }
+    // OWM-consolidate: P ← P − P·Aᵀ·(A·P·Aᵀ + α·I)⁻¹·A·P (Woodbury, K×K).
+    // directions: латентные направления для защиты (эпоха-консолидация).
+    // top_k: максимум консолидируемых направлений (Gram-Schmidt-редукция).
+    // Возвращает число направлений; 0 если некорректно (как Rust).
+    int consolidate_owm(const std::vector<std::vector<float>> &directions, int top_k, float alpha) {
+        const int d = LATENT_DIM;
+        int m = (int)directions.size();
+        if (m == 0 || top_k <= 0) return 0;
+        int k = std::min(top_k, m);
+        // --- Gram-Schmidt-редукция: до k ортогональных единичных строк A ---
+        std::vector<std::vector<float>> chosen;
+        // сортировка индексов по убыванию нормы (как Rust idx.sort_by)
+        std::vector<int> idx(m);
+        for (int i = 0; i < m; ++i) idx[i] = i;
+        std::sort(idx.begin(), idx.end(), [&](int a, int b) {
+            float na = 0, nb = 0;
+            for (float v : directions[a]) na += v * v;
+            for (float v : directions[b]) nb += v * v;
+            return na > nb;
+        });
+        for (int ii = 0; ii < m && (int)chosen.size() < k; ++ii) {
+            int i = idx[ii];
+            std::vector<float> res = directions[i];
+            for (const auto &c : chosen) {
+                float dot = 0;
+                for (int j = 0; j < d; ++j) dot += c[j] * res[j];
+                for (int j = 0; j < d; ++j) res[j] -= dot * c[j];
+            }
+            float norm = 0;
+            for (float v : res) norm += v * v;
+            norm = std::sqrt(norm);
+            if (norm > 1e-6f) {
+                for (float &v : res) v /= norm;
+                chosen.push_back(res);
+            }
+        }
+        k = (int)chosen.size();
+        if (k == 0) return 0;
+        // A: k×d row-major
+        std::vector<float> a(k * d);
+        for (int r = 0; r < k; ++r)
+            for (int j = 0; j < d; ++j) a[r * d + j] = chosen[r][j];
+        // PAᵀ = P·Aᵀ (d×k)
+        std::vector<float> pat(d * k);
+        for (int l = 0; l < d; ++l) {
+            for (int j = 0; j < k; ++j) {
+                float acc = 0;
+                for (int c = 0; c < d; ++c) acc += p[l * d + c] * a[j * d + c];
+                pat[l * k + j] = acc;
+            }
+        }
+        // M = A·PAᵀ + αI (k×k)
+        std::vector<float> mtx(k * k, 0.0f);
+        for (int i = 0; i < k; ++i)
+            for (int j = 0; j < k; ++j) {
+                float acc = 0;
+                for (int l = 0; l < d; ++l) acc += a[i * d + l] * pat[l * k + j];
+                mtx[i * k + j] = acc;
+            }
+        for (int i = 0; i < k; ++i) mtx[i * k + i] += alpha;
+        auto minv = invert_square(mtx, k);
+        if (!minv) return 0;
+        // TM = PAᵀ·M⁻¹ (d×k)
+        std::vector<float> tm(d * k);
+        for (int i = 0; i < d; ++i)
+            for (int j = 0; j < k; ++j) {
+                float acc = 0;
+                for (int l = 0; l < k; ++l) acc += pat[i * k + l] * (*minv)[l * k + j];
+                tm[i * k + j] = acc;
+            }
+        // XA = TM·A (d×d)
+        std::vector<float> xa(d * d);
+        for (int i = 0; i < d; ++i)
+            for (int j = 0; j < d; ++j) {
+                float acc = 0;
+                for (int l = 0; l < k; ++l) acc += tm[i * k + l] * a[l * d + j];
+                xa[i * d + j] = acc;
+            }
+        // P_new = P − XA·P
+        std::vector<float> pnew(d * d);
+        for (int i = 0; i < d; ++i)
+            for (int j = 0; j < d; ++j) {
+                float acc = 0;
+                for (int l = 0; l < d; ++l) acc += xa[i * d + l] * p[l * d + j];
+                pnew[i * d + j] = p[i * d + j] - acc;
+            }
+        p = std::move(pnew);
+        return k;
+    }
+
+    // Обращение квадратной матрицы (Гаусс с частичным поворотом).
+    // Возвращает nullopt если сингулярна (как Rust invert_square → None).
+    std::optional<std::vector<float>> invert_square(const std::vector<float> &mat, int n) {
+        std::vector<float> a = mat;
+        std::vector<float> inv(n * n, 0.0f);
+        for (int i = 0; i < n; ++i) inv[i * n + i] = 1.0f;
+        for (int col = 0; col < n; ++col) {
+            // partial pivoting
+            int piv = col;
+            float best = std::fabs(a[col * n + col]);
+            for (int r = col + 1; r < n; ++r) {
+                float v = std::fabs(a[r * n + col]);
+                if (v > best) { best = v; piv = r; }
+            }
+            if (best < 1e-12f) return std::nullopt;
+            if (piv != col) {
+                for (int j = 0; j < n; ++j) {
+                    std::swap(a[col * n + j], a[piv * n + j]);
+                    std::swap(inv[col * n + j], inv[piv * n + j]);
+                }
+            }
+            float diag = a[col * n + col];
+            for (int j = 0; j < n; ++j) {
+                a[col * n + j] /= diag;
+                inv[col * n + j] /= diag;
+            }
+            for (int r = 0; r < n; ++r) {
+                if (r == col) continue;
+                float f = a[r * n + col];
+                if (f == 0.0f) continue;
+                for (int j = 0; j < n; ++j) {
+                    a[r * n + j] -= f * a[col * n + j];
+                    inv[r * n + j] -= f * inv[col * n + j];
+                }
+            }
+        }
+        return inv;
     }
 };
 
