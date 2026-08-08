@@ -37,6 +37,31 @@ fn delta(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+// Cap-стадия: ограничить squared-norm каждой строки W (как ROW_NORM_CAP=2.0
+// в Rust learn_transition). 512 потоков, один на строку: считает sq-норму
+// строки и масштабирует если > cap_sq.
+const CAP_SHADER: &str = r#"
+@group(0) @binding(0) var<storage, read_write> w: array<f32>;
+@group(0) @binding(1) var<storage, read>     cap: array<f32>;
+
+@compute @workgroup_size(64)
+fn cap_w(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let row = gid.x;
+    if (row >= 512u) { return; }
+    var sq = 0.0;
+    for (var i = 0u; i < 512u; i = i + 1u) {
+        let v = w[row * 512u + i];
+        sq += v * v;
+    }
+    if (sq > cap[0]) {
+        let scale = sqrt(cap[0] / sq);
+        for (var i = 0u; i < 512u; i = i + 1u) {
+            w[row * 512u + i] *= scale;
+        }
+    }
+}
+"#;
+
 /// A minimal wgpu compute context for the Widrow-Hoff delta.
 pub struct GpuOps {
     device: wgpu::Device,
@@ -48,6 +73,9 @@ pub struct GpuOps {
     lr_buf: wgpu::Buffer,
     staging: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    cap_pipeline: wgpu::ComputePipeline,
+    cap_buf: wgpu::Buffer,
+    cap_bind_group: wgpu::BindGroup,
 }
 
 /// Build the GPU context; `None` when Vulkan is unavailable (callers use CPU).
@@ -147,6 +175,40 @@ pub fn try_new() -> Option<GpuOps> {
         ],
     });
 
+    // Cap-стадия: отдельный compute-pipeline (raw W + cap value).
+    let cap_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("fuga-widrow-hoff-cap"),
+        source: wgpu::ShaderSource::Wgsl(CAP_SHADER.into()),
+    });
+    let cap_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("cap"),
+        layout: None,
+        module: &cap_module,
+        entry_point: Some("cap_w"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let cap_buf = mk(
+        "cap",
+        4,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
+    let clayout = cap_pipeline.get_bind_group_layout(0);
+    let cap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("cap-bg"),
+        layout: &clayout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: w_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: cap_buf.as_entire_binding(),
+            },
+        ],
+    });
+
     Some(GpuOps {
         device,
         queue,
@@ -157,6 +219,9 @@ pub fn try_new() -> Option<GpuOps> {
         lr_buf,
         staging,
         bind_group,
+        cap_pipeline,
+        cap_buf,
+        cap_bind_group,
     })
 }
 
@@ -256,6 +321,28 @@ impl GpuOps {
             self.queue.submit(Some(enc.finish()));
         }
         // Poll once after all submits to ensure completion
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Cap каждую строку W: масштаб если sq-norm > cap_sq (как Rust
+    /// ROW_NORM_CAP=2.0 в learn_transition). 512 потоков, ~мгновенно.
+    pub fn cap_w(&self, cap_sq: f32) {
+        self.queue.write_buffer(&self.cap_buf, 0, bytes(&[cap_sq]));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("cap-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("cap-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.cap_pipeline);
+            pass.set_bind_group(0, &self.cap_bind_group, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        self.queue.submit(Some(enc.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
     }
 }

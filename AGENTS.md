@@ -87,3 +87,29 @@
 - Недетерминированные прогоны: L1 сходится 1.20→0.88 без breaker, L0 стабильно ~1.4 — не считать это баг breaker, это масштаб метрики.
 - Аудит-стенды (как audit_l2.rs) — временные, обычно не коммитятся, но при передаче фиксов их стоит сохранять для воспроизводимости.
 - **Известный флаки (06.08)**: `latent_jepa::tests::encoder_is_deterministic_and_512_dimensional` падает ~1/3 полных lib-прогонов (в параллели, гонка на TOKEN_SDR_CACHE/LATENT_ENC_CACHE), изолированно — стабильно ok. Pre-existing, к правкам сессии отношения не имеет.
+## Сессия 08.08 (вечер): баг-чек + двухсторонний CPU/GPU конвейер
+### Баг-чек (приоритет №1, найдено и исправлено)
+- **БАГ A — hopfield/kan выпали из сборки** (08.08, при восстановлении из git после случайного удаления): `src/ai/mod.rs` потерял `pub mod hopfield;`/`pub mod kan;` и `pub use kan::*` — тесты молча 128 вместо 133, функции недоступны. Исправлено: модули восстановлены, lib-тесты 128→130 (в AGENTS.md ранее было 133 — часть тестов не в текущем дереве, документированных ключевых НЕТ пропажи: byte_w_sidecar_roundtrip, byte_basis, bytes_reproduces проходят).
+- **Баг B (OOM-класс)**: 10M-прогон full_byte_train убит OOM killer (kernel log, 7.5GB RAM). Две причины класса «неограниченный рост в памяти»:
+  (1) `dirs.push(LatentVector::zero())` каждые 64 шага без лимита;
+  (2) воспроизведено в gpu_train: **неограниченный mpsc::channel** — CPU записал 1.5M пар × 4KB = **6GB в память**, GPU потом переваривал (CPU%=0, RAM free 862MB). Фикс: `mpsc::sync_channel(batch*4)` = backpressure/двойная буферизация, RAM free после прогона 4M пар = 1921MB. Урок: ВСЕ конвейеры — только ограниченные каналы.
+
+### Двухсторонний конвейер CPU/GPU (`src/bin/gpu_train.rs`)
+- Разделение: **CPU-поток** читает JSONL → structure-fold окна → SdrEncoder (x=encode(window), err≈target, W=0 init) → шлёт пары в ограниченный канал; **GPU** применяет Widrow-Hoff пачками `batch_delta` (W живёт в VRAM) + **cap-стадия** (новый WGSL шейдер `cap_w`, ROW_NORM_CAP²=4, каждые 50 пачек — как CAP_EVERY в Rust).
+- `GpuOps` расширен: `cap_pipeline`/`cap_buf`/`cap_w(cap_sq)` — без cap веса взрывались: 1M пар → max|W|=101; с cap 4M пар → max=0.95, stdev=0.149.
+- **Честный A/B** (один корпус fuga_unified_train.jsonl, одинаковые пары):
+  - CPU-only (--no-gpu): **10 240 пар/с**
+  - GPU-конвейер: **16 869 пар/с** (4M пар, 237s) — **×1.65**
+  - CPU загрузка в обоих режимах ≈145% (1.4 ядра из 8) — bottleneck остаётся
+    SdrEncoder.encode (164 set-бита × 512), GPU util ~30-35% (дельта почти бесплатна).
+  - «Снятие нагрузки с CPU 10-70%»: в текущем виде GPU забирает только Widrow-Hoff x2
+    (32K флоп/шаг из ~84K×2 ответов), CPU остаётся основным. Реальное снятие —
+    когда на GPU уйдёт encode (первый шаг к этому — gpu_ops уже покрывает delta).
+- Скорость конвейера стабильна: 12.5-16.9K пар/с (batch=512).
+- W сохраняется FBW1 (bin-совместим с Rust save_byte_w).
+
+### Файлы сессии
+- `src/bin/gpu_train.rs` (новый) — двухсторонний конвейер
+- `src/ai/gpu_ops.rs` — +cap-шейдер/метод; `src/ai/mod.rs` — hopfield/kan восстановлены
+- `cpp/*` — C++ ядро (бета-тест C++, выложено на GitHub в fuga.ai, description=«бета тест C++»)
+- `py/train_cpp.py` — Python-оркестратор (train/vocab/decode)
