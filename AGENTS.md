@@ -93,4 +93,10 @@
 
 ## Ревизия стека под байтовый стандарт (09.08, вечер)
 - **Удалена мёртвая ветка** (0 внешних использований, только токен-модели вне байтового стандарта): `src/ai/{agent,autonomous_mind,unity_mind,unified_mind,state_loader,mentalese,predictive_coder}.rs`, `src/bin/autonomous_cycle.rs` (+ их pub-use из mod.rs/lib.rs). Полная пересборка `cargo check --release --lib --bins` — прошла (только warnings).
-- **Оставшееся деление**: байтовый/латентный стандарт (live): `sdr.rs` (byte_basis), `latent_jepa.rs`, `htm_temporal.rs`, `tm_generate.rs`, `kan.rs`, `hybrid.rs`, `hopfield.rs`, `byte_lstm.rs`, `gpu_ops.rs`, `soft_sdr.rs`; сервис-слой (core/memory_store/moe/…, используется omni-web/tgbot) — остаётся, т.к. подключает прод-память; легаси-токенные (self_mirror/temporal_predictor/hierarchical_jepa, text-dir) — вне стандарта, используются старыми стендами (omni-web fallback), требует отдельного решения — см. next steps.
+- **Оставшееся деление**: байтовый/латентный стандарт (live): `sdr.rs` (byte_basis), `latent_jepa.rs`, `htm_temporal.rs`, `tm_generate.rs`, `kan.rs`, `hybrid.rs`, `hopfield.rs`, `byte_lstm.rs`, `gpu_ops.rs`, `soft_sdr.rs`; сервис-слой (core/memory_store/moe/…, используется omni-web/tgbot) — остаётся, т.к. подключает прод-память; легаси-токенные (self_mirror/temporal_predictor/hierarchical_jepa, text-dir) — вне стандарта, используются старыми стендами (omni-web fallback), требует отдельного решения — см. next steps.### Диагноз убийств прогонов (exit=143) — ОКОНЧАТЕЛЬНЫЙ (09.08)
+- НЕ OOM, НЕ ребут: journalctl показывает `PrepareForSleep(true)` от
+  org_kde_powerdevil — ноутбук уходит в suspend (крышка/таймаут), процесс
+  получает SIGTERM. RAM была в норме (2722MB free), dmesg без OOM-kill.
+- ЛЕЧЕНИЕ: длинные прогоны запускать через
+  `systemd-inhibit --what=sleep ./target/release/hybrid_train ...` —
+  держит inhibitor, PowerDevil не усыпит машину. Плюс --ckpt-every.

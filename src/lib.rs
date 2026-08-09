@@ -99,7 +99,7 @@ pub use ai::{
     temporal_predictor::{TemporalPredictor, sdr_to_hypervector},
     tm_generate::{
         tm_generate, tm_generate_latent, tm_generate_latent_bytes, tm_generate_recurrent,
-        tm_generate_two_speed, tm_generate_two_speed_entropy,
+        tm_generate_two_speed, tm_generate_two_speed_entropy, tm_generate_hybrid,
     },
     transpile::{
         Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,

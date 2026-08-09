@@ -7,6 +7,7 @@ use fuga::ai::htm_temporal::TemporalMemory;
 use fuga::ai::sdr::encode_bytes_sdr;
 use fuga::tm_generate_two_speed;
 use fuga::tm_generate_two_speed_entropy;
+use fuga::tm_generate_hybrid;
 use fuga::tm_generate_recurrent;
 use fuga::tm_generate_latent_bytes;
 use std::collections::HashSet;
@@ -62,7 +63,23 @@ fn main() {
     let _ = encode_bytes_sdr; // патч-кодирование внутри декодера
     let _ = tm_generate_latent_bytes;
 
-    // 3. «Говорящие» seed'ы: обычные фразы, не только код
+    // 3. ГИБРИД: KAN_C из чекпоинта + tm_generate_hybrid (W·x + α·KAN(x))
+    let kan_c: Option<Vec<f32>> =
+        fuga::ai::htm_temporal::load_unified(&ckpt).and_then(|t| t.5);
+    let mut kan = fuga::ai::kan::KanTransition::new();
+    if let Some(c) = &kan_c {
+        if c.len() == kan.c.len() {
+            kan.c.clone_from(c);
+            println!("  KAN_C  загружен: {} f32 (гибридный декодер активен)", c.len());
+        } else {
+            println!("  KAN_C  не совпал по длине ({} != {}) — гибрид НЕ активен", c.len(), kan.c.len());
+        }
+    } else {
+        println!("  KAN_C  в чекпоинте НЕТ — гибрид НЕ активен");
+    }
+    let _ = &kan_c; // Option в кортеже (индексы: 0=w 1=patch 2=owm 3=meta 4=hjepa 5=kan)
+
+    // 4. «Говорящие» seed'ы: обычные фразы, не только код
     let seeds: Vec<Vec<u8>> = vec![
         b"fn main() {".to_vec(),
         b"the force of gravity is".to_vec(),
@@ -85,6 +102,11 @@ fn main() {
 
         let out4 = tm_generate_recurrent(&tm, seed, 200, 4, 0.0, 0.9);
         println!("  recurrent   ({} B): {:?}", out4.len(), String::from_utf8_lossy(&out4).chars().take(60).collect::<String>());
+
+        if kan.c.iter().any(|&v| v.abs() > 1e-6) {
+            let out5 = tm_generate_hybrid(&tm, &kan, seed, 200, 4, 1.0);
+            println!("  HYBRID      ({} B): {:?}", out5.len(), String::from_utf8_lossy(&out5).chars().take(60).collect::<String>());
+        }
     }
     println!("\n== TALK-декодеры отработали ==");
 }
