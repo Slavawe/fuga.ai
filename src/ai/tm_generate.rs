@@ -879,3 +879,82 @@ mod tests {
                 let _ = String::from_utf8(out_stateful.clone()).unwrap();
             }
         }
+
+/// Учим байтовый переход на KAN-операторе (нелинейная замена линейного W).
+/// window_bytes → next_byte: x = encoder(structure_sdr(window)),
+/// target = encoder(byte_basis(next)); KAN Widrow-Hoff на сплайнах.
+/// (Восстановлено из 3f6b28c — потеряно при восстановлении mod.rs.)
+pub fn learn_byte_kan(
+    kan: &mut crate::ai::kan::KanTransition,
+    tm: &TemporalMemory,
+    window_bytes: &[u8],
+    next_byte: u8,
+    lr: f32,
+) {
+    if window_bytes.is_empty() {
+        return;
+    }
+    let encoder = &tm.predictor().encoder;
+    let window_sdrs: Vec<SdrVector> = window_bytes
+        .iter()
+        .map(|&b| crate::ai::sdr::byte_basis(b))
+        .collect();
+    let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+    let target = encoder.encode(&crate::ai::sdr::byte_basis(next_byte));
+    kan.learn(&x, &target, lr);
+    kan.cap_outputs();
+}
+
+/// KAN-lite байтовый декодер: 256 cosine-кандидатов, оператор — KanTransition
+/// вместо линейного W. Гипотеза: нелинейный оператор разделит перемешанные
+/// аттракторы (e→r vs структурные), которые линейный W не может
+/// (доказано на синтетике в kan.rs).
+pub fn tm_generate_kan(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    steps: usize,
+    window_size: usize,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let encoder = &tm.predictor().encoder;
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            let lat = encoder.encode(&sdr);
+            (b as u8, lat)
+        })
+        .collect();
+
+    let start = seed_bytes.len().saturating_sub(window_size.max(1));
+    let mut window: Vec<u8> = seed_bytes[start..].to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+
+    while out.len() < steps && guard < steps * 2 {
+        guard += 1;
+        let window_sdrs: Vec<SdrVector> =
+            window.iter().map(|&b| crate::ai::sdr::byte_basis(b)).collect();
+        let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+        let pred_latent = kan.apply(&x);
+
+        let mut best: Option<(f32, u8)> = None;
+        for (byte, lat) in byte_latents.iter() {
+            let score = pred_latent.cosine_similarity(lat);
+            if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                best = Some((score, *byte));
+            }
+        }
+        let Some((_, byte)) = best else {
+            break;
+        };
+        if out.last() == Some(&byte) {
+            break;
+        }
+        out.push(byte);
+        window.push(byte);
+    }
+    out
+}

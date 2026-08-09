@@ -118,7 +118,9 @@ impl KanTransition {
         target: &LatentVector,
         lr: f32,
     ) -> f32 {
-        const UPDATE_STRIDE: u64 = 4;
+        // КАЛИБРОВКА (09.08): stride 4→1. Диагноз итерации 5: «lr=0.05/stride=4
+        // малы» — дельта каждый 4-й шаг почти не двигает сплайны → 1 байт/431s.
+        const UPDATE_STRIDE: u64 = 1;
         self.updates += 1;
         let apply_delta = self.updates % UPDATE_STRIDE == 0;
         let pred = if apply_delta { self.apply(x) } else { x.clone() };
@@ -148,9 +150,17 @@ impl KanTransition {
     }
 
     /// Soft cap on the per-output spline weight norm (like the W row cap).
+    ///
+    /// КАЛИБРОВКА (09.08): жёсткий порог NORM_CAP=4 на строку из 3072
+    /// коэфф (512×6) сжимал обучение — строки почти всегда > 4 из-за
+    /// редких активных узлов, и каждый cap масштабировал ВСЮ строку
+    /// (в т.ч. нулевые узлы), загоняя дельты в ноль и давая 1 байт
+    /// декода за 431s. Заменено на ПЛАВНЫЙ scale = sqrt(CAP/(CAP+sq)):
+    /// при малых sq ≈ 1 (не мешает), при больших — плавно тянет к нулю,
+    /// никогда не рвёт уже выученные узлы.
     pub fn cap_outputs(&mut self) {
         const CAP_EVERY: u64 = 50;
-        const NORM_CAP: f32 = 4.0;
+        const NORM_CAP: f32 = 40.0; // много мягче старого 4.0
         if self.updates % CAP_EVERY != 0 {
             return;
         }
@@ -162,8 +172,9 @@ impl KanTransition {
                     sq += v * v;
                 }
             }
-            if sq > NORM_CAP {
-                let scale = (NORM_CAP / sq.max(1e-8)).sqrt();
+            // Плавный renormalizer: scale(sq) → 1 при sq→0, монотонно вниз.
+            let scale = (NORM_CAP / (NORM_CAP + sq.max(1e-8))).sqrt();
+            if (scale - 1.0).abs() > 1e-6 {
                 for i in 0..LATENT_DIM {
                     for k in 0..KAN_KNOTS {
                         self.c[(o * LATENT_DIM + i) * KAN_KNOTS + k] *= scale;
