@@ -129,12 +129,20 @@ fn main() {
         tm.patch_predictor().updates
     );
 
-    // Save full checkpoint (cells + W + W_patch) and byte-W sidecar.
+    // Save full checkpoint (cells + W + W_patch), byte-W sidecar, and unified FUGA1.
     tm.save(&out_tm);
     println!("saved full checkpoint -> {}", out_tm);
     let side = out_tm.replace(".bin", "_byte.bin");
     if let Ok(()) = tm.save_byte_w(&side) {
         println!("saved sidecar -> {}", side);
+    }
+    let fuga1_path = if out_tm.ends_with(".bin") {
+        out_tm.replace(".bin", ".fuga")
+    } else {
+        format!("{}.fuga", out_tm)
+    };
+    if let Ok(()) = tm.save_unified_fuga1(&fuga1_path) {
+        println!("saved unified FUGA1 -> {}", fuga1_path);
     }
 
     // Decoder sweep on the trained state.

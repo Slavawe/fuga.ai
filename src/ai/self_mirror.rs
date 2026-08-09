@@ -709,7 +709,6 @@ impl SelfMirror {
 
     pub fn build_token_vocab_from_files(&mut self) -> usize {
         let top_n = 4000;
-        let allowed_dirs = ["/home/slava/fuga/src/", "/home/slava/neural-engine/"];
         let multi_ops: std::collections::HashSet<String> = [
             "->", "::", "=>", "!=", "==", ">=", "<=", "+=", "-=", "&&", "||",
         ]
@@ -717,48 +716,55 @@ impl SelfMirror {
         .map(|s| s.to_string())
         .collect();
         let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        let tokenize_str = |text: &str, freq_map: &mut std::collections::HashMap<String, usize>| {
+            for word in text.split_whitespace() {
+                let chars: Vec<char> = word.chars().collect();
+                let mut i = 0;
+                while i < chars.len() {
+                    if chars[i].is_alphanumeric() || chars[i] == '_' {
+                        let mut acc = String::new();
+                        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                            acc.push(chars[i]);
+                            i += 1;
+                        }
+                        if acc.len() <= 32 {
+                            *freq_map.entry(acc).or_insert(0) += 1;
+                        }
+                    } else {
+                        let two: String = if i + 1 < chars.len() {
+                            chars[i..=i + 1].iter().collect()
+                        } else {
+                            String::new()
+                        };
+                        if !two.is_empty() && multi_ops.contains(&two) {
+                            *freq_map.entry(two).or_insert(0) += 1;
+                            i += 2;
+                        } else {
+                            *freq_map.entry(chars[i].to_string()).or_insert(0) += 1;
+                            i += 1;
+                        }
+                    }
+                }
+            }
+        };
+
         for p in &self
             .nodes
             .iter()
             .map(|n| n.path.clone())
             .collect::<Vec<_>>()
         {
-            if !p.ends_with(".rs") {
-                continue;
-            }
-            if !allowed_dirs.iter().any(|d| p.contains(d)) {
-                continue;
-            }
             if let Ok(text) = std::fs::read_to_string(p) {
-                for word in text.split_whitespace() {
-                    let chars: Vec<char> = word.chars().collect();
-                    let mut i = 0;
-                    while i < chars.len() {
-                        if chars[i].is_alphanumeric() || chars[i] == '_' {
-                            let mut acc = String::new();
-                            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_')
-                            {
-                                acc.push(chars[i]);
-                                i += 1;
-                            }
-                            if acc.len() <= 32 {
-                                *freq.entry(acc).or_insert(0) += 1;
-                            }
-                        } else {
-                            let two: String = if i + 1 < chars.len() {
-                                chars[i..=i + 1].iter().collect()
-                            } else {
-                                String::new()
-                            };
-                            if !two.is_empty() && multi_ops.contains(&two) {
-                                *freq.entry(two).or_insert(0) += 1;
-                                i += 2;
-                            } else {
-                                *freq.entry(chars[i].to_string()).or_insert(0) += 1;
-                                i += 1;
-                            }
-                        }
-                    }
+                tokenize_str(&text, &mut freq);
+            }
+        }
+
+        // Fallback to node names if files were missing on disk or nodes had no valid file paths
+        if freq.is_empty() {
+            for node in &self.nodes {
+                if !node.name.is_empty() {
+                    tokenize_str(&node.name, &mut freq);
                 }
             }
         }

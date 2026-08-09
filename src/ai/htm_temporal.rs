@@ -1027,10 +1027,17 @@ impl TemporalMemory {
         Ok(())
     }
 
-    /// Read a sidecar byte-W file (magic "FBW1" + u32 len + f32[]). Returns
+    /// Read a sidecar byte-W file (magic "FBW1" or magic "FUGA1"). Returns
     /// `None` on bad magic/size (defensive: never panic on a foreign file).
     pub fn load_byte_w(path: &str) -> Option<Vec<f32>> {
         let data = std::fs::read(path).ok()?;
+        if data.len() >= 5 && &data[..5] == UNIFIED_MAGIC {
+            if let Some((local_w, _, _, _, _)) = load_unified(path) {
+                if !local_w.is_empty() {
+                    return Some(local_w);
+                }
+            }
+        }
         if data.len() < 8 || &data[..4] != b"FBW1" {
             return None;
         }
@@ -1044,6 +1051,48 @@ impl TemporalMemory {
             w.push(f32::from_le_bytes(data[off..off + 4].try_into().ok()?));
         }
         Some(w)
+    }
+
+    /// Save the entire model state (Local W, Patch W, OWM P projector, Meta) into
+    /// a single unified `FUGA1` checkpoint file. Bin-compatible with C++ fuga_core.
+    pub fn save_unified_fuga1(&self, path: &str) -> std::io::Result<()> {
+        let meta = UnifiedMeta {
+            steps: self.predictor.updates,
+            patch_steps: self.patch_predictor.updates,
+            ctx: self.context_len as u32,
+            version: 1,
+        };
+        save_unified(
+            path,
+            &self.predictor.w,
+            &self.patch_predictor.w,
+            &self.predictor.p,
+            &meta,
+            None,
+        )
+    }
+
+    /// Load and apply a `FUGA1` unified checkpoint file into this TM (Local W, Patch W, OWM P).
+    pub fn load_unified_fuga1(&mut self, path: &str) -> bool {
+        if let Some((local_w, patch_w, owm_p, meta, _)) = load_unified(path) {
+            if !local_w.is_empty() && local_w.len() == LATENT_DIM * LATENT_DIM {
+                self.predictor.w = local_w;
+                self.predictor.updates = meta.steps;
+            }
+            if !patch_w.is_empty() && patch_w.len() == LATENT_DIM * LATENT_DIM {
+                self.patch_predictor.w = patch_w;
+                self.patch_predictor.updates = meta.patch_steps;
+            }
+            if !owm_p.is_empty() && owm_p.len() == LATENT_DIM * LATENT_DIM {
+                self.predictor.p = owm_p;
+            }
+            if meta.ctx > 0 {
+                self.context_len = meta.ctx as usize;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Attach a byte-trained W to this TM (in-place), replacing the current
@@ -1109,6 +1158,144 @@ impl TemporalMemory {
             self.window.len()
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// FUGA1 Unified Checkpoint IO (bin-compatible with C++ fuga_core.h)
+// ---------------------------------------------------------------------------
+
+pub const UNIFIED_MAGIC: &[u8; 5] = b"FUGA1";
+
+pub const TAG_END: u32 = 0;
+pub const TAG_LOCAL_W: u32 = 1;
+pub const TAG_PATCH_W: u32 = 2;
+pub const TAG_OWM_P: u32 = 3;
+pub const TAG_META: u32 = 4;
+pub const TAG_HJEPA: u32 = 5;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnifiedMeta {
+    pub steps: u64,
+    pub patch_steps: u64,
+    pub ctx: u32,
+    pub version: u32,
+}
+
+impl Default for UnifiedMeta {
+    fn default() -> Self {
+        Self {
+            steps: 0,
+            patch_steps: 0,
+            ctx: 4,
+            version: 1,
+        }
+    }
+}
+
+pub fn save_unified(
+    path: &str,
+    local_w: &[f32],
+    patch_w: &[f32],
+    owm_p: &[f32],
+    meta: &UnifiedMeta,
+    hjepa_flat: Option<&[f32]>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(UNIFIED_MAGIC)?;
+
+    let write_section = |f: &mut std::fs::File, tag: u32, vals: &[f32]| -> std::io::Result<()> {
+        f.write_all(&tag.to_le_bytes())?;
+        let len = (vals.len() * 4) as u32;
+        f.write_all(&len.to_le_bytes())?;
+        for v in vals {
+            f.write_all(&v.to_le_bytes())?;
+        }
+        Ok(())
+    };
+
+    write_section(&mut f, TAG_LOCAL_W, local_w)?;
+    write_section(&mut f, TAG_PATCH_W, patch_w)?;
+    write_section(&mut f, TAG_OWM_P, owm_p)?;
+
+    f.write_all(&TAG_META.to_le_bytes())?;
+    f.write_all(&24u32.to_le_bytes())?;
+    f.write_all(&meta.steps.to_le_bytes())?;
+    f.write_all(&meta.patch_steps.to_le_bytes())?;
+    f.write_all(&meta.ctx.to_le_bytes())?;
+    f.write_all(&meta.version.to_le_bytes())?;
+
+    if let Some(hjepa) = hjepa_flat {
+        if !hjepa.is_empty() {
+            write_section(&mut f, TAG_HJEPA, hjepa)?;
+        }
+    }
+
+    f.write_all(&TAG_END.to_le_bytes())?;
+    f.write_all(&0u32.to_le_bytes())?;
+    Ok(())
+}
+
+pub fn load_unified(
+    path: &str,
+) -> Option<(
+    Vec<f32>,
+    Vec<f32>,
+    Vec<f32>,
+    UnifiedMeta,
+    Option<Vec<f32>>,
+)> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 5 || &data[..5] != UNIFIED_MAGIC {
+        return None;
+    }
+    let mut pos = 5;
+    let mut local_w = Vec::new();
+    let mut patch_w = Vec::new();
+    let mut owm_p = Vec::new();
+    let mut meta = UnifiedMeta::default();
+    let mut hjepa_flat = None;
+
+    while pos + 8 <= data.len() {
+        let tag = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+        let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        pos += 8;
+        if pos + len > data.len() {
+            break;
+        }
+        let section_data = &data[pos..pos + len];
+        match tag {
+            TAG_LOCAL_W | TAG_PATCH_W | TAG_OWM_P | TAG_HJEPA => {
+                let n = len / 4;
+                let mut vals = Vec::with_capacity(n);
+                for i in 0..n {
+                    let off = i * 4;
+                    if off + 4 <= section_data.len() {
+                        vals.push(f32::from_le_bytes(section_data[off..off + 4].try_into().ok()?));
+                    }
+                }
+                match tag {
+                    TAG_LOCAL_W => local_w = vals,
+                    TAG_PATCH_W => patch_w = vals,
+                    TAG_OWM_P => owm_p = vals,
+                    TAG_HJEPA => hjepa_flat = Some(vals),
+                    _ => {}
+                }
+            }
+            TAG_META => {
+                if len >= 24 {
+                    meta.steps = u64::from_le_bytes(section_data[0..8].try_into().ok()?);
+                    meta.patch_steps = u64::from_le_bytes(section_data[8..16].try_into().ok()?);
+                    meta.ctx = u32::from_le_bytes(section_data[16..20].try_into().ok()?);
+                    meta.version = u32::from_le_bytes(section_data[20..24].try_into().ok()?);
+                }
+            }
+            TAG_END => break,
+            _ => {}
+        }
+        pos += len;
+    }
+    Some((local_w, patch_w, owm_p, meta, hjepa_flat))
 }
 
 #[cfg(test)]
@@ -1264,5 +1451,32 @@ mod tests {
             "bogus window leaks into ) : {}",
             pred_bogus.overlap(&close)
         );
+    }
+
+    #[test]
+    fn unified_fuga1_roundtrip() {
+        let tmp = std::env::temp_dir().join("fuga1_unified_test.fuga");
+        let path = tmp.to_str().unwrap();
+
+        let mut tm = TemporalMemory::new(SDR_DIM, 4);
+        let seq = b"fn main() { let x = 42; }";
+        for w in 0..seq.len().saturating_sub(1) {
+            tm.learn_bytes(&seq[w..w + 1], seq[w + 1], 0.1);
+        }
+
+        tm.save_unified_fuga1(path).expect("save FUGA1 unified");
+
+        let mut tm2 = TemporalMemory::new(SDR_DIM, 4);
+        assert!(tm2.load_unified_fuga1(path));
+
+        assert_eq!(tm.predictor_w(), tm2.predictor_w());
+        assert_eq!(tm.patch_predictor().w, tm2.patch_predictor().w);
+        assert_eq!(tm.predictor_p(), tm2.predictor_p());
+
+        // load_byte_w must also successfully fall back to FUGA1 local_w
+        let extracted_w = TemporalMemory::load_byte_w(path).expect("load_byte_w from FUGA1");
+        assert_eq!(extracted_w, tm.predictor_w());
+
+        let _ = std::fs::remove_file(path);
     }
 }

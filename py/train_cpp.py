@@ -88,7 +88,7 @@ def main():
     p = sub.add_parser("train")
     p.add_argument("--jsonl", nargs="+", required=True)
     p.add_argument("--max-bytes", type=int, default=300000)
-    p.add_argument("--out", default="/tmp/fuga_cpp_w.bin")
+    p.add_argument("--out", default="/tmp/fuga_model.fuga")
     p.set_defaults(func=train)
 
     p = sub.add_parser("vocab")

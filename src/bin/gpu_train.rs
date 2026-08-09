@@ -213,12 +213,18 @@ fn main() {
     let cpu_steps = cpu_handle.join().unwrap_or(0);
     let el = t0.elapsed().as_secs_f64();
 
-    // --- Сохранить W в FBW1 (bin-совместим с Rust save_byte_w) ---
+    // --- Сохранить W в FBW1 и единый FUGA1 формат ---
     let mut tm = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
     tm.apply_byte_w(w.clone());
     tm.save_byte_w(&out_path).ok();
+    let fuga1_path = if out_path.ends_with(".bin") {
+        out_path.replace(".bin", ".fuga")
+    } else {
+        format!("{}.fuga", out_path)
+    };
+    tm.save_unified_fuga1(&fuga1_path).ok();
     println!("=== GPU/CPU PIPELINE COMPLETE ===");
     println!("  cpu_prepared={} gpu_applied={} in {:.1}s", cpu_steps, applied, el);
     println!("  throughput: {:.0} pairs/s", applied as f64 / el);
-    println!("  saved W -> {}", out_path);
+    println!("  saved W -> {} and FUGA1 -> {}", out_path, fuga1_path);
 }

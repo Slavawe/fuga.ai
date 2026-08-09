@@ -31,16 +31,23 @@ fn main() {
     // of the checkpoint's W (which may be token-trained or identity).
     let bytew_path = args.get(4).cloned();
 
-    // 1. Load the trained checkpoint.
+    // 1. Load the trained checkpoint (supports both legacy TM and unified FUGA1).
     let t0 = Instant::now();
-    let mut tm = match TemporalMemory::load(&ckpt) {
-        Some(tm) => tm,
-        None => {
-            eprintln!("FAILED to load {}", ckpt);
-            std::process::exit(2);
-        }
+    let mut tm = TemporalMemory::new(64, 4);
+    let loaded = if tm.load_unified_fuga1(&ckpt) {
+        println!("=== CONNECTED DECODER SUITE on FUGA1 unified checkpoint {} ===", ckpt);
+        true
+    } else if let Some(loaded_tm) = TemporalMemory::load(&ckpt) {
+        tm = loaded_tm;
+        println!("=== CONNECTED DECODER SUITE on legacy TM checkpoint {} ===", ckpt);
+        true
+    } else {
+        false
     };
-    println!("=== CONNECTED DECODER SUITE on {} ===", ckpt);
+    if !loaded {
+        eprintln!("FAILED to load {}", ckpt);
+        std::process::exit(2);
+    }
     println!(
         "loaded {:.1}s cells={} ctx={} W_updates={} W_patch_updates={}",
         t0.elapsed().as_secs_f64(),
