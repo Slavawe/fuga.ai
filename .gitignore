@@ -88,3 +88,10 @@ test.1.er/
 w_base.bin.dirs
 .workdir_e2e/
 necli/.workdir_e2e/
+
+# Session artifacts (не код)
+*.fuga
+postman/
+.postman/
+fuga_new_files.zip
+full_train.sh
