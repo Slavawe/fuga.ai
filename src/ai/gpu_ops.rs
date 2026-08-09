@@ -114,6 +114,29 @@ fn kan_delta(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+// RESIDUAL-шейдер: честный LMS-остаток E[X] = T − W·X, считанный НА GPU.
+// Исправляет критический баг Hebb-накопления (err≈target): теперь W-дельта
+// и KAN-дельта получают реальную ошибку предсказания, а не сырой таргет.
+// Один поток на строку o: err[o] = t[o] − Σ_i W[o,i]·x[i].
+const RESIDUAL_SHADER: &str = r#"
+@group(0) @binding(0) var<storage, read_write> w: array<f32>;
+@group(0) @binding(1) var<storage, read>     x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> err: array<f32>;
+@group(0) @binding(3) var<storage, read>       t: array<f32>;
+
+@compute @workgroup_size(64)
+fn residual(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let o = gid.x;
+    if (o >= 512u) { return; }
+    let row = o * 512u;
+    var pred = 0.0f;
+    for (var i = 0u; i < 512u; i = i + 1u) {
+        pred += w[row + i] * x[i];
+    }
+    err[o] = t[o] - pred;
+}
+"#;
+
 // KAN-кап НА GPU (мягкий, как kan.rs после калибровки): один поток на строку
 // o (512 строк), считает норму всех 512×6=3072 коэфф строки и применяет
 // scale = sqrt(CAP/(CAP+sq)). Раньше кап шёл через download→CPU→upload
@@ -151,12 +174,15 @@ pub struct GpuOps {
     device: wgpu::Device,
     queue: wgpu::Queue,
     delta_pipeline: wgpu::ComputePipeline,
+    residual_pipeline: wgpu::ComputePipeline,
     w_buf: wgpu::Buffer,
     x_buf: wgpu::Buffer,
     err_buf: wgpu::Buffer,
+    t_buf: wgpu::Buffer,
     lr_buf: wgpu::Buffer,
     staging: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    residual_bind_group: wgpu::BindGroup,
     cap_pipeline: wgpu::ComputePipeline,
     cap_buf: wgpu::Buffer,
     cap_bind_group: wgpu::BindGroup,
@@ -164,8 +190,10 @@ pub struct GpuOps {
     w2_buf: wgpu::Buffer,
     x2_buf: wgpu::Buffer,
     err2_buf: wgpu::Buffer,
+    t2_buf: wgpu::Buffer,
     staging2: wgpu::Buffer,
     bind_group2: wgpu::BindGroup,
+    residual_bind_group2: wgpu::BindGroup,
     cap_bind_group2: wgpu::BindGroup,
     // KAN-набор: c[o,i,k] (512×512×6 f32) + свой pipeline/bind group.
     kan_c_buf: wgpu::Buffer,
@@ -238,6 +266,11 @@ pub fn try_new() -> Option<GpuOps> {
         v_size,
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     );
+    let t_buf = mk(
+        "t",
+        v_size,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
     let lr_buf = mk(
         "lr",
         4,
@@ -269,6 +302,43 @@ pub fn try_new() -> Option<GpuOps> {
             wgpu::BindGroupEntry {
                 binding: 3,
                 resource: lr_buf.as_entire_binding(),
+            },
+        ],
+    });
+
+    // Residual-модель: честный LMS-остаток err = t − W·x на GPU.
+    let residual_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("fuga-residual"),
+        source: wgpu::ShaderSource::Wgsl(RESIDUAL_SHADER.into()),
+    });
+    let residual_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("residual"),
+        layout: None,
+        module: &residual_module,
+        entry_point: Some("residual"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let rlayout = residual_pipeline.get_bind_group_layout(0);
+    let residual_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("residual-bg"),
+        layout: &rlayout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: w_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: x_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: err_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: t_buf.as_entire_binding(),
             },
         ],
     });
@@ -323,6 +393,11 @@ pub fn try_new() -> Option<GpuOps> {
         v_size,
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     );
+    let t2_buf = mk(
+        "t2",
+        v_size,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    );
     let staging2 = mk(
         "staging2",
         w_size,
@@ -361,6 +436,28 @@ pub fn try_new() -> Option<GpuOps> {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: cap_buf.as_entire_binding(),
+            },
+        ],
+    });
+    let residual_bind_group2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("residual-bg2"),
+        layout: &rlayout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: w2_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: x2_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: err2_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: t2_buf.as_entire_binding(),
             },
         ],
     });
@@ -446,20 +543,25 @@ pub fn try_new() -> Option<GpuOps> {
         device,
         queue,
         delta_pipeline: pipeline,
+        residual_pipeline,
         w_buf,
         x_buf,
         err_buf,
+        t_buf,
         lr_buf,
         staging,
         bind_group,
+        residual_bind_group,
         cap_pipeline,
         cap_buf,
         cap_bind_group,
         w2_buf,
         x2_buf,
         err2_buf,
+        t2_buf,
         staging2,
         bind_group2,
+        residual_bind_group2,
         cap_bind_group2,
         kan_c_buf,
         kan_staging,
@@ -540,6 +642,128 @@ impl GpuOps {
         }
         self.queue.submit(Some(enc.finish()));
         // No blocking poll here — delta returns immediately, GPU works async
+    }
+
+    /// Честный LMS-остаток: pred = W·x, err = t − pred (на GPU).
+    /// Вызывает RESIDUAL-шейдер для local-канала.
+    pub fn residual(&self, x: &[f32], t: &[f32]) {
+        self.queue.write_buffer(&self.x_buf, 0, bytes(x));
+        self.queue.write_buffer(&self.t_buf, 0, bytes(t));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("residual-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("residual-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.residual_pipeline);
+            pass.set_bind_group(0, &self.residual_bind_group, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        self.queue.submit(Some(enc.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Честный LMS-остаток для патчевого канала (W_patch · x2 → err2).
+    pub fn residual2(&self, x: &[f32], t: &[f32]) {
+        self.queue.write_buffer(&self.x2_buf, 0, bytes(x));
+        self.queue.write_buffer(&self.t2_buf, 0, bytes(t));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("residual2-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("residual2-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.residual_pipeline);
+            pass.set_bind_group(0, &self.residual_bind_group2, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        self.queue.submit(Some(enc.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Полный гибридный шаг: residual (err = t − W·x) → W-delta → KAN-delta.
+    /// ВАЖНО: это честный LMS, а не Hebb-накопление (err≈target) — исправляет
+    /// зацикливание генерации. KAN получает ТОТ ЖЕ остаток, что и W.
+    pub fn hybrid_step(&self, x: &[f32], t: &[f32], lr_w: f32, lr_kan: f32) {
+        self.queue.write_buffer(&self.x_buf, 0, bytes(x));
+        self.queue.write_buffer(&self.t_buf, 0, bytes(t));
+        self.queue.write_buffer(&self.lr_buf, 0, bytes(&[lr_w]));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hybrid-step-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("residual-pass"), // сначала честный остаток
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.residual_pipeline);
+            pass.set_bind_group(0, &self.residual_bind_group, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("delta-pass"), // W += lr_w · err ⊗ x
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.delta_pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.dispatch_workgroups(DIM * DIM / 256, 1, 1);
+        }
+        if lr_kan > 0.0 {
+            self.queue.write_buffer(&self.lr_buf, 0, bytes(&[lr_kan]));
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("kan-delta-pass"), // KAN на честном остатке
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.kan_pipeline);
+            pass.set_bind_group(0, &self.kan_bind_group, &[]);
+            pass.dispatch_workgroups(DIM * DIM / 256, 1, 1);
+            drop(pass);
+        }
+        self.queue.submit(Some(enc.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Патчевый гибридный шаг: err2 = t − W_patch·x2 → W2-delta.
+    pub fn hybrid_step2(&self, x: &[f32], t: &[f32], lr: f32) {
+        self.queue.write_buffer(&self.x2_buf, 0, bytes(x));
+        self.queue.write_buffer(&self.t2_buf, 0, bytes(t));
+        self.queue.write_buffer(&self.lr_buf, 0, bytes(&[lr]));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hybrid2-step-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("residual2-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.residual_pipeline);
+            pass.set_bind_group(0, &self.residual_bind_group2, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("delta2-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.delta_pipeline);
+            pass.set_bind_group(0, &self.bind_group2, &[]);
+            pass.dispatch_workgroups(DIM * DIM / 256, 1, 1);
+        }
+        self.queue.submit(Some(enc.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Batched W updates: apply N deltas accumulated in xs/errs without downloading W.

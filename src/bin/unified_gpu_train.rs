@@ -155,10 +155,10 @@ fn main() {
                             .collect();
                         let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
                         let t = enc.encode(&byte_cache[nxt as usize]);
-                        let err: Vec<f32> = t.values.clone(); // pred≈0 (W=0 init)
+                        let tv: Vec<f32> = t.values.clone(); // сырой таргет; остаток считает GPU
                         // Двухскоростной (патчевый) канал: окно патчей → следующий патч
                         let mut x2 = Vec::new();
-                        let mut err2 = Vec::new();
+                        let mut t2 = Vec::new();
                         if i >= 2 {
                             let pat_window = &data[i - 2..=i];
                             let pats: Vec<&[u8]> = pat_window.chunks(2).collect();
@@ -171,9 +171,9 @@ fn main() {
                             let xs = enc.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
                             let ts = enc.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();
-                            err2 = ts.values.clone(); // pred = 0 → err = target
+                            t2 = ts.values.clone(); // сырой таргет патча
                         }
-                        if tx.send((x.values, err, x2, err2)).is_err() {
+                        if tx.send((x.values, tv, x2, t2)).is_err() {
                             break 'outer;
                         }
                         steps += 1;
@@ -206,30 +206,32 @@ fn main() {
             g.upload_w2(&w);
             g.upload_kan(&kan_c);
             let mut xs: Vec<Vec<f32>> = Vec::with_capacity(batch);
-            let mut errs: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut ts: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut xs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
-            let mut errs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut ts2: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut recv = rx;
             loop {
                 match recv.recv() {
-                    Ok((x, e, x2, e2)) => {
+                    Ok((x, t, x2, t2)) => {
                         xs.push(x);
-                        errs.push(e);
-                        if !x2.is_empty() && !e2.is_empty() {
+                        ts.push(t);
+                        if !x2.is_empty() && !t2.is_empty() {
                             xs2.push(x2);
-                            errs2.push(e2);
+                            ts2.push(t2);
                         }
                         if xs.len() >= batch {
-                            g.batch_delta(&xs, &errs, lr_w);
-                            g.kan_batch_delta(&xs, &errs, lr_kan);
-                            if !xs2.is_empty() {
-                                g.batch_delta2(&xs2, &errs2, lr_patch);
+                            // Честный LMS: err = t − W·x на GPU, затем W+KAN-дельты.
+                            for (xi, ti) in xs.iter().zip(ts.iter()) {
+                                g.hybrid_step(xi, ti, lr_w, lr_kan);
+                            }
+                            for (xi, ti) in xs2.iter().zip(ts2.iter()) {
+                                g.hybrid_step2(xi, ti, lr_patch);
                             }
                             applied += xs.len();
                             xs.clear();
-                            errs.clear();
+                            ts.clear();
                             xs2.clear();
-                            errs2.clear();
+                            ts2.clear();
                             // Капы (как в learn_transition: CAP_EVERY≈50 → soft).
                             if applied / batch % 50 == 0 {
                                 g.cap_w(4.0);
@@ -273,10 +275,11 @@ fn main() {
                 }
             }
             if !xs.is_empty() {
-                g.batch_delta(&xs, &errs, lr_w);
-                g.kan_batch_delta(&xs, &errs, lr_kan);
-                if !xs2.is_empty() {
-                    g.batch_delta2(&xs2, &errs2, lr_patch);
+                for (xi, ti) in xs.iter().zip(ts.iter()) {
+                    g.hybrid_step(xi, ti, lr_w, lr_kan);
+                }
+                for (xi, ti) in xs2.iter().zip(ts2.iter()) {
+                    g.hybrid_step2(xi, ti, lr_patch);
                 }
                 applied += xs.len();
             }
@@ -285,28 +288,63 @@ fn main() {
             g.download_kan(&mut kan_c);
         }
         None => {
-            // CPU fallback: тот же Widrow-Hoff трёхканально (референс).
+            // CPU fallback: честный Widrow-Hoff (reĭенс) + KAN на остатке.
             let mut kan = fuga::ai::kan::KanTransition::new();
             let mut recv = rx;
-            while let Ok((x, e, x2, e2)) = recv.recv() {
+            while let Ok((x, t, x2, t2)) = recv.recv() {
+                // pred = W·x (линейный вклад)
+                let mut pred = vec![0.0f32; DIM];
                 for o in 0..DIM {
                     let row = o * DIM;
+                    let mut acc = 0.0f32;
                     for i in 0..DIM {
-                        w[row + i] += lr_w * e[o] * x[i];
-                        if !x2.is_empty() && !e2.is_empty() {
-                            w_patch[row + i] += lr_patch * e2[o] * x2[i];
+                        acc += w[row + i] * x[i];
+                    }
+                    pred[o] = acc;
+                }
+                for o in 0..DIM {
+                    let err = t[o] - pred[o];
+                    let row = o * DIM;
+                    for i in 0..DIM {
+                        w[row + i] += lr_w * err * x[i];
+                    }
+                }
+                // KAN на честном остатке t − W·x (как hybrid.learn_pair).
+                let xv = fuga::ai::latent_jepa::LatentVector { values: x.clone() };
+                let tv = fuga::ai::latent_jepa::LatentVector { values: t.clone() };
+                let pv = fuga::ai::latent_jepa::LatentVector { values: pred };
+                let mut res = fuga::ai::latent_jepa::LatentVector::zero();
+                for o in 0..DIM {
+                    res.values[o] = tv.values[o] - pv.values[o];
+                }
+                let rn = res
+                    .values
+                    .iter()
+                    .map(|v| v * v)
+                    .sum::<f32>()
+                    .sqrt()
+                    .max(1e-8);
+                for v in &mut res.values {
+                    *v /= rn;
+                }
+                kan.learn(&xv, &res, lr_kan);
+                kan.cap_outputs();
+                if !x2.is_empty() && !t2.is_empty() {
+                    for o in 0..DIM {
+                        let row = o * DIM;
+                        let mut acc = 0.0f32;
+                        for i in 0..DIM {
+                            acc += w_patch[row + i] * x2[i];
+                        }
+                        let err = t2[o] - acc;
+                        for i in 0..DIM {
+                            w_patch[row + i] += lr_patch * err * x2[i];
                         }
                     }
                 }
-                // KAN по байтовому каналу (x, e) — как kan_calib CPU-ветка.
-                let xv = fuga::ai::latent_jepa::LatentVector { values: x.clone() };
-                let tv = fuga::ai::latent_jepa::LatentVector { values: e.clone() };
-                kan.learn(&xv, &tv, lr_kan);
-                kan.cap_outputs();
                 applied += 1;
             }
             kan_c = kan.c.clone();
-            let _ = w_patch.clone();
         }
     }
 
