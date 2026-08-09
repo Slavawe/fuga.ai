@@ -82,6 +82,7 @@ fn main() {
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_else(|| b"fn main() {".to_vec());
     let ctxw: usize = arg(&args, "--ctx", 4);
+    let ckpt_every: usize = arg(&args, "--ckpt-every", 0);
 
     let t0 = Instant::now();
     // Гибридный оператор: W (внутри) + KAN. Учим напрямую на байт-шагах.
@@ -107,6 +108,27 @@ fn main() {
                 hyb.learn_pair(enc, win, next, lr_w, lr_kan);
                 steps += 1;
                 bytes_seen += 1;
+                // Периодический чкпоинт: переживает убийство/ребут (урок 09.08).
+                if ckpt_every > 0 && steps % ckpt_every == 0 {
+                    let cm = UnifiedMeta {
+                        steps: steps as u64,
+                        patch_steps: 0,
+                        ctx: ctxw as u32,
+                        version: 1,
+                    };
+                    let ckpt_path = format!("{}.ckpt.fuga", out_path);
+                    save_unified_with_kan(
+                        &ckpt_path,
+                        &hyb.w,
+                        &vec![0.0f32; 512 * 512],
+                        &vec![0.0f32; 512 * 512],
+                        &cm,
+                        None,
+                        Some(&hyb.kan.c),
+                    )
+                    .ok();
+                    eprintln!("  [ckpt] {} шагов -> {}", steps, ckpt_path);
+                }
                 if steps >= max_steps {
                     break 'outer;
                 }
