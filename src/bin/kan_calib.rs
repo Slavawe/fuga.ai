@@ -145,11 +145,8 @@ fn main() {
                             g.kan_batch_delta(&xs, &errs, lr);
                             applied += xs.len();
                             if applied % (batch * 50) == 0 {
-                                g.download_kan(&mut c);
-                                kan.c = c.clone();
-                                soft_cap_kan(&mut kan);
-                                c = kan.c.clone();
-                                g.upload_kan(&c);
+                                // Мягкий KAN-кап НА GPU — без download/upload цикла
+                                g.kan_cap_w(40.0);
                             }
                             xs.clear();
                             errs.clear();

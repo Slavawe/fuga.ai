@@ -114,6 +114,36 @@ fn kan_delta(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+// KAN-кап НА GPU (мягкий, как kan.rs после калибровки): один поток на строку
+// o (512 строк), считает норму всех 512×6=3072 коэфф строки и применяет
+// scale = sqrt(CAP/(CAP+sq)). Раньше кап шёл через download→CPU→upload
+// (6MB×2 per cap — узкое место конвейера); теперь во-врéмя на GPU.
+const KAN_CAP_SHADER: &str = r#"
+@group(0) @binding(0) var<storage, read_write> c: array<f32>;
+@group(0) @binding(1) var<storage, read>     cap: array<f32>;
+
+@compute @workgroup_size(64)
+fn kan_cap(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let o = gid.x;
+    if (o >= 512u) { return; }
+    var sq = 0.0;
+    for (var i = 0u; i < 512u; i = i + 1u) {
+        for (var k = 0u; k < 6u; k = k + 1u) {
+            let v = c[(o * 512u + i) * 6u + k];
+            sq += v * v;
+        }
+    }
+    let scale = sqrt(cap[0] / (cap[0] + sq));
+    if (abs(scale - 1.0) > 1e-6) {
+        for (var i = 0u; i < 512u; i = i + 1u) {
+            for (var k = 0u; k < 6u; k = k + 1u) {
+                c[(o * 512u + i) * 6u + k] *= scale;
+            }
+        }
+    }
+}
+"#;
+
 /// A minimal wgpu compute context for the Widrow-Hoff delta.
 /// Двухскоростной режим: два набора W-буферов (local W и patch W_patch) —
 /// оба используют ОДИН delta/cap-pipeline, но РАЗНЫЕ bind groups.
@@ -142,6 +172,8 @@ pub struct GpuOps {
     kan_staging: wgpu::Buffer,
     kan_pipeline: wgpu::ComputePipeline,
     kan_bind_group: wgpu::BindGroup,
+    kan_cap_pipeline: wgpu::ComputePipeline,
+    kan_cap_bind_group: wgpu::BindGroup,
 }
 
 /// Build the GPU context; `None` when Vulkan is unavailable (callers use CPU).
@@ -381,6 +413,35 @@ pub fn try_new() -> Option<GpuOps> {
         ],
     });
 
+    // KAN-cap pipeline: c + cap_buf (тот же cap_buf, что у W-cap).
+    let kan_cap_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("fuga-kan-cap"),
+        source: wgpu::ShaderSource::Wgsl(KAN_CAP_SHADER.into()),
+    });
+    let kan_cap_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("kan-cap"),
+        layout: None,
+        module: &kan_cap_module,
+        entry_point: Some("kan_cap"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let kan_cap_layout = kan_cap_pipeline.get_bind_group_layout(0);
+    let kan_cap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("kan-cap-bg"),
+        layout: &kan_cap_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: kan_c_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: cap_buf.as_entire_binding(),
+            },
+        ],
+    });
+
     Some(GpuOps {
         device,
         queue,
@@ -404,6 +465,8 @@ pub fn try_new() -> Option<GpuOps> {
         kan_staging,
         kan_pipeline,
         kan_bind_group,
+        kan_cap_pipeline,
+        kan_cap_bind_group,
     })
 }
 
@@ -683,6 +746,28 @@ impl GpuOps {
         }
         drop(data);
         self.kan_staging.unmap();
+    }
+
+    /// Мягкий KAN-кап НА GPU (как kan.rs после калибровки: scale=sqrt(CAP/(CAP+sq))).
+    /// Убирает download→CPU-cap→upload цикл (6MB×2 per cap) — узкое место.
+    pub fn kan_cap_w(&self, cap: f32) {
+        self.queue.write_buffer(&self.cap_buf, 0, bytes(&[cap]));
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("kan-cap-enc"),
+            });
+        {
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("kan-cap-pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.kan_cap_pipeline);
+            pass.set_bind_group(0, &self.kan_cap_bind_group, &[]);
+            pass.dispatch_workgroups(512 / 64 + 1, 1, 1);
+        }
+        self.queue.submit(Some(enc.finish()));
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 }
 
