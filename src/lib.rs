@@ -76,14 +76,14 @@ pub use weaver::{
 pub use sim::{Boiler, CubicController, Heater, Phase, Pipe, Valve};
 
 pub use ai::{
-    AIOutput, ActOptions, AgentBrain, AgentPaths, AgentTick, AnomalyDetector, AnomalyEvent,
+    AIOutput, AnomalyDetector, AnomalyEvent,
     AnomalyReflector, AnswerEngine, AnswerHit, AnswerResult, AttentionCell, CodegenResult,
-    CorrectionSignal, DecoderOut, DendriteSegment, DynamicRouter, Episode, ExpertConfig, FugaAI,
+    CorrectionSignal, DecoderOut, DendriteSegment, DynamicRouter, ExpertConfig, FugaAI,
     HierarchicalJEPA, JepaPredictor, LatentPredictor, LatentVector, MemoryEntry, MemoryStore,
-    MoEStore, Outcome, PainAvoidance,
-    PromptVectors, ResonanceAttention, SDR_DENSITY, SDR_DIM, SDR_WORDS, SafeOutcome, SdrIndex,
+    MoEStore,
+    PromptVectors, ResonanceAttention, SDR_DENSITY, SDR_DIM, SDR_WORDS, SdrIndex,
     SdrStore, SdrVector, StyloProfile, Synapse, TargetExpert, TemporalCell, TemporalMemory,
-    ThinkOutcome, act_and_observe, act_and_observe_at, logit_lens,
+    logit_lens,
     crystal::{
         ANCHOR_FLOOR, ANCHOR_RESONANCE_MIN, ANCHOR_TOTAL_MIN, ANCHOR_WEIGHT_FACT,
         ANCHOR_WEIGHT_INTENT, ANCHOR_WEIGHT_LOGIC, CrystalEntry, CrystalHit, DEFAULT_DIM,
@@ -91,8 +91,7 @@ pub use ai::{
         L2_THRESHOLD_SCALE, PhaseCrystal, QueryConfig, ReasoningFoundations, bind_phase,
         dim_for_kind, fnv1a, permute_phase, project_phase,
     },
-    domain_sdr, encode_text, generate_code, generate_safe, inject_noise_sdr, observe,
-    byte_basis, encode_bytes_sdr,
+    domain_sdr, encode_text, byte_basis, encode_bytes_sdr,
     self_mirror::{
         AutoCorrectEngine, AutoCorrectSuggestion, InspectReport, PhaseNode, RawChunk, SelfMirror,
     },

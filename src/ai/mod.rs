@@ -1,7 +1,5 @@
-pub mod agent;
 pub mod anomaly;
 pub mod answer_engine;
-pub mod autonomous_mind;
 pub mod byte_lstm;
 pub mod gpu_ops;
 pub mod codegen;
@@ -11,31 +9,21 @@ pub mod hierarchical_jepa;
 pub mod hnsw;
 pub mod hopfield;
 pub mod htm_temporal;
+pub mod hybrid;
 pub mod jepa;
 pub mod kan;
-pub mod hybrid;
+pub mod latent_jepa;
 pub mod memory_store;
 pub mod moe;
-pub mod mentalese;
-pub mod latent_jepa;
 pub mod personas;
-pub mod predictive_coder;
 pub mod prompts;
 pub mod resonance_attention;
 pub mod router;
 pub mod sdr;
 pub mod sdr_store;
-pub mod state_loader;
-pub mod unified_mind;
-pub mod unity_mind;
 pub mod wave_mesh;
 pub mod world;
 
-pub use agent::{
-    ActOptions, AgentBrain, AgentPaths, AgentTick, Episode, Outcome, PainAvoidance,
-    PredictiveAgentTick, SafeOutcome, ThinkOutcome, act_and_observe, act_and_observe_at,
-    act_and_observe_with_prediction, generate_code, generate_safe, inject_noise_sdr, observe,
-};
 pub use answer_engine::{AnswerEngine, AnswerHit, AnswerResult};
 pub use codegen::CodegenResult;
 pub use core::{AIOutput, FugaAI};
@@ -64,7 +52,6 @@ pub mod transpile;
 pub use anomaly::{
     AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,
 };
-pub use autonomous_mind::{AutonomousMind, MindPaths};
 pub use crystal::{
     ANCHOR_FLOOR, ANCHOR_RESONANCE_MIN, ANCHOR_TOTAL_MIN, ANCHOR_WEIGHT_FACT, ANCHOR_WEIGHT_INTENT,
     ANCHOR_WEIGHT_LOGIC, CRYSTAL_MAGIC, CRYSTAL_VERSION, CrystalEntry, CrystalHit, DEFAULT_DIM,
@@ -72,14 +59,10 @@ pub use crystal::{
     L2_THRESHOLD_SCALE, PhaseCrystal, QueryConfig, ReasoningFoundations, bind_phase, dim_for_kind,
     fnv1a, permute_phase, project_phase,
 };
-pub use predictive_coder::PredictiveCoder;
-pub use state_loader::{MindState, MindStateLoader};
 pub use transpile::{
     CONCEPT_L0, CONCEPT_L1, CONCEPT_L2, Dtype, ROUTE_CAP, ShardSource, StTensor,
     TranspileAccumulator, TranspileConfig, TranspileStats, WeightSketch, binarize_tensor,
     hf_resolve_url, kind_for_name, list_hf_shards, parse_safetensors_header, transpile_shard,
 };
-pub use unified_mind::{UnifiedMind, UnifiedResult};
-pub use unity_mind::UnityMind;
 
 pub mod soft_sdr;
