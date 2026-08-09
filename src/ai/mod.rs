@@ -13,6 +13,7 @@ pub mod hopfield;
 pub mod htm_temporal;
 pub mod jepa;
 pub mod kan;
+pub mod hybrid;
 pub mod memory_store;
 pub mod moe;
 pub mod mentalese;

@@ -20,7 +20,7 @@ fn main() {
     save_unified(&path, &local_w, &patch_w, &owm_p, &meta, None).expect("save");
     println!("wrote {} ({} bytes)", path, n * 3 * 4 + 64);
     // Проверка на лету тем же Rust-кодом
-    if let Some((l, p, o, m, _)) = fuga::ai::htm_temporal::load_unified(&path) {
+    if let Some((l, p, o, m, _, _)) = fuga::ai::htm_temporal::load_unified(&path) {
         println!(
             "self-check: local[0]={:.4} patch[0]={:.4} owm[0]={:.4} steps={} (OWM diag=2.0)",
             l[0], p[0], o[0], m.steps

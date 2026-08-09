@@ -62,6 +62,58 @@ fn cap_w(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 "#;
 
+// KAN-delta: один поток на (o,i) — обновляет 2 активных сплайн-узла
+// по x[i]: c[o,i,k] += lr · err[o] · hat_k(x[i]).
+// Точное соответствие kan.rs: hat(k) — треугольник на [GRID[k-1], GRID[k+1]]
+// с пиком 1.0 в GRID[k]; k0 = сегмент слева от xi (по умолчанию 0).
+const KAN_SHADER: &str = r#"
+@group(0) @binding(0) var<storage, read_write> c: array<f32>;
+@group(0) @binding(1) var<storage, read>     x: array<f32>;
+@group(0) @binding(2) var<storage, read>     err: array<f32>;
+@group(0) @binding(3) var<storage, read>     lr: array<f32>;
+
+fn grid(k: u32) -> f32 {
+    if (k == 0u) { return -1.0; }
+    if (k == 1u) { return -0.6; }
+    if (k == 2u) { return -0.2; }
+    if (k == 3u) { return 0.2; }
+    if (k == 4u) { return 0.6; }
+    return 1.0;
+}
+
+fn hat(k: u32, xi: f32) -> f32 {
+    let lo = grid(max(k, 1u) - 1u);
+    let hi = grid(min(k + 1u, 5u));
+    let xk = grid(k);
+    let span = hi - lo;
+    if (span <= 0.0) { return 0.0; }
+    if (xi < lo || xi > hi) { return 0.0; }
+    if (xi <= xk) {
+        return (xi - lo) / max(xk - lo, 1e-8);
+    } else {
+        return (hi - xi) / max(hi - xk, 1e-8);
+    }
+}
+
+@compute @workgroup_size(256)
+fn kan_delta(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if (idx >= 512u * 512u) { return; }
+    let o = idx / 512u;
+    let i = idx % 512u;
+    let xi = x[i];
+    var k0 = 0u;
+    for (var k = 1u; k < 6u; k = k + 1u) {
+        if (xi >= grid(k - 1u) && xi <= grid(k)) { k0 = k - 1u; break; }
+    }
+    let base = (o * 512u + i) * 6u;
+    c[base + k0] += lr[0] * err[o] * hat(k0, xi);
+    if (k0 + 1u < 6u) {
+        c[base + k0 + 1u] += lr[0] * err[o] * hat(k0 + 1u, xi);
+    }
+}
+"#;
+
 /// A minimal wgpu compute context for the Widrow-Hoff delta.
 /// Двухскоростной режим: два набора W-буферов (local W и patch W_patch) —
 /// оба используют ОДИН delta/cap-pipeline, но РАЗНЫЕ bind groups.
@@ -85,6 +137,11 @@ pub struct GpuOps {
     staging2: wgpu::Buffer,
     bind_group2: wgpu::BindGroup,
     cap_bind_group2: wgpu::BindGroup,
+    // KAN-набор: c[o,i,k] (512×512×6 f32) + свой pipeline/bind group.
+    kan_c_buf: wgpu::Buffer,
+    kan_staging: wgpu::Buffer,
+    kan_pipeline: wgpu::ComputePipeline,
+    kan_bind_group: wgpu::BindGroup,
 }
 
 /// Build the GPU context; `None` when Vulkan is unavailable (callers use CPU).
@@ -276,6 +333,54 @@ pub fn try_new() -> Option<GpuOps> {
         ],
     });
 
+    // --- KAN-набор: c[o,i,k] (512×512×6 f32) + pipeline + bind group ---
+    let kan_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("fuga-kan-delta"),
+        source: wgpu::ShaderSource::Wgsl(KAN_SHADER.into()),
+    });
+    let kan_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("kan-delta"),
+        layout: None,
+        module: &kan_mod,
+        entry_point: Some("kan_delta"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let kan_c_size = (DIM as usize * DIM as usize * 6 * 4) as u64;
+    let kan_c_buf = mk(
+        "kan_c",
+        kan_c_size,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    );
+    let kan_staging = mk(
+        "kan_staging",
+        kan_c_size,
+        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+    );
+    let kan_layout = kan_pipeline.get_bind_group_layout(0);
+    let kan_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("kan-bg"),
+        layout: &kan_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: kan_c_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: x_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: err_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: lr_buf.as_entire_binding(),
+            },
+        ],
+    });
+
     Some(GpuOps {
         device,
         queue,
@@ -295,6 +400,10 @@ pub fn try_new() -> Option<GpuOps> {
         staging2,
         bind_group2,
         cap_bind_group2,
+        kan_c_buf,
+        kan_staging,
+        kan_pipeline,
+        kan_bind_group,
     })
 }
 
@@ -506,6 +615,74 @@ impl GpuOps {
         }
         self.queue.submit(Some(enc.finish()));
         let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    // --- KAN: сплайн-обучение на GPU (c[o,i,k] += lr·err[o]·hat_k(x[i])) ---
+
+    /// Upload сплайн-коэффициенты c (DIM²×6 f32).
+    pub fn upload_kan(&self, c: &[f32]) {
+        self.queue.write_buffer(&self.kan_c_buf, 0, bytes(c));
+    }
+
+    /// Batched KAN-обновления: тот же x/err/lr, но пишем в c через kan_pipeline.
+    pub fn kan_batch_delta(&self, xs: &[Vec<f32>], errs: &[Vec<f32>], lr: f32) {
+        for (x, err) in xs.iter().zip(errs.iter()) {
+            self.queue.write_buffer(&self.x_buf, 0, bytes(x));
+            self.queue.write_buffer(&self.err_buf, 0, bytes(err));
+            self.queue.write_buffer(&self.lr_buf, 0, bytes(&[lr]));
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("kan-batch-enc"),
+                });
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("kan-batch-pass"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.kan_pipeline);
+                pass.set_bind_group(0, &self.kan_bind_group, &[]);
+                pass.dispatch_workgroups(DIM * DIM / 256, 1, 1);
+            }
+            self.queue.submit(Some(enc.finish()));
+        }
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Dump сплайн-коэффициенты обратно (blocking, DIM²×6 f32).
+    pub fn download_kan(&self, out: &mut [f32]) {
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("kan-download"),
+            });
+        enc.copy_buffer_to_buffer(&self.kan_c_buf, 0, &self.kan_staging, 0, self.kan_staging.size());
+        self.queue.submit(Some(enc.finish()));
+        loop {
+            match self.device.poll(wgpu::PollType::Poll) {
+                Ok(_) => break,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        }
+        let slice = self.kan_staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        loop {
+            if rx.try_recv().is_ok() {
+                break;
+            }
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
+        let data = slice.get_mapped_range().expect("mapped range");
+        let n = (DIM as usize) * (DIM as usize) * 6;
+        for i in 0..n {
+            out[i] = bytemuck::from_bytes::<f32>(&data[i * 4..i * 4 + 4]);
+        }
+        drop(data);
+        self.kan_staging.unmap();
     }
 }
 
