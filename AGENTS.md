@@ -222,3 +222,20 @@
   unified_roundtrip_cpp.rs (Rust пишет, self-check), unify_check.cpp (C++
   читает Rust-файл). Кросс-проверка: OWM diag=2.0, patch=-0.5, steps=777 —
   бит-в-бит в обе стороны. Rust lib 130/130.
+
+## Сессия 09.08 (продолжение): Двухканальный CPU/GPU конвейер (two-speed на GPU)
+- **GpuOps расширен**: второй W-буфер (w2_buf/x2_buf/err2_buf/staging2) + delta/cap
+  bind groups для W_patch — ОДИН delta/cap-pipeline, два набора W (local + patch).
+  Методы: upload_w2/download_w2/batch_delta2/cap_w2.
+- **gpu_train.rs — двухскоростной конвейер**: CPU-поток готовит ДВЕ пары на шаг
+  (local: окно байт→байт, patch: окно патчей→патч как learn_patch), GPU применяет
+  оба Widrow-Hoff батчами; cap каждые 50×batch (cap_w + cap_w2).
+- **Многокорпусность**: --jsonl "a.jsonl,b.jsonl" (7 корпусов одним прогоном).
+- **Сохранение**: единый FUGA1 с ОБЕИМИ W (save_unified напрямую) + sidecar FBW1.
+  Исправлено: при --out .fuga FBW1 не перезаписывает FUGA1 (sidecar всегда _w.bin).
+- **Честное A/B** (60K, двухканально): GPU 2287 vs CPU-only 2082 pairs/s (~×1.10).
+  Выигрыш ниже, чем одноканальный ×1.65 — при двухканальном узкое место
+  encode (CPU готовит 2 пары/шаг), Widrow-Hoff на GPU почти бесплатен — как в
+  однооператорном диагнозе (GPU util 30-35%).
+- Полный прогон 10M на 7 корпусах (fuga_talk_gpu.fuga) — растёт двухканально.
+- lib 131/131; верификация AD-HOC (gpu2_verify): build+smoke+FUGA1-структура OK.

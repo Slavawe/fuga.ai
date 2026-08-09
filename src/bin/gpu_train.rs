@@ -12,7 +12,7 @@
 //     это конвейерный прототип для замера CPU/GPU нагрузки и скорости.
 //   - В конце W скачивается и сохраняется в FBW1 (bin-совместим с Rust).
 //
-// Usage: gpu_train --jsonl corpus.jsonl [--max-steps 300000]
+// Usage: gpu_train --jsonl "corpus.jsonl,corpus2.jsonl" [--max-steps 300000]
 //                  [--batch 512] [--out /tmp/gpu_w.bin] [--no-gpu]
 use std::io::BufRead;
 use std::path::Path;
@@ -99,7 +99,9 @@ fn main() {
     // ОГРАНИЧЕННЫЙ канал: backpressure! CPU ждёт свободный слот, пока GPU
     // не применит пачку. Иначе CPU уезжает вперёд на 6GB+ и(OOM — баг №2)
     // и это не конвейер. sync_channel(batch*4) = двойная буферизация.
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(Vec<f32>, Vec<f32>)>(batch * 4);
+    // Пары двухскоростные: (x_local, err_local, x_patch, err_patch).
+    type Pair4 = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Pair4>(batch * 4);
     let stop = std::sync::Arc::new(AtomicBool::new(false));
 
     // --- Поток CPU: читать JSONL, готовить (x, err) пары ---
@@ -109,44 +111,70 @@ fn main() {
         let enc = enc.clone();
         let byte_cache = byte_cache.clone();
         std::thread::spawn(move || {
-            let path = std::path::Path::new(&corpus);
-            if !path.exists() {
-                eprintln!("corpus missing: {}", corpus);
-                return 0usize;
-            }
-            let f = std::fs::File::open(path).unwrap();
-            let reader = std::io::BufReader::new(f);
+            let corpora: Vec<String> = corpus
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             let mut steps = 0usize;
-            'outer: for line in reader.lines() {
-                let line = match line {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
-                if line.trim().is_empty() {
+            'outer: for corpus_file in &corpora {
+                let path = std::path::Path::new(corpus_file);
+                if !path.exists() {
+                    eprintln!("corpus missing: {}", corpus_file);
                     continue;
                 }
-                let data = extract_bytes(&line);
-                if data.len() < 2 {
-                    continue;
-                }
-                for i in 0..data.len().saturating_sub(1) {
-                    if stop.load(Ordering::Relaxed) {
-                        break 'outer;
+                let f = std::fs::File::open(path).unwrap();
+                let reader = std::io::BufReader::new(f);
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(l) => l,
+                        Err(_) => continue,
+                    };
+                    if line.trim().is_empty() {
+                        continue;
                     }
-                    let win_lo = i.saturating_sub(ctxw);
-                    let win: &[u8] = &data[win_lo..=i];
-                    let nxt = data[i + 1];
-                    let win_sdrs: Vec<fuga::SdrVector> =
-                        win.iter().map(|&c| byte_cache[c as usize].clone()).collect();
-                    let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
-                    let t = enc.encode(&byte_cache[nxt as usize]);
-                    let err: Vec<f32> = t.values.clone(); // pred≈0 (W=0 init)
-                    if tx.send((x.values, err)).is_err() {
-                        break 'outer;
+                    let data = extract_bytes(&line);
+                    if data.len() < 2 {
+                        continue;
                     }
-                    steps += 1;
-                    if steps >= max_steps {
-                        break 'outer;
+                    for i in 0..data.len().saturating_sub(1) {
+                        if stop.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
+                        let win_lo = i.saturating_sub(ctxw);
+                        let win: &[u8] = &data[win_lo..=i];
+                        let nxt = data[i + 1];
+                        let win_sdrs: Vec<fuga::SdrVector> = win
+                            .iter()
+                            .map(|&c| byte_cache[c as usize].clone())
+                            .collect();
+                        let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
+                        let t = enc.encode(&byte_cache[nxt as usize]);
+                        let err: Vec<f32> = t.values.clone(); // pred≈0 (W=0 init)
+                        // Двухскоростной (патчевый) канал: окно патчей → следующий патч
+                        let mut x2 = Vec::new();
+                        let mut err2 = Vec::new();
+                        if i >= 2 {
+                            let pat_window = &data[i - 2..=i];
+                            let pats: Vec<&[u8]> = pat_window.chunks(2).collect();
+                            let next_patch = &data[i + 1..(i + 3).min(data.len())];
+                            let mut win_patch_sdrs: Vec<fuga::SdrVector> =
+                                pats.iter().map(|p| encode_bytes_sdr(p)).collect();
+                            if win_patch_sdrs.len() < 2 {
+                                win_patch_sdrs.push(win_patch_sdrs[0].clone());
+                            }
+                            let xs = enc.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
+                            let ts = enc.encode(&encode_bytes_sdr(next_patch));
+                            x2 = xs.values.clone();
+                            err2 = ts.values.clone(); // pred = 0 → err = target
+                        }
+                        if tx.send((x.values, err, x2, err2)).is_err() {
+                            break 'outer;
+                        }
+                        steps += 1;
+                        if steps >= max_steps {
+                            break 'outer;
+                        }
                     }
                 }
             }
@@ -157,28 +185,42 @@ fn main() {
     // --- Основной поток: GPU применяет пары пачками (или CPU, если --no-gpu) ---
     let gpu = if use_gpu { fuga::ai::gpu_ops::try_new() } else { None };
     let mut w = vec![0.0f32; DIM * DIM];
+    let mut w_patch: Vec<f32> = vec![0.0f32; DIM * DIM];
     let mut applied: usize = 0;
     let t0 = Instant::now();
 
     match &gpu {
         Some(g) => {
             g.upload_w(&w);
+            g.upload_w2(&w);
             let mut xs: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut errs: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut xs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut errs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut recv = rx;
             loop {
                 match recv.recv() {
-                    Ok((x, e)) => {
+                    Ok((x, e, x2, e2)) => {
                         xs.push(x);
                         errs.push(e);
+                        if !x2.is_empty() && !e2.is_empty() {
+                            xs2.push(x2);
+                            errs2.push(e2);
+                        }
                         if xs.len() >= batch {
                             g.batch_delta(&xs, &errs, lr);
+                            if !xs2.is_empty() {
+                                g.batch_delta2(&xs2, &errs2, lr);
+                            }
                             applied += xs.len();
                             xs.clear();
                             errs.clear();
+                            xs2.clear();
+                            errs2.clear();
                             // Cap как в Rust learn_transition (CAP_EVERY≈50 дельт → ROW_NORM_CAP²=4)
                             if applied / batch % 50 == 0 {
                                 g.cap_w(4.0);
+                                g.cap_w2(4.0);
                             }
                             if applied % (batch * 8) == 0 {
                                 eprintln!("  [gpu] applied {} pairs", applied);
@@ -190,18 +232,28 @@ fn main() {
             }
             if !xs.is_empty() {
                 g.batch_delta(&xs, &errs, lr);
+                if !xs2.is_empty() {
+                    g.batch_delta2(&xs2, &errs2, lr);
+                }
                 applied += xs.len();
             }
             g.download_w(&mut w);
+            let mut w2 = vec![0.0f32; DIM * DIM];
+            g.download_w2(&mut w2);
+            // Записать W_patch в TM для единого формата (FUGA1 хранит обе)
+            w_patch = w2;
         }
         None => {
             let mut recv = rx;
-            while let Ok((x, e)) = recv.recv() {
+            while let Ok((x, e, x2, e2)) = recv.recv() {
                 // CPU fallback: тот же Widrow-Hoff, но построчно (референс)
                 for o in 0..DIM {
                     let row = o * DIM;
                     for i in 0..DIM {
                         w[row + i] += lr * e[o] * x[i];
+                        if !x2.is_empty() && !e2.is_empty() {
+                            w_patch[row + i] += lr * e2[o] * x2[i];
+                        }
                     }
                 }
                 applied += 1;
@@ -213,18 +265,48 @@ fn main() {
     let cpu_steps = cpu_handle.join().unwrap_or(0);
     let el = t0.elapsed().as_secs_f64();
 
-    // --- Сохранить W в FBW1 и единый FUGA1 формат ---
+    // --- Сохранить W и W_patch в единый FUGA1 формат ---
     let mut tm = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
     tm.apply_byte_w(w.clone());
-    tm.save_byte_w(&out_path).ok();
-    let fuga1_path = if out_path.ends_with(".bin") {
+    let mut tm2 = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
+    tm2.apply_byte_w(w_patch.clone());
+    // Save sidecar (FBW1 local W) + unified FUGA1 (обе W через save-структуру).
+    // Sidecar всегда .bin — иначе при --out .fuga FBW1 перезапишет FUGA1.
+    let side_path = if out_path.ends_with(".fuga") || out_path.ends_with(".bin") {
+        format!("{}_w.bin", out_path.trim_end_matches(".fuga").trim_end_matches(".bin"))
+    } else {
+        format!("{}.bin", out_path)
+    };
+    tm.save_byte_w(&side_path).ok();
+    let fuga1_path = if out_path.ends_with(".fuga") {
+        out_path.clone()
+    } else if out_path.ends_with(".bin") {
         out_path.replace(".bin", ".fuga")
     } else {
         format!("{}.fuga", out_path)
     };
-    tm.save_unified_fuga1(&fuga1_path).ok();
-    println!("=== GPU/CPU PIPELINE COMPLETE ===");
-    println!("  cpu_prepared={} gpu_applied={} in {:.1}s", cpu_steps, applied, el);
-    println!("  throughput: {:.0} pairs/s", applied as f64 / el);
-    println!("  saved W -> {} and FUGA1 -> {}", out_path, fuga1_path);
+    // У TM нет public patch-setter — пишем единный формат напрямую, чтобы
+    // FUGA1 нёс обе W (как учит full_byte_train: local + patch).
+    let meta = fuga::ai::htm_temporal::UnifiedMeta {
+        steps: applied as u64,
+        patch_steps: applied as u64,
+        ctx: ctxw as u32,
+        version: 1,
+    };
+    fuga::ai::htm_temporal::save_unified(
+        &fuga1_path,
+        &w,
+        &w_patch,
+        &tm.predictor().p,
+        &meta,
+        None,
+    )
+    .ok();
+    println!("=== GPU/CPU PIPELINE COMPLETE ===\n  cpu_prepared={} gpu_applied={} in {:.1}s", cpu_steps, applied, el);
+    println!("  throughput: {:.0} pairs/s (local + patch двухканально)", applied as f64 / el);
+    println!(
+        "  saved local W -> {} / unified (W+W_patch+OWM-P) -> {}",
+        side_path, fuga1_path
+    );
+    let _ = tm2;
 }
