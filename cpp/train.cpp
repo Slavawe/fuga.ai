@@ -225,12 +225,28 @@ int main(int argc, char **argv) {
     int consolidated = local.consolidate_owm(dirs, 4, 0.9f);
     std::cout << "  [diag] OWM consolidated=" << consolidated << " (порт проверен)\n";
 
-    // Save FBAR sidecar(s)
-    save_byte_w(out_path, local.w);
-    std::string patch_path = out_path.substr(0, out_path.size() - 4) + "_patch.bin";
-    save_byte_w(patch_path, patch.w);
-    std::cout << "saved local W -> " << out_path << "\n";
-    std::cout << "saved patch W -> " << patch_path << "\n";
+    // ЕДИНЫЙ ФОРМАТ: один файл — локальный W + патчевый W + OWM-P + META.
+    // (FUGA1, bin-совместим с Rust save_unified/load_unified.)
+    UnifiedMeta meta;
+    meta.steps = local.updates;
+    meta.patch_steps = patch.updates;
+    meta.ctx = (uint32_t)ctx;
+    meta.version = 1;
+    std::vector<float> owm_p;
+    if (consolidated > 0) {
+        owm_p = local.p; // OWM-проектор после консолидации
+    } else {
+        // identity-проектор: единый формат всегда несёт OWM-P
+        owm_p.assign(LATENT_DIM * LATENT_DIM, 0.0f);
+        for (int i = 0; i < LATENT_DIM; ++i) owm_p[i * LATENT_DIM + i] = 1.0f;
+    }
+    if (save_unified(out_path, local.w, patch.w, owm_p, meta)) {
+        std::cout << "saved unified FUGA1 -> " << out_path << "\n";
+    } else {
+        std::cout << "ERROR: unified save failed -> " << out_path << "\n";
+        return 1;
+    }
+    std::cout << "  unified size: " << (local.w.size() * 4 * 3 + 64) / 1024 << " KB (3 секции: W, W_patch, OWM-P)\n";
 
     return 0;
 }

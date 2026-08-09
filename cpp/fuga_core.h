@@ -512,6 +512,140 @@ inline std::vector<float> load_byte_w(const std::string &path) {
     return w;
 }
 
+// ---------------------------------------------------------------------------
+// ЕДИНЫЙ ФОРМАТ FUGA1 — один файл, разные обучения.
+//
+// Структура: MAGIC "FUGA1" + последовательность секций
+//   [u32 tag][u32 len][len байт]
+//   tag=1 LOCAL_W  f32[LATENT²]  локальный байтовый W (главный путь)
+//   tag=2 PATCH_W  f32[LATENT²]  патчевый W_patch (two-speed)
+//   tag=3 OWM_P    f32[LATENT²]  OWM-проектор
+//   tag=4 META     u64 steps | u64 patch_steps | u32 ctx | u32 version
+//   tag=5 HJEPA    f32[3*LATENT²] веса L0/L1/L2 (опционально)
+//   tag=0 END
+// C++ и Rust читают/пишут ОДИН формат (bin-совместим).
+// ---------------------------------------------------------------------------
+enum UnifiedTag : uint32_t {
+    TAG_END = 0,
+    TAG_LOCAL_W = 1,
+    TAG_PATCH_W = 2,
+    TAG_OWM_P = 3,
+    TAG_META = 4,
+    TAG_HJEPA = 5,
+};
+
+inline constexpr const char *UNIFIED_MAGIC = "FUGA1";
+
+struct UnifiedMeta {
+    uint64_t steps = 0;
+    uint64_t patch_steps = 0;
+    uint32_t ctx = 4;
+    uint32_t version = 1;
+};
+
+// Записать секцию [tag][len][data] (маленькая-endian)
+inline void write_u32(std::ofstream &f, uint32_t v) { f.write(reinterpret_cast<const char *>(&v), 4); }
+inline void write_u64(std::ofstream &f, uint64_t v) { f.write(reinterpret_cast<const char *>(&v), 8); }
+inline void write_section(std::ofstream &f, uint32_t tag, const std::vector<float> &vals) {
+    write_u32(f, tag);
+    write_u32(f, static_cast<uint32_t>(vals.size() * 4));
+    for (float v : vals) {
+        uint32_t bits;
+        std::memcpy(&bits, &v, 4);
+        f.write(reinterpret_cast<const char *>(&bits), 4);
+    }
+}
+
+// Единый чекпоинт: локальный W + патчевый W + OWM-P (+ HJEPA-веса опц.).
+// Возвращает false при ошибке записи.
+inline bool save_unified(const std::string &path,
+                         const std::vector<float> &local_w,
+                         const std::vector<float> &patch_w,
+                         const std::vector<float> &owm_p,
+                         const UnifiedMeta &meta,
+                         const std::vector<float> &hjepa_flat = {}) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(UNIFIED_MAGIC, 5);
+    write_section(f, TAG_LOCAL_W, local_w);
+    write_section(f, TAG_PATCH_W, patch_w);
+    write_section(f, TAG_OWM_P, owm_p);
+    // META: 16 байт + 8 байт = 24
+    write_u32(f, TAG_META);
+    write_u32(f, 24);
+    write_u64(f, meta.steps);
+    write_u64(f, meta.patch_steps);
+    write_u32(f, meta.ctx);
+    write_u32(f, meta.version);
+    if (!hjepa_flat.empty()) {
+        write_section(f, TAG_HJEPA, hjepa_flat);
+    }
+    write_u32(f, TAG_END);
+    write_u32(f, 0);
+    return f.good();
+}
+
+// Прочитать единый чекпоинт. Заполняет только найденные секции;
+// возвращает false если magic не FUGA1.
+inline bool load_unified(const std::string &path,
+                         std::vector<float> *local_w,
+                         std::vector<float> *patch_w,
+                         std::vector<float> *owm_p,
+                         UnifiedMeta *meta,
+                         std::vector<float> *hjepa_flat = nullptr) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) return false;
+    std::streamsize size = f.tellg();
+    f.seekg(0);
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    if (!f.read(reinterpret_cast<char *>(data.data()), size)) return false;
+    if (data.size() < 5 || std::memcmp(data.data(), UNIFIED_MAGIC, 5) != 0) return false;
+    size_t pos = 5;
+    auto rd32 = [&](size_t off) -> uint32_t {
+        uint32_t v; std::memcpy(&v, data.data() + off, 4); return v;
+    };
+    auto rd64 = [&](size_t off) -> uint64_t {
+        uint64_t v; std::memcpy(&v, data.data() + off, 8); return v;
+    };
+    while (pos + 8 <= data.size()) {
+        uint32_t tag = rd32(pos);
+        uint32_t len = rd32(pos + 4);
+        pos += 8;
+        if (pos + len > data.size()) break;
+        std::vector<float> vals;
+        if (tag == TAG_LOCAL_W || tag == TAG_PATCH_W || tag == TAG_OWM_P ||
+            tag == TAG_HJEPA) {
+            size_t n = len / 4;
+            vals.reserve(n);
+            for (size_t i = 0; i < n; ++i) {
+                uint32_t bits; std::memcpy(&bits, data.data() + pos + i * 4, 4);
+                float v; std::memcpy(&v, &bits, 4);
+                vals.push_back(v);
+            }
+        }
+        switch (tag) {
+            case TAG_LOCAL_W: if (local_w) *local_w = vals; break;
+            case TAG_PATCH_W: if (patch_w) *patch_w = vals; break;
+            case TAG_OWM_P: if (owm_p) *owm_p = vals; break;
+            case TAG_HJEPA: if (hjepa_flat) *hjepa_flat = vals; break;
+            case TAG_META:
+                if (meta && len >= 24) {
+                    meta->steps = rd64(pos);
+                    meta->patch_steps = rd64(pos + 8);
+                    meta->ctx = rd32(pos + 16);
+                    meta->version = rd32(pos + 20);
+                }
+                break;
+            case TAG_END:
+                return true;
+            default:
+                break;
+        }
+        pos += len;
+    }
+    return true;
+}
+
 } // namespace fuga
 
 #endif // FUGA_CORE_H

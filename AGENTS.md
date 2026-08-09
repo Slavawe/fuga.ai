@@ -53,7 +53,7 @@
 - Повторный прогон (06.08, без breaker, feed_learn corr): L2 EMA ~0.91 стабильно, resets 12/7466 = 0.16% — тот же порядок, разброс из-за недетерминизма (TM random).
 
 ## Незавершённые задачи (next steps)
-7. **Токенный словарь хардкодит пути (07.08, диагностировано на полном обучении)**: `build_token_vocab_from_files` (self_mirror.rs:710) использует `allowed_dirs = ["/home/slava/fuga/src/", "/home/slava/neural-engine/"]` — словарь строится ТОЛЬКО из этих путей, а не из индексированных файлов корпуса. При `generate-code "fn main" --tokens` на обученном корпусе: `Token vocab: 0 entries` → паника в htm_temporal.rs:249 (index out of bounds: len 1096, index 3699), EXIT=101. Фикс: строить словарь из `self.nodes[].path` (индексированные файлы) без фильтра allowed_dirs, либо принимать каталог-аргумент. PhaseNode-путь (`generate-code --gen` без --tokens) работает нормально.
+7. ~~**Токенный словарь хардкодит пути**~~ **ИСПРАВЛЕНО (08.08)**: `build_token_vocab_from_files` (self_mirror.rs:710) больше не использует `allowed_dirs` ограничение, токенизирует любые индексированные исходники и имеет фолбэк на `node.name` при отсутствии файлов на диске.
 8. **Полное обучение 2.1 (07.08)**: конвейер на corpus_doc_code_pairs.jsonl (7218 .rs) + corpus.jsonl (7 книг: Newton, Descartes, Euler): mirror-index 7218 файлов → train-predictor 20 эпох (avg_loss 1.0953, fuga_mirror_{jepa,tm,nodes}.bin) → crystal-learn-dir код (9346 чанков, 137299→146645) → тексты (16763 чанка, →163408 записей, fuga_code_crystal_full.bin 228MB). Верификация: 121/121 lib-тестов; crystal-query длинным запросом RESONANCE=0.382 (L1 route #9, `handle.0`); короткие запросы (2 токена) дают deterministic silence — порог 0.25 рассчитан на чанки по 30 слов (свойство VSA-блиндинга, не баг). Скрипт `full_train.sh` в корне (временный), логи в `train_logs/`, чекпоинты в `train_checkpoints/` (30GB — включая 21GB fuga_code_cube_mem.bin, копировать аккуратно).
 1. ~~**Закоммитить рабочие фиксы**~~ **СДЕЛАНО (06.08, коммит `7d4c4eb`)**: temporal_predictor.rs (corr ×4 + смоук), hierarchical_jepa.rs (1.15 ×2), circuit_breaker.rs (inspect+тесты), sdr.rs (stride-гвард), audit_l2.rs, AGENTS.md. В корне остался `fuga_new_files.zip` (неизвестного происхождения, не код — решить судьбу).
 2. ~~Осталные 3 места L2-таргета~~ **СДЕЛАНО (06.08)**: corr-фикс применён во всех 4 путях — `feed_learn` (170-173), `feed_learn_no_tm` (225-230), `feed_learn_ff` (271-276), `feed_learn_hv_only` (409-414). Смоук-тест `corr_target_smoke_all_feed_paths` покрывает все 4 (NaN/Inf + len=3).
@@ -184,3 +184,41 @@
   System Vector Protocol; «sorts an array» → lex=0.47 Z3+Rust Code Synthesis;
   «temporal memory» → lex=0.33 VSA Wave Memory (было: mutex.h/jemalloc шум).
   Функция уже отвечает содержимым памяти, а не шаблоном.
+
+## Сессия 08.08 (поздний вечер): Единый формат FUGA1 и фикс токенного словаря
+### 1. Объединение обучения C++ и Rust (`FUGA1` формат)
+- Выбран и утвержден главный путь: **Сквозное байтовое двухскоростное латентное обучение (Byte-Level Two-Speed LatentJEPA + H-JEPA + OWM)**.
+- Создан единый тегированный контейнер **`FUGA1`**: `TAG_LOCAL_W` (1), `TAG_PATCH_W` (2), `TAG_OWM_P` (3), `TAG_META` (4), `TAG_HJEPA` (5).
+- Реализована бинарно-совместимая сериализация/десериализация в C++ (`cpp/fuga_core.h`) и Rust (`src/ai/htm_temporal.rs`: `save_unified_fuga1`, `load_unified_fuga1`). `load_byte_w` автоматически поддерживает `.fuga` файлы.
+- Скрипты `full_byte_train.rs`, `gpu_train.rs`, `combined_decode.rs` и `py/train_cpp.py` переведены на поддержку единого формата `.fuga`.
+- Написан и пройден интеграционный тест `unified_fuga1_roundtrip`.
+
+### 2. Исправление бана словаря токенов (#7)
+- `build_token_vocab_from_files` в `src/ai/self_mirror.rs`: удалено ограничение `allowed_dirs`, добавлен фолбэк на `node.name` для индексированных внешних исходников.
+- Результат: `cargo test --lib` **131/131 PASS**.
+
+
+## Сессия 09.08: ЕДИНЫЙ ФОРМАТ FUGA1 + главный путь обучения (объединение C++/Rust)
+### ГЛАВНЫЙ ПУТЬ ОБУЧЕНИЯ (решение, аргументация)
+- **Выбран**: байтовый Widrow-Hoff (локальный W) + патчевый two-speed (W_patch),
+  с OWM-защитой. Это единый контур «двухскоростного обучения», которому
+  подчинены и CPU, и GPU (batch_delta = тот же Widrow-Hoff).
+- Почему НЕ остальные (честные A/B из AGENTS.md): entropy/BLT на этом пути
+  даёт 200 байт с морфемами (best); naive 2-3, recurrent 17, beam 13, KAN 1,
+  LSTM-peer 3. Формат уже bin-совместим (C++ и Rust реализуют один оператор).
+- H-JEPA/TM-клетки — вспомогательные уровни: H-JEPA — контент-коридор
+  (не конкурирует за главный путь), TM-клетки были источником OOM и тяжелы.
+  Их веса хранятся в едином файле как опциональные секции (TAG_HJEPA).
+### ФОРМАТ FUGA1 (один файл = разное обучение)
+- MAGIC "FUGA1" + секции [u32 tag][u32 len][байты]:
+  tag=1 LOCAL_W (512² f32), tag=2 PATCH_W (512²), tag=3 OWM_P (512²),
+  tag=4 META (u64 steps, u64 patch_steps, u32 ctx, u32 version),
+  tag=5 HJEPA (опц.), tag=0 END.
+- C++: fuga_core.h save_unified/load_unified; train пишет .fuga (3 секции).
+- Rust: htm_temporal.rs save_unified/load_unified (были в дереве) +
+  save_unified_fuga1/load_unified_fuga1 на TemporalMemory; full_byte_train,
+  gpu_train, combined_decode пишут/читают .fuga.
+- Стенды: unified_e2e.rs (C++→Rust читает и декодит entropy-BLT, 8 байт),
+  unified_roundtrip_cpp.rs (Rust пишет, self-check), unify_check.cpp (C++
+  читает Rust-файл). Кросс-проверка: OWM diag=2.0, patch=-0.5, steps=777 —
+  бит-в-бит в обе стороны. Rust lib 130/130.
