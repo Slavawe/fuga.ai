@@ -14,6 +14,8 @@
 //
 // Usage: gpu_train --jsonl "corpus.jsonl,corpus2.jsonl" [--max-steps 300000]
 //                  [--batch 512] [--out /tmp/gpu_w.bin] [--no-gpu]
+//                  [--ckpt-every 1000000] — периодический FUGA1-чекпоинт
+//                  (переживает перезагрузку: сейв идёт ПО ХОДУ, не в конце)
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::mpsc;
@@ -92,6 +94,7 @@ fn main() {
     let out_path: String = arg(&args, "--out", "/tmp/gpu_train_w.bin".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
     let ctxw: usize = arg(&args, "--ctx", 4);
+    let ckpt_every: usize = arg(&args, "--ckpt-every", 1_000_000);
 
     let enc = SdrEncoder::new(0x9E37_79B9_7F4A_7C15);
     let byte_cache: Vec<fuga::SdrVector> = (0..=255u8).map(byte_basis).collect();
@@ -187,6 +190,7 @@ fn main() {
     let mut w = vec![0.0f32; DIM * DIM];
     let mut w_patch: Vec<f32> = vec![0.0f32; DIM * DIM];
     let mut applied: usize = 0;
+    let mut next_ckpt: usize = ckpt_every;
     let t0 = Instant::now();
 
     match &gpu {
@@ -221,6 +225,35 @@ fn main() {
                             if applied / batch % 50 == 0 {
                                 g.cap_w(4.0);
                                 g.cap_w2(4.0);
+                            }
+                            // Периодический чкпоинт: переживает перезагрузку.
+                            if ckpt_every > 0 && applied >= next_ckpt {
+                                next_ckpt += ckpt_every;
+                                let mut cw = vec![0.0f32; DIM * DIM];
+                                g.download_w(&mut cw);
+                                let mut cw2 = vec![0.0f32; DIM * DIM];
+                                g.download_w2(&mut cw2);
+                                let cm = fuga::ai::htm_temporal::UnifiedMeta {
+                                    steps: applied as u64,
+                                    patch_steps: applied as u64,
+                                    ctx: ctxw as u32,
+                                    version: 1,
+                                };
+                                let mut ident_p = vec![0.0f32; DIM * DIM];
+                                for di in 0..DIM {
+                                    ident_p[di * DIM + di] = 1.0;
+                                }
+                                let ckpt_path = format!("{}.ckpt.fuga", out_path);
+                                fuga::ai::htm_temporal::save_unified(
+                                    &ckpt_path,
+                                    &cw,
+                                    &cw2,
+                                    &ident_p,
+                                    &cm,
+                                    None,
+                                )
+                                .ok();
+                                eprintln!("  [ckpt] {} пар -> {}", applied, ckpt_path);
                             }
                             if applied % (batch * 8) == 0 {
                                 eprintln!("  [gpu] applied {} pairs", applied);
