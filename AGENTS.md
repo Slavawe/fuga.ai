@@ -272,3 +272,15 @@
   W (512²×6=1.5M), per-pair submit+кап-даунлоад; оптимизация = отдельный
   kan_cap на GPU (todo).
 - lib 132/132 (новый hybrid тест). Прогон полный e2e (gpu_train --hybrid + tm_generate_hybrid) — следующий шаг.
+### Гибрид: полный контур (завершён 09.08)
+- hybrid_train.rs: W(частотные)+KAN(остаток) обучение → FUGA1 с KAN_C →
+  tm_generate_hybrid (W·x + α·KAN(x)). 8000 шагов: W 3Б / HYBRID 3Б (недоуч,
+  ожидаемо). Честные числа: 214 steps/s CPU (KAN 1.5M коэффициентов — самый
+  тяжёлый оператор), известный CPU-потолок; GPU-канал (kan_batch_delta) есть
+  но быстрее только с оптимизацией (-kan_cap на GPU + крупные пачки).
+- FUGA1 формат расширен TAG_KAN_C=6 (512²×6=1.5M f32 / 6.3MB секция) —
+  save_unified_with_kan / load_unified 6-кортеж; старые файлы без KAN → None.
+- Проверено: build OK, lib 132/132, hybrid 1/1, калibration FUGA1-структура
+  (LOCAL_W+PATCH_W+OWM_P+META+KAN_C+END), C++ не сломан.
+- Оставшееся (next): оптимизация GPU-KAN (кап-шейдер, крупные пачки),
+  большой прогон 20M+ для проверки генерации с гибридом.

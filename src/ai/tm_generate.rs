@@ -958,3 +958,82 @@ pub fn tm_generate_kan(
     }
     out
 }
+
+/// ГИБРИДНЫЙ байтовый декодер: pred = W·x + α·KAN(x) — линейный W держит
+/// частотные биграммы, сплайн KAN добавляет нелинейные структурные
+/// аттракторы (см. hybrid.rs). Ранжирование по cosine к 256 байт-латентам.
+pub fn tm_generate_hybrid(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    steps: usize,
+    window_size: usize,
+    alpha: f32,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let encoder = &tm.predictor().encoder;
+    let w = tm.predictor_w();
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            let lat = encoder.encode(&sdr);
+            (b as u8, lat)
+        })
+        .collect();
+
+    let start = seed_bytes.len().saturating_sub(window_size.max(1));
+    let mut window: Vec<u8> = seed_bytes[start..].to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+
+    while out.len() < steps && guard < steps * 2 {
+        guard += 1;
+        let window_sdrs: Vec<SdrVector> =
+            window.iter().map(|&b| crate::ai::sdr::byte_basis(b)).collect();
+        let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+        // W-часть: W·x (линейная, без норм. до смешивания)
+        let mut pred = crate::ai::latent_jepa::LatentVector::zero();
+        for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+            let mut acc = 0.0f32;
+            let row = o * crate::ai::latent_jepa::LATENT_DIM;
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                acc += w[row + i] * x.values[i];
+            }
+            pred.values[o] = acc;
+        }
+        // KAN-остаток (нормализованный сплайн)
+        let kan_out = kan.apply(&x);
+        for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+            pred.values[o] += alpha * kan_out.values[o];
+        }
+        let n = pred
+            .values
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt()
+            .max(1e-8);
+        for v in &mut pred.values {
+            *v /= n;
+        }
+
+        let mut best: Option<(f32, u8)> = None;
+        for (byte, lat) in byte_latents.iter() {
+            let score = pred.cosine_similarity(lat);
+            if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                best = Some((score, *byte));
+            }
+        }
+        let Some((_, byte)) = best else {
+            break;
+        };
+        if out.last() == Some(&byte) {
+            break;
+        }
+        out.push(byte);
+        window.push(byte);
+    }
+    out
+}
