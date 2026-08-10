@@ -80,7 +80,18 @@ fn main() {
     let batch: usize = arg(&args, "--batch", 256);
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_patch: f32 = arg(&args, "--lr-patch", 0.1);
-    let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.35); // явный вес Patch Loss
+    // v7 Patch Graph Curriculum: λ-старт 0.4 → экспоненциальное затухание к
+    // floor 0.10 (~1.5M). τ в шагах: λ(t) = floor + (start−floor)·exp(−t/τ).
+    let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.4); // стартовый вес Patch Loss
+    let lambda_floor: f32 = arg(&args, "--lambda-floor", 0.10);
+    let lambda_tau: f32 = arg(&args, "--lambda-tau", 1_000_000.0);
+    // v7 Curriculum: λ(t) = floor + (start−floor)·exp(−t/τ) — жёсткая сшивка
+    // соседних API-узлов в начале, мягкое кондиционирование к 1.5M.
+    let lambda_now = |applied: usize| {
+        let t = applied as f32;
+        let l = lambda_floor + (lambda_patch - lambda_floor) * (-t / lambda_tau).exp();
+        l.max(lambda_floor).min(lambda_patch)
+    };
     let lr_kan: f32 = arg(&args, "--lr-kan", 0.3);
     let out_path: String = arg(&args, "--out", "/tmp/unified_gpu.fuga".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
@@ -108,7 +119,7 @@ fn main() {
 
     // ОГРАНИЧЕННЫЙ канал (backpressure, sync_channel — урок OOM).
     // Трёхканальная пара: (x_local, err_local, x_patch, err_patch).
-    type Pair4 = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
+    type Pair4 = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>); // x, t, x2a, t2, x2b
     let (tx, rx) = mpsc::sync_channel::<Pair4>(batch * 4);
     let stop = Arc::new(AtomicBool::new(false));
     // Кольцевой буфер последних (x, t) пар для метрики остатка на чекпоинтах.
@@ -173,25 +184,39 @@ fn main() {
                         // lambda_patch (масштаб сходимости vs байтовый W).
                         let mut x2 = Vec::new();
                         let mut t2 = Vec::new();
+                        let mut x2b = Vec::new(); // перекрывающееся окно (сдвиг −1 патч)
                         let pp = (i + 1) / 2; // номер патча, в который входит data[i+1]
                         if i + 3 <= data.len() && pp >= 4 {
                             // последние 4 полных патча ДО целевого: pp-4 .. pp-1
                             let w0 = &data[(pp - 4) * 2..(pp - 3) * 2];
                             let w1 = &data[(pp - 3) * 2..(pp - 2) * 2];
-                            let w2 = &data[(pp - 2) * 2..(pp - 1) * 2];
+                            let w2p = &data[(pp - 2) * 2..(pp - 1) * 2];
                             let w3 = &data[(pp - 1) * 2..pp * 2];
                             let next_patch = &data[pp * 2..(pp + 1) * 2];
                             let win_patch_sdrs: Vec<fuga::SdrVector> =
-                                [w0, w1, w2, w3].iter().map(|p| encode_bytes_sdr(p)).collect();
+                                [w0, w1, w2p, w3].iter().map(|p| encode_bytes_sdr(p)).collect();
                             let xs = enc_patch.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
                             let ts = enc_patch.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();
                             t2 = ts.values.clone(); // сырой таргет патча
+                            // v7 УПЛОТНЕНИЕ: перекрывающееся окно со сдвигом −1 патч
+                            // (pp-5..pp-2 → pp) — насыщает АЛЬТЕРНАТИВНЫЕ рёбра
+                            // графа переходов (не только канонический путь).
+                            if pp >= 5 {
+                                let v0 = &data[(pp - 5) * 2..(pp - 4) * 2];
+                                let v1 = &data[(pp - 4) * 2..(pp - 3) * 2];
+                                let v2 = &data[(pp - 3) * 2..(pp - 2) * 2];
+                                let v3 = &data[(pp - 2) * 2..(pp - 1) * 2];
+                                let win2_sdrs: Vec<fuga::SdrVector> =
+                                    [v0, v1, v2, v3].iter().map(|p| encode_bytes_sdr(p)).collect();
+                                let xs2 = enc_patch.encode(&structure_sdr_from_sdrs(&win2_sdrs));
+                                x2b = xs2.values.clone();
+                            }
                         }
                         // Кольцевой буфер для метрики остатка (последние 512 пар).
                         let xv: Vec<f32> = x.values.clone();
                         let pv: Vec<f32> = t.values.clone();
-                        if tx.send((x.values, tv, x2, t2)).is_err() {
+                        if tx.send((x.values, tv, x2, t2, x2b)).is_err() {
                             break 'outer;
                         }
                         if let Ok(mut pb) = probe_buf.lock() {
@@ -233,15 +258,19 @@ fn main() {
             let mut ts: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut xs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut ts2: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut xs2b: Vec<Vec<f32>> = Vec::with_capacity(batch); // перекрывающиеся окна
             let mut recv = rx;
             loop {
                 match recv.recv() {
-                    Ok((x, t, x2, t2)) => {
+                    Ok((x, t, x2, t2, x2b)) => {
                         xs.push(x);
                         ts.push(t);
                         if !x2.is_empty() && !t2.is_empty() {
                             xs2.push(x2);
                             ts2.push(t2);
+                            if !x2b.is_empty() {
+                                xs2b.push(x2b.clone());
+                            }
                         }
                         if xs.len() >= batch {
                             // Честный LMS: err = t − W·x на GPU, затем W+KAN-дельты.
@@ -249,13 +278,22 @@ fn main() {
                                 g.hybrid_step(xi, ti, lr_w, lr_kan);
                             }
                             for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                                g.hybrid_step2(xi, ti, lr_patch * lambda_patch);
+                                g.hybrid_step2(xi, ti, lr_patch * lambda_now(applied));
+                            }
+                            // v7 УПЛОТНЕНИЕ: перекрывающиеся окна с половинным λ
+                            // (мягче, чтобы не перекачать W_patch на альт. рёбрах).
+                            let lam2 = lr_patch * lambda_now(applied) * 0.5;
+                            for xi in xs2b.iter() {
+                                if !ts2.is_empty() {
+                                    g.hybrid_step2(xi, &ts2[0], lam2);
+                                }
                             }
                             applied += xs.len();
                             xs.clear();
                             ts.clear();
                             xs2.clear();
                             ts2.clear();
+                            xs2b.clear();
                             // Капы (как в learn_transition: CAP_EVERY≈50 → soft).
                             if applied / batch % 50 == 0 {
                                 g.cap_w(4.0);
@@ -369,7 +407,7 @@ fn main() {
                     g.hybrid_step(xi, ti, lr_w, lr_kan);
                 }
                 for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                    g.hybrid_step2(xi, ti, lr_patch * lambda_patch);
+                    g.hybrid_step2(xi, ti, lr_patch * lambda_now(applied));
                 }
                 applied += xs.len();
             }
@@ -381,7 +419,7 @@ fn main() {
             // CPU fallback: честный Widrow-Hoff (reĭенс) + KAN на остатке.
             let mut kan = fuga::ai::kan::KanTransition::new();
             let mut recv = rx;
-            while let Ok((x, t, x2, t2)) = recv.recv() {
+            while let Ok((x, t, x2, t2, x2b)) = recv.recv() {
                 // pred = W·x (линейный вклад)
                 let mut pred = vec![0.0f32; DIM];
                 for o in 0..DIM {
@@ -428,7 +466,22 @@ fn main() {
                         }
                         let err = t2[o] - acc;
                         for i in 0..DIM {
-                            w_patch[row + i] += lr_patch * lambda_patch * err * x2[i];
+                            w_patch[row + i] += lr_patch * lambda_now(applied) * err * x2[i];
+                        }
+                    }
+                    // v7 УПЛОТНЕНИЕ: перекрывающееся окно (сдвиг −1) с половинным λ
+                    if !x2b.is_empty() && !t2.is_empty() {
+                        for o in 0..DIM {
+                            let row = o * DIM;
+                            let mut acc = 0.0f32;
+                            for i in 0..DIM {
+                                acc += w_patch[row + i] * x2b[i];
+                            }
+                            let err = t2[o] - acc;
+                            for i in 0..DIM {
+                                w_patch[row + i] +=
+                                    lr_patch * lambda_now(applied) * 0.5 * err * x2b[i];
+                            }
                         }
                     }
                 }
