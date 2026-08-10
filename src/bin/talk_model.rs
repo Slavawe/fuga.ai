@@ -132,27 +132,27 @@ fn main() {
         // иначе патчевый аттрактор «the red» перетягивает), rep_word=0.20
         // (словесный repetition penalty).
         let out_v2 = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
         );
         println!("  V2 (осн.)     ({} B): {:?}", out_v2.len(), String::from_utf8_lossy(&out_v2).chars().take(60).collect::<String>());
 
-        let out1 = tm_generate_latent_bytes(&tm, seed, 200, 5, None);
+        let out1 = tm_generate_latent_bytes(&tm, seed, 200, 9, None);
         println!("  naive byte  ({} B): {:?}", out1.len(), String::from_utf8_lossy(&out1).chars().take(60).collect::<String>());
 
         let out2 = tm_generate_two_speed(&tm, seed, 60, 2, &patch_vocab, None);
         println!("  two-speed   ({} B): {:?}", out2.len(), String::from_utf8_lossy(&out2).chars().take(60).collect::<String>());
 
-        let out3 = tm_generate_two_speed_entropy(&tm, seed, 200, 5, 0.60, &patch_vocab);
+        let out3 = tm_generate_two_speed_entropy(&tm, seed, 200, 9, 0.60, &patch_vocab);
         println!("  entropy-BLT ({} B): {:?}", out3.len(), String::from_utf8_lossy(&out3).chars().take(60).collect::<String>());
 
-        let out_mb = tm_generate_megabyte(&tm, seed, 200, 4, 2, &patch_vocab, 0.8);
+        let out_mb = tm_generate_megabyte(&tm, seed, 200, 8, 2, &patch_vocab, 0.8);
         println!("  MEGABYTE    ({} B): {:?}", out_mb.len(), String::from_utf8_lossy(&out_mb).chars().take(60).collect::<String>());
 
-        let out4 = tm_generate_recurrent(&tm, seed, 200, 5, 0.0, 0.9);
+        let out4 = tm_generate_recurrent(&tm, seed, 200, 9, 0.0, 0.9);
         println!("  recurrent   ({} B): {:?}", out4.len(), String::from_utf8_lossy(&out4).chars().take(60).collect::<String>());
 
         if kan.c.iter().any(|&v| v.abs() > 1e-6) {
-            let out5 = tm_generate_hybrid(&tm, &kan, seed, 200, 4, 1.0);
+            let out5 = tm_generate_hybrid(&tm, &kan, seed, 200, 8, 1.0);
             println!("  HYBRID      ({} B): {:?}", out5.len(), String::from_utf8_lossy(&out5).chars().take(60).collect::<String>());
         }
     }
