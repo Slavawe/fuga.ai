@@ -5,6 +5,7 @@
 // Usage: talk_model <checkpoint.fuga> [corpus1.jsonl ...]
 use fuga::ai::htm_temporal::TemporalMemory;
 use fuga::ai::sdr::encode_bytes_sdr;
+use fuga::tm_generate_megabyte;
 use fuga::tm_generate_two_speed;
 use fuga::tm_generate_two_speed_entropy;
 use fuga::tm_generate_hybrid;
@@ -99,6 +100,9 @@ fn main() {
 
         let out3 = tm_generate_two_speed_entropy(&tm, seed, 200, 4, 0.60, &patch_vocab);
         println!("  entropy-BLT ({} B): {:?}", out3.len(), String::from_utf8_lossy(&out3).chars().take(60).collect::<String>());
+
+        let out_mb = tm_generate_megabyte(&tm, seed, 200, 4, 2, &patch_vocab, 0.8);
+        println!("  MEGABYTE    ({} B): {:?}", out_mb.len(), String::from_utf8_lossy(&out_mb).chars().take(60).collect::<String>());
 
         let out4 = tm_generate_recurrent(&tm, seed, 200, 4, 0.0, 0.9);
         println!("  recurrent   ({} B): {:?}", out4.len(), String::from_utf8_lossy(&out4).chars().take(60).collect::<String>());

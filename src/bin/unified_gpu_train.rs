@@ -156,18 +156,19 @@ fn main() {
                         let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
                         let t = enc.encode(&byte_cache[nxt as usize]);
                         let tv: Vec<f32> = t.values.clone(); // сырой таргет; остаток считает GPU
-                        // Двухскоростной (патчевый) канал: окно патчей → следующий патч
+                        // СТРОГОЕ 2-байтовое патчевое окно (MegaByte-консистентность):
+                        // патчи не пересекаются, next_patch = следующий полный патч.
+                        // Условие: позиция i+1 — первый байт следующего патча (i нечётное
+                        // относительно начала строки) и есть полные 2 патча в окне.
                         let mut x2 = Vec::new();
                         let mut t2 = Vec::new();
-                        if i >= 2 {
-                            let pat_window = &data[i - 2..=i];
-                            let pats: Vec<&[u8]> = pat_window.chunks(2).collect();
-                            let next_patch = &data[i + 1..(i + 3).min(data.len())];
-                            let mut win_patch_sdrs: Vec<fuga::SdrVector> =
-                                pats.iter().map(|p| encode_bytes_sdr(p)).collect();
-                            if win_patch_sdrs.len() < 2 {
-                                win_patch_sdrs.push(win_patch_sdrs[0].clone());
-                            }
+                        let pp = (i + 1) / 2; // номер патча, в который входит data[i+1]
+                        if i % 2 == 1 && i + 3 <= data.len() && pp >= 2 {
+                            let w0 = &data[(pp - 2) * 2..(pp - 1) * 2];
+                            let w1 = &data[(pp - 1) * 2..pp * 2];
+                            let next_patch = &data[pp * 2..(pp + 1) * 2];
+                            let win_patch_sdrs: Vec<fuga::SdrVector> =
+                                [w0, w1].iter().map(|p| encode_bytes_sdr(p)).collect();
                             let xs = enc.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
                             let ts = enc.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();

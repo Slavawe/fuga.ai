@@ -905,6 +905,164 @@ pub fn learn_byte_kan(
     kan.cap_outputs();
 }
 
+/// MEGABYTE-порядок: патч решает ДО байтов, локальный W байты внутри.
+///
+/// Двухуровневый декодер в духе MegaByte:
+///   1. ГЛОБАЛЬНЫЙ уровень (W_patch, `predict_patch_latent`) по окну патчей
+///      предсказывает направление → выбирает top-N патчей-кандидатов из
+///      `patch_vocab` по cosine (патч = группа байт, решение концентрируется).
+///   2. ЛОКАЛЬНЫЙ уровень (байтовый W, `predict_bytes_latent`) по окну байт
+///      предсказывает NEXT-BYTE латент. Выбор байта: среди 256-алфавита
+///      НО с приором к выбранному патчу: байты, входящие в патч-кандидат,
+///      получают бонус cosine к предсказанному патчу. Так байт «разрешается»
+///      только внутри коридора, заданного глобальным оператором.
+///
+/// Это отличается от tm_generate_two_speed: там патч эмитится ЦЕЛИКОМ as-is
+/// (байты из словаря, локальный W не участвует). Здесь патч задаёт
+/// НАПРАВЛЕНИЕ (приор), а каждый байт внутри дополнительно фильтруется
+/// локальным байтовым W — порядок решения = патч, потом байт.
+///
+/// `patch_len` — размер патча (2 для двухбайтовых), `lambda` — сила приора
+/// к патчу (0.6–1.0): 0 = чистый локальный, 1 = жёсткий коридор патча.
+pub fn tm_generate_megabyte(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    lambda: f32,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let plen = patch_len.max(1);
+    let hard_gate = lambda >= 1.0;
+    // Полный алфавит: 256 raw байт.
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+                        let lat = tm.latent_of_sdr(&sdr);
+                        (b as u8, lat)
+                    })
+                    .collect();
+                // Только печатные байты (код/текст): ASCII printable + пробел/новые строки.
+    let printable = |b: u8| b == b'\n' || b == b'\t' || b == b'\r' || (0x20..=0x7e).contains(&b);
+
+
+    // Патч-кандидаты: предкодируем латенты один раз (замороженный энкодер).
+    let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .filter(|p| p.iter().all(|&b| printable(b)))
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = tm.latent_of_sdr(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    if patch_latents.is_empty() {
+        return Vec::new();
+    }
+
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+    let mut recent_patches: Vec<Vec<u8>> = Vec::new();
+    let no_repeat: usize = 2;
+
+    while out.len() < max_bytes && guard < max_bytes * 6 {
+        guard += 1;
+
+        // 1. Глобальный уровень: окно ПАТЧЕЙ → направление.
+        //    Строим окно из последних байт state, группируя по plen
+        //    (ровные патчи: игнорируем неполный хвост — он не информативен).
+        let start_p = state.len().saturating_sub(window_bytes.max(1) * 2 * plen);
+        let patch_state: Vec<u8> = state[start_p..].to_vec();
+        let mut window_patches: Vec<&[u8]> = Vec::new();
+        for chunk in patch_state.chunks(plen) {
+            if chunk.len() == plen {
+                window_patches.push(chunk);
+            }
+        }
+        if window_patches.is_empty() {
+            break;
+        }
+        let pred_patch = tm.predict_patch_latent(&window_patches);
+
+        // Top-N патчей по cosine к направлению (с no-repeat окном).
+        let mut cand: Vec<(f32, Vec<u8>)> = Vec::new();
+        for (patch, lat) in patch_latents.iter() {
+            if recent_patches.contains(patch) {
+                continue;
+            }
+            let score = pred_patch.cosine_similarity(lat);
+            if score < LATENT_MIN_COSINE {
+                continue;
+            }
+            cand.push((score, patch.clone()));
+        }
+        cand.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        cand.truncate(8);
+        if cand.is_empty() {
+            break;
+        }
+        // Топ-1 патч — главное направление (для приора).
+        let (top_score, top_patch) = &cand[0];
+        recent_patches.push(top_patch.clone());
+        if recent_patches.len() > no_repeat.max(1) {
+            recent_patches.remove(0);
+        }
+
+        // 2. Локальный уровень: окно БАЙТ → next-byte латент.
+        let start_b = state.len().saturating_sub(window_bytes.max(1));
+        let byte_window = &state[start_b..];
+        let pred_byte = tm.predict_bytes_latent(byte_window);
+
+        // 3. Выбор байта:
+        //    - hard_gate (λ>=1): байты ТОЛЬКО из топ-патча (жёсткий коридор);
+        //    - мягкий режим: все печатные байты, байты из патча получают бонус.
+        let mut best: Option<(f32, u8)> = None;
+        for (byte, lat) in byte_latents.iter() {
+            if !printable(*byte) {
+                continue;
+            }
+            let in_top_patch = top_patch.contains(byte);
+            if hard_gate && !in_top_patch {
+                continue; // жёсткий коридор
+            }
+            let mut score = pred_byte.cosine_similarity(lat);
+            if score < LATENT_MIN_COSINE {
+                continue;
+            }
+            if in_top_patch && lambda > 0.0 {
+                score += lambda * top_score.max(0.0);
+            } else if hard_gate {
+                // в жёстком режиме байт из патча: приор по умолчанию
+                score += top_score.max(0.0);
+            }
+            if best.as_ref().map_or(true, |(bc, _)| score > *bc) {
+                best = Some((score, *byte));
+            }
+        }
+        let (score, byte) = match best {
+            Some(b) => b,
+            None => break,
+        };
+        if score < LATENT_MIN_COSINE {
+            break;
+        }
+        if out.last() == Some(&byte) {
+            break; // анти-цикл
+        }
+        out.push(byte);
+        state.push(byte);
+        if state.len() > 4096 {
+            state.remove(0);
+        }
+    }
+    out
+}
+
 /// KAN-lite байтовый декодер: 256 cosine-кандидатов, оператор — KanTransition
 /// вместо линейного W. Гипотеза: нелинейный оператор разделит перемешанные
 /// аттракторы (e→r vs структурные), которые линейный W не может
