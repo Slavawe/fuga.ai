@@ -80,6 +80,7 @@ fn main() {
     let batch: usize = arg(&args, "--batch", 256);
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_patch: f32 = arg(&args, "--lr-patch", 0.1);
+    let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.35); // явный вес Patch Loss
     let lr_kan: f32 = arg(&args, "--lr-kan", 0.3);
     let out_path: String = arg(&args, "--out", "/tmp/unified_gpu.fuga".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
@@ -118,6 +119,7 @@ fn main() {
     let cpu_handle = {
         let stop = stop.clone();
         let ctxw = ctxw;
+        let lambda_patch = lambda_patch;
         let enc = enc.clone();
         let enc_patch = enc_patch.clone();
         let byte_cache = byte_cache.clone();
@@ -164,19 +166,23 @@ fn main() {
                         let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
                         let t = enc.encode(&byte_cache[nxt as usize]);
                         let tv: Vec<f32> = t.values.clone(); // сырой таргет; остаток считает GPU
-                        // СТРОГОЕ 2-байтовое патчевое окно (MegaByte-консистентность):
-                        // патчи не пересекаются, next_patch = следующий полный патч.
-                        // Условие: позиция i+1 — первый байт следующего патча (i нечётное
-                        // относительно начала строки) и есть полные 2 патча в окне.
+                        // v6: ПАТЧЕВОЕ ОКНО 1:1 С V2-ДЕКОДЕРОМ (последние 4 ПОЛНЫХ патча →
+                        // следующий полный патч), 100% градиентный поток
+                        // (БЕЗ условия i%2==1 — W_patch учится на КАЖДОМ шаге).
+                        // Явный Patch Loss: ||P_{t+1} − W_patch·x||² с весом
+                        // lambda_patch (масштаб сходимости vs байтовый W).
                         let mut x2 = Vec::new();
                         let mut t2 = Vec::new();
                         let pp = (i + 1) / 2; // номер патча, в который входит data[i+1]
-                        if i % 2 == 1 && i + 3 <= data.len() && pp >= 2 {
-                            let w0 = &data[(pp - 2) * 2..(pp - 1) * 2];
-                            let w1 = &data[(pp - 1) * 2..pp * 2];
+                        if i + 3 <= data.len() && pp >= 4 {
+                            // последние 4 полных патча ДО целевого: pp-4 .. pp-1
+                            let w0 = &data[(pp - 4) * 2..(pp - 3) * 2];
+                            let w1 = &data[(pp - 3) * 2..(pp - 2) * 2];
+                            let w2 = &data[(pp - 2) * 2..(pp - 1) * 2];
+                            let w3 = &data[(pp - 1) * 2..pp * 2];
                             let next_patch = &data[pp * 2..(pp + 1) * 2];
                             let win_patch_sdrs: Vec<fuga::SdrVector> =
-                                [w0, w1].iter().map(|p| encode_bytes_sdr(p)).collect();
+                                [w0, w1, w2, w3].iter().map(|p| encode_bytes_sdr(p)).collect();
                             let xs = enc_patch.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
                             let ts = enc_patch.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();
@@ -243,7 +249,7 @@ fn main() {
                                 g.hybrid_step(xi, ti, lr_w, lr_kan);
                             }
                             for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                                g.hybrid_step2(xi, ti, lr_patch);
+                                g.hybrid_step2(xi, ti, lr_patch * lambda_patch);
                             }
                             applied += xs.len();
                             xs.clear();
@@ -363,7 +369,7 @@ fn main() {
                     g.hybrid_step(xi, ti, lr_w, lr_kan);
                 }
                 for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                    g.hybrid_step2(xi, ti, lr_patch);
+                    g.hybrid_step2(xi, ti, lr_patch * lambda_patch);
                 }
                 applied += xs.len();
             }
@@ -422,7 +428,7 @@ fn main() {
                         }
                         let err = t2[o] - acc;
                         for i in 0..DIM {
-                            w_patch[row + i] += lr_patch * err * x2[i];
+                            w_patch[row + i] += lr_patch * lambda_patch * err * x2[i];
                         }
                     }
                 }
