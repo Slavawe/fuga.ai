@@ -378,8 +378,63 @@ fn main() {
         ctx: ctxw as u32,
         version: 2,
     };
+    {
+        let n1: f64 = w.iter().map(|x| (x*x) as f64).sum::<f64>().sqrt();
+        let n2: f64 = w_patch.iter().map(|x| (x*x) as f64).sum::<f64>().sqrt();
+        let s1: f64 = w.iter().take(64).map(|x| *x as f64).sum();
+        let s2: f64 = w_patch.iter().take(64).map(|x| *x as f64).sum();
+        println!("[diag] нормы перед save: local_W={:.3} patch_W={:.3} sum64={:.4}/{:.4}", n1, n2, s1, s2);
+    }
     save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, Some(&kan_c))
         .expect("save unified+kan");
+
+    // ТОЧЕЧНЫЙ ТЕСТ СЕРИАЛИЗАЦИИ (по пользовательской методике):
+    // бинарное равенство w_gpu_mem (в памяти) vs w_disk_mem (из файла).
+    {
+        let mut tm_chk = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
+        assert!(tm_chk.load_unified_fuga1(&out_path), "reload fail");
+        let disk = tm_chk.predictor_w();
+        let mut mse = 0.0f64;
+        let mut maxdiff = 0.0f64;
+        let mut neq = 0usize;
+        for i in 0..w.len() {
+            let d = (w[i] - disk[i]) as f64;
+            mse += d * d;
+            if d.abs() > maxdiff {
+                maxdiff = d.abs();
+            }
+            if w[i] != disk[i] {
+                neq += 1;
+            }
+        }
+        mse /= w.len() as f64;
+        println!(
+            "[SERIAL] local_W: MSE={:.3e} maxdiff={:.3e} несовпадающих={}/{} — {}",
+            mse,
+            maxdiff,
+            neq,
+            w.len(),
+            if neq == 0 { "БИНАРНО ИДЕНТИЧЕН" } else { "РАСХОЖДЕНИЕ" }
+        );
+        let disk_p = tm_chk.patch_predictor().w.clone();
+        let mut mse2 = 0.0f64;
+        let mut neq2 = 0usize;
+        for i in 0..w_patch.len() {
+            let d = (w_patch[i] - disk_p[i]) as f64;
+            mse2 += d * d;
+            if w_patch[i] != disk_p[i] {
+                neq2 += 1;
+            }
+        }
+        mse2 /= w_patch.len() as f64;
+        println!(
+            "[SERIAL] patch_W: MSE={:.3e} несовпадающих={}/{} — {}",
+            mse2,
+            neq2,
+            w_patch.len(),
+            if neq2 == 0 { "БИНАРНО ИДЕНТИЧЕН" } else { "РАСХОЖДЕНИЕ" }
+        );
+    }
     println!(
         "saved {} (LOCAL_W {} + PATCH_W {} + OWM_P {} + KAN_C {})",
         out_path,
@@ -415,6 +470,7 @@ fn main() {
             break;
         }
     }
+    println!("[diag] patch_vocab.size={}", patch_vocab.len());
     for (label, seed) in [("TEXT", &seed_text), ("CODE", &seed_code)] {
         println!(
             "\n--- {} SEED {:?} ---",
@@ -427,11 +483,20 @@ fn main() {
             o1.len(),
             String::from_utf8_lossy(&o1).chars().take(60).collect::<String>()
         );
-        let o2 = fuga::tm_generate_two_speed_entropy(&tm_d, seed, 200, 2, 0.60, &patch_vocab);
+        // РЕШАЮЩИЙ A/B: entropy на tm_d (identity patch) vs tm_reload (обученный patch).
+        let mut tm_reload = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
+        tm_reload.load_unified_fuga1(&out_path);
+        let o2a = fuga::tm_generate_two_speed_entropy(&tm_d, seed, 200, 2, 0.60, &patch_vocab);
         println!(
-            "  entropy-BLT ({} B): {:?}",
-            o2.len(),
-            String::from_utf8_lossy(&o2).chars().take(60).collect::<String>()
+            "  entropy-mem   ({} B): {:?}",
+            o2a.len(),
+            String::from_utf8_lossy(&o2a).chars().take(60).collect::<String>()
+        );
+        let o2b = fuga::tm_generate_two_speed_entropy(&tm_reload, seed, 200, 2, 0.60, &patch_vocab);
+        println!(
+            "  entropy-file  ({} B): {:?}",
+            o2b.len(),
+            String::from_utf8_lossy(&o2b).chars().take(60).collect::<String>()
         );
         let o3 = fuga::ai::tm_generate::tm_generate_hybrid(&tm_d, &kan_d, seed, 120, ctxw, 1.0);
         println!(

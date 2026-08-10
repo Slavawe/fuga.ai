@@ -171,7 +171,7 @@ impl TemporalMemory {
             context_len,
             step: 0,
             predictor: LatentPredictor::new(0xF03D_C0DE),
-            patch_predictor: LatentPredictor::new(0xBAC7_A5E0),
+            patch_predictor: LatentPredictor::new(0xF03D_C0DE), // единый энкодер-базис с байтовым каналом
             cell_index: std::collections::HashMap::new(),
         }
     }
@@ -929,7 +929,7 @@ impl TemporalMemory {
         // Two-speed GLOBAL patch operator. Written last; checkpoints saved
         // before the patch level end after P and fall back to a fresh
         // (identity) patch predictor.
-        let mut patch_predictor = LatentPredictor::new(0xBAC7_A5E0);
+        let mut patch_predictor = LatentPredictor::new(0xF03D_C0DE);
         if pos + 4 <= data.len() {
             let pwn = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?) as usize;
             pos += 4;
@@ -959,7 +959,7 @@ impl TemporalMemory {
                 }
             }
             if !pw.is_empty() {
-                patch_predictor = LatentPredictor::with_w(0xBAC7_A5E0, pw)
+                patch_predictor = LatentPredictor::with_w(0xF03D_C0DE, pw)
                     .with_updates(pupdates)
                     .with_p(pp);
             }
@@ -1005,7 +1005,7 @@ impl TemporalMemory {
             context_len,
             step: 0,
             predictor,
-            patch_predictor: LatentPredictor::new(0xBAC7_A5E0),
+            patch_predictor: LatentPredictor::new(0xF03D_C0DE), // единый энкодер-базис с байтовым каналом
             cell_index,
         }
     }
@@ -1101,6 +1101,14 @@ impl TemporalMemory {
     pub fn apply_byte_w(&mut self, w: Vec<f32>) {
         if w.len() == LATENT_DIM * LATENT_DIM {
             self.predictor.w = w;
+        }
+    }
+
+    /// Attach a trained PATCH W to this TM (in-place), replacing the current
+    /// global patch operator. Same shape guard as `apply_byte_w`.
+    pub fn apply_patch_w(&mut self, w: Vec<f32>) {
+        if w.len() == LATENT_DIM * LATENT_DIM {
+            self.patch_predictor.w = w;
         }
     }
 
