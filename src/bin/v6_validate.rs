@@ -75,5 +75,18 @@ fn main() {
             String::from_utf8_lossy(&out).chars().take(90).collect::<String>()
         );
     }
-    println!("== v6 validate done ==");
+    // A/B: β=0 — без патч-смещения, чистый W·x + rep_word
+    println!("-- β=0 (контроль) --");
+    for seed in &seeds {
+        let out0 = fuga::tm_generate_cosine_gate_v2(
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
+        );
+        println!(
+            "[V2β0] {:?} ({}B): {:?}",
+            String::from_utf8_lossy(seed),
+            out0.len(),
+            String::from_utf8_lossy(&out0).chars().take(90).collect::<String>()
+        );
+    }
+    println!("== v6 validate done == ");
 }
