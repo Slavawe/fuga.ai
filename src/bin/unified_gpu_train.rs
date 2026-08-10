@@ -27,7 +27,6 @@
 use fuga::ai::gpu_ops::GpuOps;
 use fuga::ai::htm_temporal::{save_unified_with_kan, UnifiedMeta};
 use fuga::ai::sdr::{byte_basis, encode_bytes_sdr, structure_sdr_from_sdrs};
-use fuga::ai::latent_jepa::SdrEncoder;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -99,7 +98,11 @@ fn main() {
         .map(|s| s.as_bytes().to_vec())
         .unwrap_or_else(|| b"fn main() {".to_vec());
 
-    let enc = SdrEncoder::new(0x9E37_79B9_7F4A_7C15);
+    // ВАЖНО: энкодер должен быть ТОЧНО тот же, что у декодера (TM predictor seed
+    // 0xF03D_C0DE), иначе W обучается в чужом базисе → декод = мусор.
+    let mut tm_seed_anchor = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
+    let enc = tm_seed_anchor.predictor().encoder.clone();
+    let enc_patch = tm_seed_anchor.patch_predictor().encoder.clone();
     let byte_cache: Vec<fuga::SdrVector> = (0..=255u8).map(byte_basis).collect();
 
     // ОГРАНИЧЕННЫЙ канал (backpressure, sync_channel — урок OOM).
@@ -113,6 +116,7 @@ fn main() {
         let stop = stop.clone();
         let ctxw = ctxw;
         let enc = enc.clone();
+        let enc_patch = enc_patch.clone();
         let byte_cache = byte_cache.clone();
         let corpus = corpus.clone();
         std::thread::spawn(move || {
@@ -169,8 +173,8 @@ fn main() {
                             let next_patch = &data[pp * 2..(pp + 1) * 2];
                             let win_patch_sdrs: Vec<fuga::SdrVector> =
                                 [w0, w1].iter().map(|p| encode_bytes_sdr(p)).collect();
-                            let xs = enc.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
-                            let ts = enc.encode(&encode_bytes_sdr(next_patch));
+                            let xs = enc_patch.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
+                            let ts = enc_patch.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();
                             t2 = ts.values.clone(); // сырой таргет патча
                         }
