@@ -1117,6 +1117,272 @@ pub fn tm_generate_kan(
     out
 }
 
+/// Косинусный кондиционированный декодер (ФРОНТ: inference-архитектура).
+///
+/// Два рычага против "банального argmax":
+/// 1. ВЫБОР ПО КОСИНУСУ + ТЕМПЕРАТУРА (не top-1 argmax): кандидаты-байты
+///    ранжируются косинусом к предсказанному латенту pred = W·x + α·KAN(x),
+///    затем семплируются из softmax(cos/τ). При τ → 0 это почти argmax, но с
+///    энтропийным выходом из частотных ловушек ("er", "on", пробел), когда
+///    топ-косинусы почти равны.
+/// 2. MEGABYTE-КОРИДОР (патч решает ДО байта): глобальный W_patch предска-
+///    зывает направление СЛОГА (top-K патчей по косинусу), и локальный
+///    декодер эмитит байты ЖЁСТКО ВНУТРИ маски выученного патча (corridor=1)
+///    либо с бонусом к байтам коридора (corridor=2). Байты вне коридора
+///    исключаются — распад на несвязанные буквы подавлен.
+///
+/// corridor=0: чистый косинус+температура (без патчевого уровня)
+/// corridor=1: жёсткий коридор (только байты топ-1 патча)
+/// corridor=2: мягкий коридор (байты топ-N патчей получают бонус β)
+pub fn tm_generate_cosine_gate(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    alpha: f32,
+    tau: f32,
+    corridor: u8,
+) -> Vec<u8> {
+    tm_generate_cosine_gate_inner(tm, kan, seed_bytes, max_bytes, window_bytes, patch_len, patch_vocab, alpha, tau, corridor, 0.005)
+}
+
+/// Внутренняя реализация с явным порогом косинуса (для тюнинга).
+pub fn tm_generate_cosine_gate_inner(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    alpha: f32,
+    tau: f32,
+    corridor: u8,
+    min_cos: f32,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let encoder = &tm.predictor().encoder;
+    let w = tm.predictor_w();
+    let plen = patch_len.max(1);
+    // Байт-базис: 256 латентов (тот же энкодер, что у обученного W).
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            let lat = encoder.encode(&sdr);
+            (b as u8, lat)
+        })
+        .collect();
+    // Патч-базис (коридор): латенты выученных патчей через ЭТОТ ЖЕ энкодер.
+    let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = encoder.encode(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    let patch_w: Vec<f32> = tm.patch_predictor_w().to_vec();
+
+    let start = seed_bytes.len().saturating_sub(window_bytes.max(1));
+    let mut window: Vec<u8> = seed_bytes[start..].to_vec();
+    let mut state: Vec<u8> = seed_bytes.to_vec(); // ПОЛНАЯ история для патч-уровня
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard: usize = 0;
+    let mut recent_patches: Vec<Vec<u8>> = Vec::new();
+    let no_repeat: usize = 2;
+    let k_candidates: usize = 16;
+
+    while out.len() < max_bytes && guard < max_bytes * 2 {
+        guard += 1;
+
+        // --- Локальный уровень: pred = W·x + α·KAN(x) ---
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+        let mut pred = crate::ai::latent_jepa::LatentVector::zero();
+        for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+            let row = o * crate::ai::latent_jepa::LATENT_DIM;
+            let mut acc = 0.0f32;
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                acc += w[row + i] * x.values[i];
+            }
+            pred.values[o] = acc;
+        }
+        if alpha > 0.0 {
+            let kan_out = kan.apply(&x);
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                pred.values[i] += alpha * kan_out.values[i];
+            }
+        }
+        let pn = pred.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut pred.values {
+            *v /= pn;
+        }
+
+        // --- Глобальный уровень (коридор): патч решает ДО байта ---
+        let mut corridor_bytes: Option<std::collections::HashSet<u8>> = None;
+        if corridor > 0 && !patch_latents.is_empty() && patch_w.iter().any(|&v| v != 0.0) {
+            // Патч-окно: минимум 2 полных патча (обучение W_patch шло на окнах
+            // из ДВУХ патчей — декод должен совпадать с обучением). Отступаем
+            // до 4·plen байт назад, чтобы собрать ровно 2 завершённых патча.
+            // Патч-окно: ТОЧНО как в entropy-BLT — chunks(plen) по всему state,
+            // последние 4 полных патча (этот размер дал идеальный патчевый
+            // декод на микро-пруфе; 2 патча не совпадали с траекторией).
+            let patches_v: Vec<Vec<u8>> = state
+                .chunks(plen)
+                .filter(|c| c.len() == plen)
+                .map(|c| c.to_vec())
+                .collect();
+            let patch_window: Vec<&[u8]> = patches_v
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
+                .map(|p| p.as_slice())
+                .collect();
+            let mut cand_p: Vec<(f32, &Vec<u8>)> = Vec::new();
+            if !patch_window.is_empty() {
+                let xs: Vec<crate::ai::sdr::SdrVector> = patch_window
+                    .iter()
+                    .map(|p| crate::ai::sdr::encode_bytes_sdr(p))
+                    .collect();
+                let xp = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&xs));
+                let mut pp = crate::ai::latent_jepa::LatentVector::zero();
+                for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                    let mut acc = 0.0f32;
+                    for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                        acc += patch_w[row + i] * xp.values[i];
+                    }
+                    pp.values[o] = acc;
+                }
+                let pn2 = pp.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+                for v in &mut pp.values {
+                    *v /= pn2;
+                }
+                for (patch, lat) in patch_latents.iter() {
+                    if recent_patches.contains(patch) {
+                        continue;
+                    }
+                    let c = pp.cosine_similarity(lat);
+                    if c > min_cos {
+                        cand_p.push((c, patch));
+                    }
+                }
+                cand_p.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            let top_n: usize = if corridor == 1 { 1 } else { 4 };
+            let mut mask: std::collections::HashSet<u8> = std::collections::HashSet::new();
+            for (_, patch) in cand_p.iter().take(top_n) {
+                for &b in patch.iter() {
+                    mask.insert(b);
+                }
+                if corridor == 1 {
+                    recent_patches.push(patch.to_vec());
+                    if recent_patches.len() > no_repeat.max(1) {
+                        recent_patches.remove(0);
+                    }
+                }
+            }
+            if !mask.is_empty() {
+                corridor_bytes = Some(mask);
+            }
+        }
+
+        // --- Косинусные оценки байтов → softmax(cos/τ) ---
+        let mut scores: Vec<(u8, f32)> = Vec::with_capacity(256);
+        for (b, lat) in byte_latents.iter() {
+            let c = pred.cosine_similarity(lat);
+            if c < min_cos {
+                continue;
+            }
+            let mut sc = c;
+            if let Some(mask) = &corridor_bytes {
+                if corridor == 1 {
+                    if !mask.contains(b) {
+                        continue; // жёсткий коридор: байт вне патча исключён
+                    }
+                } else {
+                    sc += 0.10 * c * if mask.contains(b) { 1.0 } else { -0.5 };
+                }
+            }
+            scores.push((*b, sc));
+        }
+        if scores.is_empty() {
+            break;
+        }
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let topk: Vec<(u8, f32)> = scores.into_iter().take(k_candidates).collect();
+        if topk[0].1 < min_cos {
+            break;
+        }
+        if out.last() == Some(&topk[0].0)
+            && topk.len() > 1
+            && out.len() >= 2
+            && out[out.len() - 2] == topk[0].0
+        {
+            break; // тройной повтор того же байта (настоящее зацикливание)
+        }
+        // Детерминированный (не-argmax) семплинг ниже: разрыв топ-1/топ-2
+        // большой → почти argmax; малый → энтропийный выбор из топ-K.
+        // Семплинг С GAP-ПОРОГОМ (как entropy-BLT): если топ-1 доминирует —
+        // косинусный argmax; только при размытом направлении — температура.
+        const GAP_SELECT: f32 = 0.03;
+        let gap = if topk.len() > 1 { topk[0].1 - topk[1].1 } else { 1.0 };
+        let pick: u8 = if gap >= GAP_SELECT {
+            topk[0].0
+        } else {
+            let temp = tau.max(0.02);
+            let maxs = topk[0].1;
+            let mut wts: Vec<f32> = topk.iter().map(|(_, s)| ((s - maxs) / temp).exp()).collect();
+            let wsum: f32 = wts.iter().sum();
+            if wsum <= 0.0 || !wsum.is_finite() {
+                break;
+            }
+            for wv in wts.iter_mut() {
+                *wv /= wsum;
+            }
+            let mut r: f32 = {
+                let mut h = 0x9e3779b97f4a7c15u64;
+                for &b in state.iter().rev().take(8) {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0xbf58476d1ce4e5b9);
+                }
+                h ^= h >> 31;
+                (h & 0xFFFFFF) as f32 / 16_777_216.0
+            };
+            let mut picked: u8 = topk[0].0;
+            for (idx, (b, _)) in topk.iter().enumerate() {
+                r -= wts[idx];
+                if r <= 0.0 {
+                    picked = *b;
+                    break;
+                }
+            }
+            picked
+        };
+        out.push(pick);
+        window.push(pick);
+        state.push(pick);
+        if window.len() > 4096 {
+            window.remove(0);
+        }
+        if state.len() > 8192 {
+            // патчевое окно берёт последние 4 байта — просто ограничим историю
+            let cut = state.len() - 4096;
+            state.drain(0..cut);
+        }
+    }
+    out
+}
+
 /// ГИБРИДНЫЙ байтовый декодер: pred = W·x + α·KAN(x) — линейный W держит
 /// частотные биграммы, сплайн KAN добавляет нелинейные структурные
 /// аттракторы (см. hybrid.rs). Ранжирование по cosine к 256 байт-латентам.

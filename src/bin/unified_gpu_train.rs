@@ -110,6 +110,9 @@ fn main() {
     type Pair4 = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>);
     let (tx, rx) = mpsc::sync_channel::<Pair4>(batch * 4);
     let stop = Arc::new(AtomicBool::new(false));
+    // Кольцевой буфер последних (x, t) пар для метрики остатка на чекпоинтах.
+    let probe_buf: Arc<std::sync::Mutex<std::collections::VecDeque<(Vec<f32>, Vec<f32>)>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
 
     // --- Поток CPU: читать JSONL, готовить (x, err) пары, патч-канал ---
     let cpu_handle = {
@@ -119,6 +122,7 @@ fn main() {
         let enc_patch = enc_patch.clone();
         let byte_cache = byte_cache.clone();
         let corpus = corpus.clone();
+        let probe_buf = probe_buf.clone();
         std::thread::spawn(move || {
             let corpora: Vec<String> = corpus
                 .split(',')
@@ -178,8 +182,17 @@ fn main() {
                             x2 = xs.values.clone();
                             t2 = ts.values.clone(); // сырой таргет патча
                         }
+                        // Кольцевой буфер для метрики остатка (последние 512 пар).
+                        let xv: Vec<f32> = x.values.clone();
+                        let pv: Vec<f32> = t.values.clone();
                         if tx.send((x.values, tv, x2, t2)).is_err() {
                             break 'outer;
+                        }
+                        if let Ok(mut pb) = probe_buf.lock() {
+                            pb.push_back((xv, pv));
+                            while pb.len() > 512 {
+                                pb.pop_front();
+                            }
                         }
                         steps += 1;
                         if steps >= max_steps {
@@ -269,6 +282,72 @@ fn main() {
                                     Some(&ck),
                                 )
                                 .ok();
+                                // Метрика LMS-остатка: mean ||t − W·x|| по свежим парам.
+                                let residual = {
+                                    let mut pr = Vec::new();
+                                    if let Ok(pb) = probe_buf.lock() {
+                                        for (xv, tv) in pb.iter().take(64) {
+                                            let mut pred = [0.0f32; DIM];
+                                            for o in 0..DIM {
+                                                let row = o * DIM;
+                                                let mut acc = 0.0f32;
+                                                for i in 0..DIM {
+                                                    acc += cw[row + i] * xv[i];
+                                                }
+                                                pred[o] = acc;
+                                            }
+                                            let mut sq = 0.0f32;
+                                            let mut tsq = 0.0f32;
+                                            for o in 0..DIM {
+                                                let d = tv[o] - pred[o];
+                                                sq += d * d;
+                                                tsq += tv[o] * tv[o];
+                                            }
+                                            pr.push((sq.sqrt(), tsq.sqrt()));
+                                        }
+                                    }
+                                    pr
+                                };
+                                if !residual.is_empty() {
+                                    let mean_e: f32 =
+                                        residual.iter().map(|(e, _)| e).sum::<f32>() / residual.len() as f32;
+                                    let mean_t: f32 =
+                                        residual.iter().map(|(_, t)| t).sum::<f32>() / residual.len() as f32;
+                                    println!(
+                                        "[ckpt] {} пар: ||t−Wx||_среднее={:.4} (||t||={:.4})",
+                                        applied, mean_e, mean_t
+                                    );
+                                }
+                                // Мини-декод naive 40B на чекпоинте: N-граммная связность.
+                                let mut tm_p = fuga::ai::htm_temporal::TemporalMemory::new(64, ctxw);
+                                tm_p.apply_byte_w(cw);
+                                let dec_t = fuga::tm_generate_latent_bytes(
+                                    &tm_p,
+                                    b"the force of gravity is",
+                                    40,
+                                    ctxw,
+                                    None,
+                                );
+                                let dec_c = fuga::tm_generate_latent_bytes(
+                                    &tm_p,
+                                    b"fn main() {",
+                                    40,
+                                    ctxw,
+                                    None,
+                                );
+                                println!(
+                                    "  [ckpt-decode] naive TEXT={}B {:?} | CODE={}B {:?}",
+                                    dec_t.len(),
+                                    String::from_utf8_lossy(&dec_t)
+                                        .chars()
+                                        .take(36)
+                                        .collect::<String>(),
+                                    dec_c.len(),
+                                    String::from_utf8_lossy(&dec_c)
+                                        .chars()
+                                        .take(36)
+                                        .collect::<String>()
+                                );
                                 eprintln!("  [ckpt] {} пар -> {}", applied, ckpt_path);
                             }
                             if applied % (batch * 8) == 0 {

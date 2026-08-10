@@ -1114,6 +1114,10 @@ impl TemporalMemory {
 
     pub fn predictor_w(&self) -> &[f32] { &self.predictor.w }
 
+    /// Patch-оператор W_patch (глобальный двухскоростной уровень) — только
+    /// веса, для декодеров, которым нужен raw W_patch без borrow predictor.
+    pub fn patch_predictor_w(&self) -> &[f32] { &self.patch_predictor.w }
+
     /// Borrow the latent predictor directly (encoder, W) — used by the
     /// recurrent / SSM-lite decoders that mix a hidden state into the W input.
     pub fn predictor(&self) -> &LatentPredictor {
