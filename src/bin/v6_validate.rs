@@ -90,10 +90,23 @@ fn main() {
     println!("-- rep_phrase=0.5 --");
     for seed in &seeds {
         let outp = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.5,
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 1.0,
         );
         println!(
             "[V2ph] {:?} ({}B): {:?}",
+            String::from_utf8_lossy(seed),
+            outp.len(),
+            String::from_utf8_lossy(&outp).chars().take(90).collect::<String>()
+        );
+    }
+    // A/B2: rep_phrase=0.8
+    println!("-- rep_phrase=0.8 --");
+    for seed in &seeds {
+        let outp = fuga::tm_generate_cosine_gate_v2(
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.8,
+        );
+        println!(
+            "[V2ph8] {:?} ({}B): {:?}",
             String::from_utf8_lossy(seed),
             outp.len(),
             String::from_utf8_lossy(&outp).chars().take(90).collect::<String>()
