@@ -128,10 +128,11 @@ fn main() {
         println!("\n--- SEED {:?} ---", s);
 
         // ОСНОВНОЙ декодер: cosine_gate v2 (рекомендованная конфигурация)
-        // α=0, τ=0.01, corridor=0, min_cos=0.001, β=0.3 (аддитивное патч-
-        // кондиционирование), rep_word=0.20 (словесный repetition penalty).
+        // α=0, τ=0.01, corridor=0, min_cos=0.001, β=0.0 (без патч-смещения —
+        // иначе патчевый аттрактор «the red» перетягивает), rep_word=0.20
+        // (словесный repetition penalty).
         let out_v2 = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.20,
+            &tm, &kan, seed, 200, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
         );
         println!("  V2 (осн.)     ({} B): {:?}", out_v2.len(), String::from_utf8_lossy(&out_v2).chars().take(60).collect::<String>());
 

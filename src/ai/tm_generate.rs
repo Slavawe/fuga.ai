@@ -1418,6 +1418,15 @@ pub fn tm_generate_cosine_gate_v2(
                     .map(|p| p + 1)
                     .unwrap_or(0);
                 let cur_word: Vec<u8> = state[word_start..].to_vec();
+                // ЧИСТКА недописанных слов: если текущее слово уже очень длинное,
+                // предпочитаем завершить его пробелом, а не дописывать букву
+                // (борьба с «redirectiont» — лишняя буква после валидного
+                // слова; порог 11 не трогает обычные слова ≤10 букв).
+                if *b == b' ' && cur_word.len() >= 11 {
+                    sc += 0.10 * c * (cur_word.len() as f32 - 10.0);
+                } else if *b != b' ' && cur_word.len() >= 12 {
+                    sc -= 0.08 * c * (cur_word.len() as f32 - 11.0);
+                }
                 let words: Vec<Vec<u8>> = state
                     .split(|&c| c == b' ')
                     .filter(|s| !s.is_empty())
