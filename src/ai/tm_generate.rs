@@ -1431,6 +1431,27 @@ pub fn tm_generate_cosine_gate_v2(
                     if nw >= 2 && words[nw - 2] == cur_word {
                         sc -= rep_word * 1.5; // немедленный повтор слова
                     }
+                    // БИГРАММА СЛОВ: штраф за повтор пары (prev, cur) —
+                    // прямой удар по «the red the red the red».
+                    if nw >= 2 && !cur_word.is_empty() {
+                        let prev_w = &words[nw - 2];
+                        // Штраф за повтор пары (prev, cur) — прямой удар
+                        // по «the red the red the red». Считаем пары ДО текущей
+                        // (последняя пара (nw-2, nw-1) — это и есть текущая
+                        // незавершённая позиция, её не штрафуем).
+                        let mut pair_count2 = 0;
+                        for i in 0..nw.saturating_sub(2) {
+                            if words[i].len() == prev_w.len()
+                                && words[i] == *prev_w
+                                && words[i + 1] == cur_word
+                            {
+                                pair_count2 += 1;
+                            }
+                        }
+                        if pair_count2 > 0 {
+                            sc -= rep_word * 1.0 * pair_count2 as f32;
+                        }
+                    }
                     let mut wcount = 0;
                     for i in 0..nw.saturating_sub(1) {
                         if words[i] == cur_word {
