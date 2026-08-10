@@ -86,6 +86,24 @@ fn main() {
         println!("  corridor=1 (hard) : {:?}", String::from_utf8_lossy(&out_hard).chars().take(80).collect::<String>());
         let out_soft = tm_generate_cosine_gate(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 1.0, 0.05, 2);
         println!("  corridor=2 (soft) : {:?}", String::from_utf8_lossy(&out_soft).chars().take(80).collect::<String>());
+
+        // === РЫЧАГИ v2: repetition penalty + аддитивное патч-кондиционирование ===
+        // v2 базовый (α=0, β=0): должен совпасть с naive-потоком
+        let o_v2  = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0);
+        println!("  v2 base          : {:?}", String::from_utf8_lossy(&o_v2).chars().take(80).collect::<String>());
+        // rep_pen: штраф на недавние n-граммы — выход из аттрактора the red
+        let o_rep = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.10);
+        println!("  v2 rep=0.10      : {:?}", String::from_utf8_lossy(&o_rep).chars().take(80).collect::<String>());
+        let o_rep2 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.20);
+        println!("  v2 rep=0.20      : {:?}", String::from_utf8_lossy(&o_rep2).chars().take(80).collect::<String>());
+        // beta: аддитивный патчевый сдвиг темы
+        let o_beta = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0);
+        println!("  v2 β=0.30        : {:?}", String::from_utf8_lossy(&o_beta).chars().take(80).collect::<String>());
+        // комбинированный
+        let o_rep3 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.40);
+        println!("  v2 rep=0.40      : {:?}", String::from_utf8_lossy(&o_rep3).chars().take(80).collect::<String>());
+        let o_both = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.10);
+        println!("  v2 β=0.30 rep=0.1: {:?}", String::from_utf8_lossy(&o_both).chars().take(80).collect::<String>());
     }
     println!("\n== A/B готов ==");
 }

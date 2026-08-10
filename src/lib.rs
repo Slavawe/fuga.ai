@@ -103,6 +103,7 @@ pub use ai::{
         tm_generate_megabyte,
         tm_generate_cosine_gate,
         tm_generate_cosine_gate_inner,
+        tm_generate_cosine_gate_v2,
     },
     transpile::{
         Dtype, ROUTE_CAP, ShardSource, StTensor, TranspileAccumulator, TranspileConfig,

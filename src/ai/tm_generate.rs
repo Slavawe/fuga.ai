@@ -1163,6 +1163,32 @@ pub fn tm_generate_cosine_gate_inner(
     corridor: u8,
     min_cos: f32,
 ) -> Vec<u8> {
+    // v2: repetition penalty + аддитивное патч-кондиционирование
+    tm_generate_cosine_gate_v2(
+        tm, kan, seed_bytes, max_bytes, window_bytes, patch_len, patch_vocab,
+        alpha, tau, corridor, min_cos, 0.0, 0.0,
+    )
+}
+
+/// Внутренняя реализация с явным порогом косинуса и двумя рычагами v2:
+/// - `rep_pen`: штраф на косинусы недавно сгенерированных n-грамм (выход из аттрактора)
+/// - `beta`: аддитивное патч-кондиционирование z = W·x + β·P_{t+1} + α·KAN(x)
+#[allow(clippy::too_many_arguments)]
+pub fn tm_generate_cosine_gate_v2(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    alpha: f32,
+    tau: f32,
+    corridor: u8,
+    min_cos: f32,
+    beta: f32,
+    rep_pen: f32,
+) -> Vec<u8> {
     if seed_bytes.is_empty() {
         return Vec::new();
     }
@@ -1224,6 +1250,46 @@ pub fn tm_generate_cosine_gate_inner(
             let kan_out = kan.apply(&x);
             for i in 0..crate::ai::latent_jepa::LATENT_DIM {
                 pred.values[i] += alpha * kan_out.values[i];
+            }
+        }
+        // Аддитивное патч-кондиционирование: z = W·x + β·P_{t+1} + α·KAN(x).
+        // β·P_{t+1} — это смещение к глобальному патчевому направлению
+        // (тема слога/слова), НЕ жёсткая маска коридора.
+        if beta > 0.0 {
+            let patches_v: Vec<Vec<u8>> = state
+                .chunks(plen)
+                .filter(|c| c.len() == plen)
+                .map(|c| c.to_vec())
+                .collect();
+            let patch_window: Vec<&[u8]> = patches_v
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
+                .map(|p| p.as_slice())
+                .collect();
+            if !patch_window.is_empty() {
+                let xs: Vec<crate::ai::sdr::SdrVector> = patch_window
+                    .iter()
+                    .map(|p| crate::ai::sdr::encode_bytes_sdr(p))
+                    .collect();
+                let xp = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&xs));
+                let mut pp = crate::ai::latent_jepa::LatentVector::zero();
+                for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                    let mut acc = 0.0f32;
+                    for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                        acc += patch_w[row + i] * xp.values[i];
+                    }
+                    pp.values[o] = acc;
+                }
+                let pn2 = pp.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+                for v in &mut pp.values {
+                    *v /= pn2;
+                }
+                for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    pred.values[i] += beta * pp.values[i];
+                }
             }
         }
         let pn = pred.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
@@ -1302,6 +1368,13 @@ pub fn tm_generate_cosine_gate_inner(
         }
 
         // --- Косинусные оценки байтов → softmax(cos/τ) ---
+        // Repetition penalty на уровне N-грамм: байт, который образует
+        // с хвостом history триграмму/биграмму, уже встречавшуюся в последних
+        // 24 сгенерированных байтах, штрафуется — траектория выталкивается
+        // из аттрактора («the red the red») в соседние вероятные ветки.
+        let recent: Vec<u8> = state.iter().rev().take(24).cloned().collect::<Vec<_>>();
+        let t0 = state[state.len().saturating_sub(1)];
+        let t1 = state[state.len().saturating_sub(2)];
         let mut scores: Vec<(u8, f32)> = Vec::with_capacity(256);
         for (b, lat) in byte_latents.iter() {
             let c = pred.cosine_similarity(lat);
@@ -1317,6 +1390,21 @@ pub fn tm_generate_cosine_gate_inner(
                 } else {
                     sc += 0.10 * c * if mask.contains(b) { 1.0 } else { -0.5 };
                 }
+            }
+            if rep_pen > 0.0 {
+                // биграмма (t0, b) или триграмма (t1, t0, b) в недавней истории
+                let mut rep = 0.0f32;
+                for w in recent.windows(2) {
+                    if w[0] == t0 && w[1] == *b {
+                        rep += rep_pen * 0.5;
+                    }
+                }
+                for w in recent.windows(3) {
+                    if w[0] == t1 && w[1] == t0 && w[2] == *b {
+                        rep += rep_pen * 1.0;
+                    }
+                }
+                sc -= rep;
             }
             scores.push((*b, sc));
         }
