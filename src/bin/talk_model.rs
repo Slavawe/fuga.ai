@@ -41,7 +41,7 @@ fn main() {
         tm.predictor().p.len()
     );
 
-    // 2. Патч-словарь из корпусов обучения (2-байтовые патчи, cap 512)
+    // 2. Патч-словарь из корпусов обучения (2-байтовые патчи, cap 5000)
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
     let mut patch_vocab: Vec<Vec<u8>> = Vec::new();
     for corp in &corpora {
@@ -52,17 +52,52 @@ fn main() {
             if line.len() < 4 { continue; }
             let bytes = line.as_bytes();
             for w in bytes.windows(2) {
-                if seen.insert(w.to_vec()) && patch_vocab.len() < 512 {
+                if seen.insert(w.to_vec()) && patch_vocab.len() < 5000 {
                     patch_vocab.push(w.to_vec());
                 }
             }
-            if patch_vocab.len() >= 512 { break; }
+            if patch_vocab.len() >= 5000 { break; }
         }
-        if patch_vocab.len() >= 512 { break; }
+        if patch_vocab.len() >= 5000 { break; }
     }
     println!("  patch_vocab={} (из {} корпусов)", patch_vocab.len(), corpora.len());
     let _ = encode_bytes_sdr; // патч-кодирование внутри декодера
     let _ = tm_generate_latent_bytes;
+
+    // 2b. A/B: --no-patch обнуляет patch_predictor (entropy работает чисто на
+    // локальном W). В unified_gpu_train финальный декод шёл с НУЛЕВЫМ
+    // patch_w (свежий TM) и давал связный entropy ("vity is..."), а с
+    // обученным patch_w хэндовер ломал поток — проверяем это здесь.
+    if args.iter().any(|a| a == "--no-patch") {
+        let n = tm.patch_predictor().w.len();
+        tm.apply_patch_w(vec![0.0f32; n]);
+        println!("  [A/B] --no-patch: patch W обнулён (entropy только на локальном W)");
+    }
+    // --no-owm: P=identity (как в финальном декоде unified_gpu_train, где
+    // TM создавался заново). Загруженный OWM-P проецирует W в подпространство
+    // 16 направлений — гипотеза: отсюда мусор в talk_model.
+    if args.iter().any(|a| a == "--no-owm") {
+        let n = tm.predictor().w.len();
+        let mut ident = vec![0.0f32; n];
+        for di in 0..512 {
+            ident[di * 512 + di] = 1.0;
+        }
+        tm.predictor_mut().p = ident;
+        println!("  [A/B] --no-owm: P=identity (как в обучении)");
+    }
+    // --identity-patch: patch W = identity (точное воспроизведение финального
+    // декода unified_gpu_train, где tm_d создавался через TM::new и патч был
+    // identity, а не обученный). Гипотеза: обученный patch_w ломает entropy.
+    if args.iter().any(|a| a == "--identity-patch") {
+        let n = tm.patch_predictor().w.len();
+        let mut ident = vec![0.0f32; n];
+        for di in 0..512 {
+            ident[di * 512 + di] = 1.0;
+        }
+        tm.apply_patch_w(ident);
+        tm.patch_predictor_mut().p = tm.patch_predictor().p.clone(); // P уже identity
+        println!("  [A/B] --identity-patch: patch W=identity, P=identity");
+    }
 
     // 3. ГИБРИД: KAN_C из чекпоинта + tm_generate_hybrid (W·x + α·KAN(x))
     let kan_c: Option<Vec<f32>> =
@@ -92,19 +127,19 @@ fn main() {
         let s = String::from_utf8_lossy(seed);
         println!("\n--- SEED {:?} ---", s);
 
-        let out1 = tm_generate_latent_bytes(&tm, seed, 200, 4, None);
+        let out1 = tm_generate_latent_bytes(&tm, seed, 200, 5, None);
         println!("  naive byte  ({} B): {:?}", out1.len(), String::from_utf8_lossy(&out1).chars().take(60).collect::<String>());
 
         let out2 = tm_generate_two_speed(&tm, seed, 60, 2, &patch_vocab, None);
         println!("  two-speed   ({} B): {:?}", out2.len(), String::from_utf8_lossy(&out2).chars().take(60).collect::<String>());
 
-        let out3 = tm_generate_two_speed_entropy(&tm, seed, 200, 4, 0.60, &patch_vocab);
+        let out3 = tm_generate_two_speed_entropy(&tm, seed, 200, 5, 0.60, &patch_vocab);
         println!("  entropy-BLT ({} B): {:?}", out3.len(), String::from_utf8_lossy(&out3).chars().take(60).collect::<String>());
 
         let out_mb = tm_generate_megabyte(&tm, seed, 200, 4, 2, &patch_vocab, 0.8);
         println!("  MEGABYTE    ({} B): {:?}", out_mb.len(), String::from_utf8_lossy(&out_mb).chars().take(60).collect::<String>());
 
-        let out4 = tm_generate_recurrent(&tm, seed, 200, 4, 0.0, 0.9);
+        let out4 = tm_generate_recurrent(&tm, seed, 200, 5, 0.0, 0.9);
         println!("  recurrent   ({} B): {:?}", out4.len(), String::from_utf8_lossy(&out4).chars().take(60).collect::<String>());
 
         if kan.c.iter().any(|&v| v.abs() > 1e-6) {

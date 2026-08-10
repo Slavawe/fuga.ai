@@ -1201,7 +1201,12 @@ pub fn tm_generate_cosine_gate_inner(
         guard += 1;
 
         // --- Локальный уровень: pred = W·x + α·KAN(x) ---
-        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = window
+        // ВАЖНО: кодируем ТОЛЬКО последние window_bytes байт (как обучение
+        // data[i-4..=i] → ровно window_bytes), иначе история растёт и вектор
+        // уходит из обученного распределения (фазовый сдвиг).
+        let win_lo = window.len().saturating_sub(window_bytes.max(1));
+        let win_tail = &window[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = win_tail
             .iter()
             .map(|&b| crate::ai::sdr::byte_basis(b))
             .collect();

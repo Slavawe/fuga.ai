@@ -54,6 +54,7 @@ fn main() {
         b"the force of gravity is".to_vec(),
         b"in the beginning".to_vec(),
         b"let x = 4".to_vec(),
+        b"in the beginning".to_vec(),
     ];
 
     for seed in &seeds {
