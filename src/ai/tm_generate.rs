@@ -1166,7 +1166,7 @@ pub fn tm_generate_cosine_gate_inner(
     // v2: repetition penalty + аддитивное патч-кондиционирование
     tm_generate_cosine_gate_v2(
         tm, kan, seed_bytes, max_bytes, window_bytes, patch_len, patch_vocab,
-        alpha, tau, corridor, min_cos, 0.0, 0.0,
+        alpha, tau, corridor, min_cos, 0.0, 0.0, 0.0,
     )
 }
 
@@ -1188,6 +1188,7 @@ pub fn tm_generate_cosine_gate_v2(
     min_cos: f32,
     beta: f32,
     rep_pen: f32,
+    rep_word: f32,
 ) -> Vec<u8> {
     if seed_bytes.is_empty() {
         return Vec::new();
@@ -1405,6 +1406,39 @@ pub fn tm_generate_cosine_gate_v2(
                     }
                 }
                 sc -= rep;
+            }
+            if rep_word > 0.0 {
+                // СЛОВЕСНЫЙ repetition penalty: если кандидат завершает слово
+                // (пробел) и получившееся слово уже встречалось в этой же
+                // позиции при повторяющейся словесной биграмме/триграмме —
+                // штрафуем. Декодим последние ~16 слов из state.
+                let word_start = state
+                    .iter()
+                    .rposition(|&c| c == b' ')
+                    .map(|p| p + 1)
+                    .unwrap_or(0);
+                let cur_word: Vec<u8> = state[word_start..].to_vec();
+                let words: Vec<Vec<u8>> = state
+                    .split(|&c| c == b' ')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_vec())
+                    .collect();
+                if *b == b' ' && !cur_word.is_empty() {
+                    // Слово «cur_word» завершится пробелом: штраф, если
+                    // (prev_word, cur_word) или (prev2, prev_word, cur_word)
+                    // уже встречались в недавней последовательности слов.
+                    let nw = words.len();
+                    if nw >= 2 && words[nw - 2] == cur_word {
+                        sc -= rep_word * 1.5; // немедленный повтор слова
+                    }
+                    let mut wcount = 0;
+                    for i in 0..nw.saturating_sub(1) {
+                        if words[i] == cur_word {
+                            wcount += 1;
+                        }
+                    }
+                    sc -= rep_word * 0.5 * wcount as f32;
+                }
             }
             scores.push((*b, sc));
         }
