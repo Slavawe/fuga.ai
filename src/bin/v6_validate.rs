@@ -66,8 +66,7 @@ fn main() {
     ];
     for seed in &seeds {
         let out = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.20,
-        );
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.20, 0.0);
         println!(
             "[V2] {:?} ({}B): {:?}",
             String::from_utf8_lossy(seed),
@@ -79,13 +78,25 @@ fn main() {
     println!("-- β=0 (контроль) --");
     for seed in &seeds {
         let out0 = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
-        );
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.0);
         println!(
             "[V2β0] {:?} ({}B): {:?}",
             String::from_utf8_lossy(seed),
             out0.len(),
             String::from_utf8_lossy(&out0).chars().take(90).collect::<String>()
+        );
+    }
+    // A/B: rep_phrase=0.5 — фразовый штраф на повтор байтовых блоков 10 байт
+    println!("-- rep_phrase=0.5 --");
+    for seed in &seeds {
+        let outp = fuga::tm_generate_cosine_gate_v2(
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.5,
+        );
+        println!(
+            "[V2ph] {:?} ({}B): {:?}",
+            String::from_utf8_lossy(seed),
+            outp.len(),
+            String::from_utf8_lossy(&outp).chars().take(90).collect::<String>()
         );
     }
     println!("== v6 validate done == ");

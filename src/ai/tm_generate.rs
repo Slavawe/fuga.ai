@@ -1166,7 +1166,7 @@ pub fn tm_generate_cosine_gate_inner(
     // v2: repetition penalty + аддитивное патч-кондиционирование
     tm_generate_cosine_gate_v2(
         tm, kan, seed_bytes, max_bytes, window_bytes, patch_len, patch_vocab,
-        alpha, tau, corridor, min_cos, 0.0, 0.0, 0.0,
+        alpha, tau, corridor, min_cos, 0.0, 0.0, 0.0, 0.0,
     )
 }
 
@@ -1189,6 +1189,7 @@ pub fn tm_generate_cosine_gate_v2(
     beta: f32,
     rep_pen: f32,
     rep_word: f32,
+    rep_phrase: f32,
 ) -> Vec<u8> {
     if seed_bytes.is_empty() {
         return Vec::new();
@@ -1468,6 +1469,43 @@ pub fn tm_generate_cosine_gate_v2(
                         }
                     }
                     sc -= rep_word * 0.5 * wcount as f32;
+                }
+            }
+            if rep_phrase > 0.0 {
+                // ФРАЗОВЫЙ repetition penalty (v6.2): модель заучивает
+                // монолитные фразы 20-30 байт (напр. RedisModule_Free(...))
+                // как единый блок; байтовый/словесный штрафы не бьют по ним,
+                // т.к. внутри блока символы сменяются штатно. Здесь штрафуем
+                // кандидата, который ЗАМЫКАЕТ повтор целого байтового блока
+                // длины PHR_LEN (10-12 байт): если подстрока state[..-1] длиной
+                // PHR_LEN-1 уже встречалась в истории state ранее, то
+                // продолжение её теми же символами = повтор фразы — штраф.
+                const PHR_LEN: usize = 10;
+                if state.len() >= PHR_LEN + 4 {
+                    // текущий расщепляемый блок: последние PHR_LEN-1 байт + кандидат
+                    let start = state.len() - (PHR_LEN - 1);
+                    let block: Vec<u8> = state[start..]
+                        .iter()
+                        .chain(std::iter::once(b))
+                        .cloned()
+                        .collect();
+                    // ищем блок в истории (до текущей позиции, с отступом 2)
+                    let hist_end = state.len().saturating_sub(2);
+                    if hist_end >= PHR_LEN {
+                        let mut hits = 0;
+                        let mut k = 0;
+                        while k + PHR_LEN <= hist_end {
+                            if state[k..k + PHR_LEN] == block[..] {
+                                hits += 1;
+                                k += PHR_LEN; // непересекающиеся блоки
+                            } else {
+                                k += 1;
+                            }
+                        }
+                        if hits > 0 {
+                            sc -= rep_phrase * 1.0 * hits as f32;
+                        }
+                    }
                 }
             }
             scores.push((*b, sc));

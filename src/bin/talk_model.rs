@@ -132,8 +132,7 @@ fn main() {
         // иначе патчевый аттрактор «the red» перетягивает), rep_word=0.20
         // (словесный repetition penalty).
         let out_v2 = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
-        );
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.0);
         println!("  V2 (осн.)     ({} B): {:?}", out_v2.len(), String::from_utf8_lossy(&out_v2).chars().take(60).collect::<String>());
 
         let out1 = tm_generate_latent_bytes(&tm, seed, 200, 9, None);

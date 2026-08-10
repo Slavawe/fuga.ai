@@ -89,21 +89,21 @@ fn main() {
 
         // === РЫЧАГИ v2: repetition penalty + аддитивное патч-кондиционирование ===
         // v2 базовый (α=0, β=0, rep=0): должен совпасть с naive-потоком
-        let o_v2  = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.0);
+        let o_v2  = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.0, 0.0);
         println!("  v2 base          : {:?}", String::from_utf8_lossy(&o_v2).chars().take(80).collect::<String>());
         // rep_pen: байтовый штраф на недавние n-граммы
-        let o_rep = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.20, 0.0);
+        let o_rep = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.20, 0.0, 0.0);
         println!("  v2 rep=0.20      : {:?}", String::from_utf8_lossy(&o_rep).chars().take(80).collect::<String>());
         // rep_word: СЛОВЕСНЫЙ штраф на повторяющиеся слова
-        let o_w1 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20);
+        let o_w1 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.0);
         println!("  v2 word=0.20     : {:?}", String::from_utf8_lossy(&o_w1).chars().take(80).collect::<String>());
-        let o_w2 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.50);
+        let o_w2 = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.50, 0.0);
         println!("  v2 word=0.50     : {:?}", String::from_utf8_lossy(&o_w2).chars().take(80).collect::<String>());
         // beta: аддитивный патчевый сдвиг темы
-        let o_beta = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.0);
+        let o_beta = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.0, 0.0);
         println!("  v2 β=0.30        : {:?}", String::from_utf8_lossy(&o_beta).chars().take(80).collect::<String>());
         // комбинированный (байтовый + словесный штраф)
-        let o_both = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.20, 0.50);
+        let o_both = fuga::tm_generate_cosine_gate_v2(&tm, &kan, seed, 160, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.20, 0.50, 0.0);
         println!("  v2 rep+word      : {:?}", String::from_utf8_lossy(&o_both).chars().take(80).collect::<String>());
     }
     println!("\n== A/B готов ==");
