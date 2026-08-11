@@ -205,7 +205,16 @@ fn main() {
                         continue;
                     }
                     // AST-маска: интервалы семантичных C-узлов строки (один парсинг).
-                    let ast_ranges = ast_node_ranges(&data);
+                    // ОГРАНИЧЕНИЕ: строки >50KB (весь файл/функция в одной строке
+                    // JSONL) не парсим — дерево и копии текстов узлов велики и
+                    // вели к OOM (4.4G за 29s на 7.5GB-машине). Такие строки
+                    // дают фон-цель (след. окно), макро учится только на
+                    // разумных по размеру узлах.
+                    let ast_ranges = if data.len() <= 50_000 {
+                        ast_node_ranges(&data)
+                    } else {
+                        Vec::new()
+                    };
                     for i in 0..data.len().saturating_sub(1) {
                         if stop.load(Ordering::Relaxed) {
                             break 'outer;
@@ -234,11 +243,13 @@ fn main() {
                         }
                         if let Some(node_text) = ast_target {
                             // Цель — семантический вектор ВСЕГО будущего узла.
+                            // encode_NO_CACHE: AST-узлы уникальны и огромны,
+                            // кэш до этого доводил до OOM (4.4G за 29s).
                             let nsdrs: Vec<fuga::SdrVector> = node_text
                                 .iter()
                                 .map(|&c| byte_cache[c as usize].clone())
                                 .collect();
-                            let t_m = enc.encode(&structure_sdr_from_sdrs(&nsdrs));
+                            let t_m = enc.encode_no_cache(&structure_sdr_from_sdrs(&nsdrs));
                             tm = t_m.values.clone();
                         } else if i + 1 + ctxw < data.len() {
                             // Фон: латент следующего окна (скользящий переход).

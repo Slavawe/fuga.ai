@@ -86,6 +86,28 @@ impl SdrEncoder {
         }
         out
     }
+
+    /// Кодирование БЕЗ глобального кэша. Для уникальных/огромных входов
+    /// (AST-узлы кода в Byte-H-JEPA): повторений нет, кэшировать бессмысленно,
+    /// а хранение гигабайтов уникальных SDR ведёт к OOM (поймано на v9-маске:
+    /// 4.4G за 29s на 7.5GB-машине). Тот же детерминированный проектор.
+    pub fn encode_no_cache(&self, sdr: &SdrVector) -> LatentVector {
+        let mut values = vec![0.0f32; self.latent_dim];
+        for bit in 0..SDR_DIM {
+            if sdr.bit_at(bit) == 0 {
+                continue;
+            }
+            for (latent, value) in values.iter_mut().enumerate() {
+                let h = self.hash(latent, bit);
+                *value += if h & 1 == 0 { 1.0 } else { -1.0 };
+            }
+        }
+        let norm = values.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-8);
+        for value in &mut values {
+            *value /= norm;
+        }
+        LatentVector { values }
+    }
 }
 
 #[derive(Clone, Debug)]
