@@ -126,7 +126,7 @@ fn main() {
     let out_path: String = arg(&args, "--out", "/tmp/unified_gpu.fuga".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
     let ctxw: usize = arg(&args, "--ctx", 4);
-    let patch_ctx: usize = arg(&args, "--patch-ctx", 16); // v8 патчевый горизонт (32 байта)
+    let patch_ctx: usize = arg(&args, "--patch-ctx", 8); // v8.1 горизонт 16 байт (компромисс)
     let ckpt_every: usize = arg(&args, "--ckpt-every", 500_000);
     let seed_text: Vec<u8> = args
         .iter()
