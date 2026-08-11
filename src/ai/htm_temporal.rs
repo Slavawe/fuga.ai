@@ -1309,6 +1309,39 @@ pub fn save_unified_with_kan(
     Ok(())
 }
 
+/// Прочитать только секцию MACRO_W (tag=7) из FUGA1-файла — для декодеров
+/// Byte-H-JEPA, когда остальные веса уже загружены через load_unified.
+pub fn load_unified_macro(path: &str) -> Option<Vec<f32>> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 5 || &data[..5] != UNIFIED_MAGIC {
+        return None;
+    }
+    let mut pos = 5;
+    while pos + 8 <= data.len() {
+        let tag = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+        let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        pos += 8;
+        if tag == TAG_END {
+            return None;
+        }
+        if pos + len > data.len() {
+            return None;
+        }
+        if tag == TAG_MACRO_W {
+            let section = &data[pos..pos + len];
+            let n = len / 4;
+            let mut vals = Vec::with_capacity(n);
+            for i in 0..n {
+                let off = i * 4;
+                vals.push(f32::from_le_bytes(section[off..off + 4].try_into().ok()?));
+            }
+            return Some(vals);
+        }
+        pos += len;
+    }
+    None
+}
+
 pub fn load_unified(
     path: &str,
 ) -> Option<(

@@ -1966,3 +1966,339 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
     }
     out
 }
+
+pub fn tm_generate_megabyte_v3(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    top_k: usize,
+    beta: f32,
+    rep_word: f32,
+    rep_phrase: f32,
+    min_cos: f32,
+    ws_pen: f32,
+    conf_th: f32,
+    macro_w: &[f32],
+    beta_macro: f32,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let plen = patch_len.max(1);
+    let encoder = &tm.predictor().encoder;
+    let w = tm.predictor_w();
+    let patch_w: Vec<f32> = tm.patch_predictor_w().to_vec();
+    let printable = |b: u8| b == b'\n' || b == b'\t' || b == b'\r' || (0x20..=0x7e).contains(&b);
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            let lat = encoder.encode(&sdr);
+            (b as u8, lat)
+        })
+        .filter(|(b, _)| printable(*b))
+        .collect();
+    let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
+        .iter()
+        .map(|p| {
+            let sdr = crate::ai::sdr::encode_bytes_sdr(p);
+            let lat = encoder.encode(&sdr);
+            (p.clone(), lat)
+        })
+        .collect();
+    let mut window: Vec<u8> = seed_bytes.to_vec();
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let mut guard = 0usize;
+    let mut recent_patches: Vec<Vec<u8>> = Vec::new();
+while out.len() < max_bytes && guard < max_bytes * 4 {
+        guard += 1;
+
+        // Локальный уровень: pred = W·x (ровно window_bytes, как обучение).
+        let win_lo = window.len().saturating_sub(window_bytes.max(1));
+        let win_tail = &window[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = win_tail
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+        let mut pred = crate::ai::latent_jepa::LatentVector::zero();
+        for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+            let row = o * crate::ai::latent_jepa::LATENT_DIM;
+            let mut acc = 0.0f32;
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                acc += w[row + i] * x.values[i];
+            }
+            pred.values[o] = acc;
+        }
+        let pn = pred.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut pred.values {
+            *v /= pn;
+        }
+
+        // ГЛОБАЛЬНЫЙ уровень: окно последних 4 ПОЛНЫХ патчей (1:1 с обучением
+        // pp-4..pp-1 → pp) → направление W_patch·x_patch.
+        let patches_v: Vec<Vec<u8>> = state
+            .chunks(plen)
+            .filter(|c| c.len() == plen)
+            .map(|c| c.to_vec())
+            .collect();
+        let patch_window: Vec<&[u8]> = patches_v
+            .iter()
+            .rev()
+            .take(8) // v8.1 ГОРИЗОНТ: 8 патчей = 16 байт (как обучение)
+            .rev()
+            .map(|p| p.as_slice())
+            .collect();
+        let mut pp = crate::ai::latent_jepa::LatentVector::zero();
+        if !patch_window.is_empty() {
+            let xs: Vec<crate::ai::sdr::SdrVector> = patch_window
+                .iter()
+                .map(|p| crate::ai::sdr::encode_bytes_sdr(p))
+                .collect();
+            let xp = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&xs));
+            for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                let mut acc = 0.0f32;
+                for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    acc += patch_w[row + i] * xp.values[i];
+                }
+                pp.values[o] = acc;
+            }
+            let pn2 = pp.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+            for v in &mut pp.values {
+                *v /= pn2;
+            }
+        }
+
+        // JEPA MACRO: z_macro = W_macro·x_ctx — семантическое намерение.
+        // x_ctx = латент БАЙТОВОГО окна (как обучение W_macro: encode(окно)).
+        let mut z_macro: Option<crate::ai::latent_jepa::LatentVector> = None;
+        if !macro_w.is_empty() && beta_macro > 0.0 {
+            let win_sdrs: Vec<crate::ai::sdr::SdrVector> = window
+                .iter()
+                .map(|&b| crate::ai::sdr::byte_basis(b))
+                .collect();
+            let x_ctx = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&win_sdrs));
+            let mut zm = crate::ai::latent_jepa::LatentVector::zero();
+            for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                let mut acc = 0.0f32;
+                for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    acc += macro_w[row + i] * x_ctx.values[i];
+                }
+                zm.values[o] = acc;
+            }
+            let zn = zm.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+            for v in &mut zm.values {
+                *v /= zn;
+            }
+            z_macro = Some(zm);
+        }
+
+        // Top-K патчей по cosine к направлению (без недавних повторов).
+        let mut cand: Vec<(f32, &Vec<u8>)> = Vec::new();
+        for (patch, lat) in patch_latents.iter() {
+            if recent_patches.contains(patch) {
+                continue;
+            }
+            let mut score = pp.cosine_similarity(lat);
+            if score < min_cos.max(0.0) {
+                continue;
+            }
+            // Whitespace Penalty (плотность): энтропийно-пустые патчи
+            // (пробелы/табы/кавычки) выбиваются из коридора — W_patch
+            // должен подтягивать плотные имена функций и операторы.
+            if ws_pen > 0.0 {
+                let ws: [u8; 6] = [b' ', b'\t', b'\n', b'\r', b'"', b'\''];
+                let ws_share = patch
+                    .iter()
+                    .filter(|b| ws.contains(*b))
+                    .count() as f32
+                    / patch.len().max(1) as f32;
+                if ws_share > 0.0 {
+                    score -= ws_pen * ws_share;
+                }
+            }
+            // JEPA MACRO: семантический приор к патчам (cos(z_macro, lat)).
+            if let Some(zm) = &z_macro {
+                score += beta_macro * (zm.cosine_similarity(lat).max(0.0));
+            }
+            cand.push((score, patch));
+        }
+        cand.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        cand.truncate(top_k.max(1));
+        if cand.is_empty() {
+            break;
+        }
+        let top_patch: Vec<u8> = cand[0].1.clone();
+        recent_patches.push(top_patch.clone());
+        if recent_patches.len() > 2 {
+            recent_patches.remove(0);
+        }
+        // Коридор: байты из top-K патчей (патч решает ДО байтов).
+        let mut corridor: Vec<u8> = Vec::new();
+        for (_, p) in cand.iter() {
+            for &b in p.iter() {
+                if !corridor.contains(&b) {
+                    corridor.push(b);
+                }
+            }
+        }
+        if corridor.is_empty() {
+            break;
+        }
+// Выбор байта: только из коридора (MegaByte-порядок), кос = W·x к
+        // латенту байта + beta·(cos top-патча). rep_word/rep_phrase — штрафы.
+        let token: Vec<u8> = state.iter().copied().collect();
+        let words: Vec<Vec<u8>> = token
+            .split(|&b| b == b' ')
+            .filter(|w| !w.is_empty())
+            .map(|w| w.to_vec())
+            .collect();
+        let cur_word: Vec<u8> = token
+            .iter()
+            .rev()
+            .take_while(|&&b| b != b' ')
+            .cloned()
+            .collect::<Vec<u8>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let mut scores: Vec<(u8, f32)> = Vec::new();
+        let mut hybrid_cands: Vec<(u8, f32)> = Vec::new();
+        let mut corridor_local_max: f32 = -1.0; // чистый локальный топ ВНУТРИ коридора
+        for (byte, lat) in byte_latents.iter() {
+            let sc0 = pred.cosine_similarity(lat);
+            if sc0 < min_cos.max(0.0) {
+                continue;
+            }
+            if !corridor.contains(byte) {
+                // ГИБРИД (v2+MB): байты вне коридора допустимы, если
+                // локальный W уверен (косинус ≥ conf_th) — плотность v2
+                // пробивает структурную разреженность коридора.
+                hybrid_cands.push((*byte, sc0));
+                continue;
+            }
+            if sc0 > corridor_local_max {
+                corridor_local_max = sc0;
+            }
+            let mut sc = sc0;
+            if *byte == top_patch[0] && beta > 0.0 {
+                sc += beta * cand[0].0.max(0.0);
+            } else if top_patch.len() > 1 && *byte == top_patch[1] && beta > 0.0 {
+                sc += beta * cand[0].0.max(0.0) * 0.8;
+            }
+            if rep_word > 0.0 && !cur_word.is_empty() && *byte == b' ' {
+                let mut cnt = 0;
+                for w in words.iter() {
+                    if *w == cur_word {
+                        cnt += 1;
+                    }
+                }
+                if cnt > 1 {
+                    sc -= rep_word * (cnt - 1) as f32;
+                }
+            }
+            if rep_phrase > 0.0 && state.len() >= 14 {
+                const PHR_L: usize = 12;
+                let start = state.len() - (PHR_L - 1);
+                let mut block: Vec<u8> = state[start..].to_vec();
+                block.push(*byte);
+                let hist_end = state.len().saturating_sub(2);
+                let mut hits = 0;
+                let mut k = 0;
+                while k + PHR_L <= hist_end {
+                    if state[k..k + PHR_L] == block[..] {
+                        hits += 1;
+                        k += PHR_L;
+                    } else {
+                        k += 1;
+                    }
+                }
+                if hits > 0 {
+                    sc -= rep_phrase * hits as f32;
+                }
+            }
+            scores.push((*byte, sc));
+        }
+        // ГИБРИД v2+MB: если локальный W уверен в байте вне коридора
+        // (cos ≥ conf_th) И это его локальный максимум (чистый, без бонуса
+        // патча) — перехват: v2 достраивает точное имя, MegaByte держит длину.
+        let mut hybrid_best: Option<(u8, f32)> = None;
+        if conf_th > 0.0 {
+            for (b, sc) in hybrid_cands.iter() {
+                if hybrid_best.map_or(true, |(_, bs)| *sc > bs) {
+                    hybrid_best = Some((*b, *sc));
+                }
+            }
+        }
+        let mut pick_via_hybrid: Option<u8> = None;
+        if let Some((hb, hs)) = hybrid_best {
+            if hs >= conf_th && hs > corridor_local_max {
+                // Перехват: локальный байт увереннее любого коридорного
+                // (по чистому косинусу) — берём его напрямую, чтобы β-бонус
+                // коридорных байтов не перебил точное имя.
+                pick_via_hybrid = Some(hb);
+            }
+        }
+        if let Some(hb) = pick_via_hybrid {
+            out.push(hb);
+            window.push(hb);
+            state.push(hb);
+            if state.len() > 8192 {
+                let cut = state.len() - 4096;
+                state.drain(0..cut);
+            }
+            continue;
+        }
+        if scores.is_empty() {
+            break;
+        }
+        const GAP_SELECT: f32 = 0.03;
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let gap = if scores.len() > 1 {
+            scores[0].1 - scores[1].1
+        } else {
+            1.0
+        };
+        let pick: u8 = if gap >= GAP_SELECT {
+            scores[0].0
+        } else {
+            let top = scores.len().min(8);
+            let maxs = scores[0].1;
+            let mut wts: Vec<f32> = scores[..top]
+                .iter()
+                .map(|(_, s)| ((s - maxs) / 0.02f32).exp())
+                .collect();
+            let wsum: f32 = wts.iter().sum();
+            if wsum <= 0.0 || !wsum.is_finite() {
+                break;
+            }
+            for v in &mut wts {
+                *v /= wsum;
+            }
+            let mut r = (guard as f64 * 0.6180339887).fract() as f32;
+            let mut idx = 0;
+            let mut acc = 0.0f32;
+            for (i, wv) in wts.iter().enumerate() {
+                acc += *wv;
+                if r <= acc {
+                    idx = i;
+                    break;
+                }
+            }
+            scores[idx].0
+        };
+        out.push(pick);
+        window.push(pick);
+        state.push(pick);
+        if state.len() > 8192 {
+            let cut = state.len() - 4096;
+            state.drain(0..cut);
+        }
+    }
+    out
+}
