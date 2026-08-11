@@ -101,6 +101,7 @@ pub use ai::{
         tm_generate, tm_generate_latent, tm_generate_latent_bytes, tm_generate_recurrent,
         tm_generate_two_speed, tm_generate_two_speed_entropy, tm_generate_hybrid,
         tm_generate_megabyte,
+        tm_generate_megabyte_v2,
         tm_generate_cosine_gate,
         tm_generate_cosine_gate_inner,
         tm_generate_cosine_gate_v2,

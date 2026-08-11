@@ -113,4 +113,32 @@ fn main() {
         );
     }
     println!("== v6 validate done == ");
+    // A/B3: MegaByte-порядок v2 — патч решает ДО байтов (top-K коридор)
+    println!("-- MegaByte v2 (top_k=8, β=0.3, rep_word=0.20, rep_phrase=0.8) --");
+    for seed in &seeds {
+        let outm = fuga::tm_generate_megabyte_v2(
+            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001,
+        );
+        println!(
+            "[MB2] {:?} ({}B): {:?}",
+            String::from_utf8_lossy(seed),
+            outm.len(),
+            String::from_utf8_lossy(&outm).chars().take(90).collect::<String>()
+        );
+    }
+    // A/B4: MegaByte v2 сетка (top_k=4, β=0.5) — узкий коридор
+    println!("-- MegaByte v2 (top_k=4, β=0.5) --");
+    let seeds2 = &seeds[..2];
+    for seed in seeds2 {
+        let outm = fuga::tm_generate_megabyte_v2(
+            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.5, 0.20, 0.8, 0.001,
+        );
+        println!(
+            "[MB2b] {:?} ({}B): {:?}",
+            String::from_utf8_lossy(seed),
+            outm.len(),
+            String::from_utf8_lossy(&outm).chars().take(90).collect::<String>()
+        );
+    }
+    println!("== v7 validate done == ");
 }
