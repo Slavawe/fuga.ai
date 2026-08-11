@@ -210,7 +210,7 @@ fn main() {
                     // вели к OOM (4.4G за 29s на 7.5GB-машине). Такие строки
                     // дают фон-цель (след. окно), макро учится только на
                     // разумных по размеру узлах.
-                    let ast_ranges = if data.len() <= 50_000 {
+                    let ast_ranges = if data.len() <= 8_000 {
                         ast_node_ranges(&data)
                     } else {
                         Vec::new()
@@ -805,6 +805,7 @@ fn ast_node_ranges(code: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
         return Vec::new();
     };
     let mut out: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+    const MAX_NODES: usize = 200; // OOM-защита: хватит на семантику, не на взрыв
     let mut cursor = tree.walk();
     loop {
         let n = cursor.node();
@@ -814,6 +815,9 @@ fn ast_node_ranges(code: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
             let text = src[s..e].as_bytes().to_vec();
             if text.iter().any(|&b| b.is_ascii_alphabetic() || b == b'_') {
                 out.push((s, e, text));
+                if out.len() >= MAX_NODES {
+                    break;
+                }
             }
         }
         if cursor.goto_first_child() {
