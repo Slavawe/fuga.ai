@@ -192,7 +192,9 @@ fn main() {
                 }
                 let f = std::fs::File::open(path).unwrap();
                 let reader = std::io::BufReader::new(f);
+                let mut line_no: u64 = 0;
                 for line in reader.lines() {
+                    line_no += 1;
                     let line = match line {
                         Ok(l) => l,
                         Err(_) => continue,
@@ -204,6 +206,9 @@ fn main() {
                     if data.len() < 2 {
                         continue;
                     }
+                    if line_no % 200 == 0 {
+                        eprintln!("[dbg] корпус {} строка {} len={}", corpus_file, line_no, data.len());
+                    }
                     // Строки-монстры (1MB+ в corpus.jsonl) — пропускаем:
                     // 1M пар на ОДНУ строку = ~40 мин при 434 pairs/s, и это
                     // выглядит как зависание. 64KB — разумный предел: дальше
@@ -211,17 +216,12 @@ fn main() {
                     if data.len() > 65_536 {
                         continue;
                     }
-                    // AST-маска: интервалы семантичных C-узлов строки (один парсинг).
-                    // ОГРАНИЧЕНИЕ: строки >50KB (весь файл/функция в одной строке
-                    // JSONL) не парсим — дерево и копии текстов узлов велики и
-                    // вели к OOM (4.4G за 29s на 7.5GB-машине). Такие строки
-                    // дают фон-цель (след. окно), макро учится только на
-                    // разумных по размеру узлах.
-                    let ast_ranges = if data.len() <= 8_000 {
-                        ast_node_ranges(&data)
-                    } else {
-                        Vec::new()
-                    };
+                    // AST-маска ВЫКЛЮЧЕНА (bypass): tree-sitter на строках
+                    // ≤8KB с бинарными/не-UTF8 данными ЗАЦИКЛИВАЛСЯ (CPU 100%,
+                    // пары стоят на 65536 = граница fisig). Функция
+                    // ast_node_ranges остаётся в коде для будущих версий,
+                    // но в горячем пути её НЕТ.
+                    let ast_ranges: Vec<(usize, usize, Vec<u8>)> = Vec::new();
                     for i in 0..data.len().saturating_sub(1) {
                         if stop.load(Ordering::Relaxed) {
                             break 'outer;
