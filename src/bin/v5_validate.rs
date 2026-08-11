@@ -66,7 +66,7 @@ fn main() {
     ];
     for seed in &seeds {
         let out = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20,
+            &tm, &kan, seed, 200, 5, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.0,
         );
         println!(
             "[V2] {:?} ({}B): {:?}",

@@ -1185,6 +1185,7 @@ pub const TAG_OWM_P: u32 = 3;
 pub const TAG_META: u32 = 4;
 pub const TAG_HJEPA: u32 = 5;
 pub const TAG_KAN_C: u32 = 6;
+pub const TAG_MACRO_W: u32 = 7; // Byte-H-JEPA: макро-предиктор (Widrow-Hoff в эмбеддингах)
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnifiedMeta {
@@ -1259,6 +1260,7 @@ pub fn save_unified_with_kan(
     owm_p: &[f32],
     meta: &UnifiedMeta,
     hjepa_flat: Option<&[f32]>,
+    macro_w: Option<&[f32]>,
     kan_c: Option<&[f32]>,
 ) -> std::io::Result<()> {
     use std::io::Write;
@@ -1289,6 +1291,11 @@ pub fn save_unified_with_kan(
     if let Some(hjepa) = hjepa_flat {
         if !hjepa.is_empty() {
             write_section(&mut f, TAG_HJEPA, hjepa)?;
+        }
+    }
+    if let Some(mw) = macro_w {
+        if !mw.is_empty() {
+            write_section(&mut f, TAG_MACRO_W, mw)?;
         }
     }
     if let Some(kan) = kan_c {
@@ -1333,7 +1340,7 @@ pub fn load_unified(
         }
         let section_data = &data[pos..pos + len];
         match tag {
-            TAG_LOCAL_W | TAG_PATCH_W | TAG_OWM_P | TAG_HJEPA | TAG_KAN_C => {
+            TAG_LOCAL_W | TAG_PATCH_W | TAG_OWM_P | TAG_HJEPA | TAG_KAN_C | TAG_MACRO_W => {
                 let n = len / 4;
                 let mut vals = Vec::with_capacity(n);
                 for i in 0..n {

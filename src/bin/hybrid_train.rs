@@ -124,7 +124,8 @@ fn main() {
                         &vec![0.0f32; 512 * 512],
                         &cm,
                         None,
-                        Some(&hyb.kan.c),
+                        None,
+                        Some(&hyb.kan.c)
                     )
                     .ok();
                     eprintln!("  [ckpt] {} шагов -> {}", steps, ckpt_path);
@@ -165,7 +166,8 @@ fn main() {
         &owm_p,
         &meta,
         None,
-        Some(&hyb.kan.c),
+        None,
+        Some(&hyb.kan.c)
     )
     .expect("save unified+kan");
     println!("saved {} (FUGA1 + KAN_C {} f32)", out_path, hyb.kan.c.len());

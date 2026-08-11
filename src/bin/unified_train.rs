@@ -159,7 +159,8 @@ fn main() {
                         &tm.predictor().p,
                         &meta_c,
                         None,
-                        Some(&hyb.kan.c),
+                        None,
+                        Some(&hyb.kan.c)
                     )
                     .is_ok()
                     {
@@ -228,7 +229,8 @@ fn main() {
         &owm_p,
         &meta,
         None,
-        Some(&hyb.kan.c),
+        None,
+        Some(&hyb.kan.c)
     )
     .expect("save unified+kan");
     println!(

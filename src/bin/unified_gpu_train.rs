@@ -356,7 +356,8 @@ fn main() {
                                     &ident_p,
                                     &cm,
                                     None,
-                                    Some(&ck),
+                                    None,
+                                    Some(&ck)
                                 )
                                 .ok();
                                 // Метрика LMS-остатка: mean ||t − W·x|| по свежим парам.
@@ -563,7 +564,7 @@ fn main() {
         let s2: f64 = w_patch.iter().take(64).map(|x| *x as f64).sum();
         println!("[diag] нормы перед save: local_W={:.3} patch_W={:.3} sum64={:.4}/{:.4}", n1, n2, s1, s2);
     }
-    save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, Some(&kan_c))
+    save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, None, Some(&kan_c))
         .expect("save unified+kan");
 
     // ТОЧЕЧНЫЙ ТЕСТ СЕРИАЛИЗАЦИИ (по пользовательской методике):
