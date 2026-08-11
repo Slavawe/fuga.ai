@@ -731,6 +731,11 @@ impl GpuOps {
             drop(pass);
         }
         self.queue.submit(Some(enc.finish()));
+    }
+
+    /// Явная синхронизация: один poll после пачки (batch dispatch паттерн —
+    /// убирает launch-overhead из hybrid_step/hybrid_step2).
+    pub fn sync(&self) {
         let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
@@ -763,7 +768,6 @@ impl GpuOps {
             pass.dispatch_workgroups(DIM * DIM / 256, 1, 1);
         }
         self.queue.submit(Some(enc.finish()));
-        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Batched W updates: apply N deltas accumulated in xs/errs without downloading W.

@@ -303,6 +303,7 @@ fn main() {
                             // Периодический ЕДИНЫЙ чекпоинт (переживает ребут).
                             if ckpt_every > 0 && applied >= next_ckpt {
                                 next_ckpt += ckpt_every;
+                                g.sync(); // batch dispatch: один poll после пачки
                                 let mut cw = vec![0.0f32; DIM * DIM];
                                 let mut cw2 = vec![0.0f32; DIM * DIM];
                                 let mut ck = vec![0.0f32; DIM * DIM * 6];
@@ -411,6 +412,7 @@ fn main() {
                 }
                 applied += xs.len();
             }
+            g.sync(); // все пачки применены — один poll перед readback
             g.download_w(&mut w);
             g.download_w2(&mut w_patch);
             g.download_kan(&mut kan_c);
