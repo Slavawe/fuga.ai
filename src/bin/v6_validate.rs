@@ -117,7 +117,7 @@ fn main() {
     println!("-- MegaByte v2 (top_k=8, β=0.3, rep_word=0.20, rep_phrase=0.8) --");
     for seed in &seeds {
         let outm = fuga::tm_generate_megabyte_v2(
-            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001, 0.30, 0.15,
+            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001, 0.30, 0.05,
         );
         println!(
             "[MB2] {:?} ({}B): {:?}",

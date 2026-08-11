@@ -1833,6 +1833,7 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             .collect();
         let mut scores: Vec<(u8, f32)> = Vec::new();
         let mut hybrid_cands: Vec<(u8, f32)> = Vec::new();
+        let mut corridor_local_max: f32 = -1.0; // чистый локальный топ ВНУТРИ коридора
         for (byte, lat) in byte_latents.iter() {
             let sc0 = pred.cosine_similarity(lat);
             if sc0 < min_cos.max(0.0) {
@@ -1844,6 +1845,9 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
                 // пробивает структурную разреженность коридора.
                 hybrid_cands.push((*byte, sc0));
                 continue;
+            }
+            if sc0 > corridor_local_max {
+                corridor_local_max = sc0;
             }
             let mut sc = sc0;
             if *byte == top_patch[0] && beta > 0.0 {
@@ -1885,8 +1889,8 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             scores.push((*byte, sc));
         }
         // ГИБРИД v2+MB: если локальный W уверен в байте вне коридора
-        // (cos ≥ conf_th) — побеждает плотность v2 (разреженность коридора
-        // не душит имена функций/операторы).
+        // (cos ≥ conf_th) И это его локальный максимум (чистый, без бонуса
+        // патча) — перехват: v2 достраивает точное имя, MegaByte держит длину.
         let mut hybrid_best: Option<(u8, f32)> = None;
         if conf_th > 0.0 {
             for (b, sc) in hybrid_cands.iter() {
@@ -1895,13 +1899,24 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
                 }
             }
         }
+        let mut pick_via_hybrid: Option<u8> = None;
         if let Some((hb, hs)) = hybrid_best {
-            if hs >= conf_th {
-                let corridor_top = scores.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-                if hs > corridor_top && corridor_top < conf_th {
-                    scores.push((hb, hs));
-                }
+            if hs >= conf_th && hs > corridor_local_max {
+                // Перехват: локальный байт увереннее любого коридорного
+                // (по чистому косинусу) — берём его напрямую, чтобы β-бонус
+                // коридорных байтов не перебил точное имя.
+                pick_via_hybrid = Some(hb);
             }
+        }
+        if let Some(hb) = pick_via_hybrid {
+            out.push(hb);
+            window.push(hb);
+            state.push(hb);
+            if state.len() > 8192 {
+                let cut = state.len() - 4096;
+                state.drain(0..cut);
+            }
+            continue;
         }
         if scores.is_empty() {
             break;
