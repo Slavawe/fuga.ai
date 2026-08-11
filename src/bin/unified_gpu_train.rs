@@ -110,6 +110,7 @@ fn main() {
     let batch: usize = arg(&args, "--batch", 256);
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_patch: f32 = arg(&args, "--lr-patch", 0.1);
+    let lr_macro: f32 = arg(&args, "--lr-macro", 0.05); // Byte-H-JEPA канал
     // v7 Patch Graph Curriculum: λ-старт 0.4 → экспоненциальное затухание к
     // floor 0.10 (~1.5M). τ в шагах: λ(t) = floor + (start−floor)·exp(−t/τ).
     let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.4); // стартовый вес Patch Loss
@@ -150,8 +151,16 @@ fn main() {
 
     // ОГРАНИЧЕННЫЙ канал (backpressure, sync_channel — урок OOM).
     // Трёхканальная пара: (x_local, err_local, x_patch, err_patch).
-    type Pair4 = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>); // x, t, x2a, t2, x2b
-    let (tx, rx) = mpsc::sync_channel::<Pair4>(batch * 4);
+    type Pair5 = (
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<f32>,
+    ); // x, t, x2, t2, x2b, xm, tm (Byte-H-JEPA: макро-латент пара)
+    let (tx, rx) = mpsc::sync_channel::<Pair5>(batch * 4);
     let stop = Arc::new(AtomicBool::new(false));
     // Кольцевой буфер последних (x, t) пар для метрики остатка на чекпоинтах.
     let probe_buf: Arc<std::sync::Mutex<std::collections::VecDeque<(Vec<f32>, Vec<f32>)>>> =
@@ -208,6 +217,20 @@ fn main() {
                             .collect();
                         let x = enc.encode(&structure_sdr_from_sdrs(&win_sdrs));
                         let t = enc.encode(&byte_cache[nxt as usize]);
+                        // Byte-H-JEPA МАКРО: z_ctx = латент окна (тот же x),
+                        // z_tgt = латент СЛЕДУЮЩЕГО окна (data[i+1..=i+1+ctxw]):
+                        // семантический переход состояний в эмбеддингах.
+                        let mut xm: Vec<f32> = x.values.clone();
+                        let mut tm: Vec<f32> = Vec::new();
+                        if i + 1 + ctxw < data.len() {
+                            let nxt_win: &[u8] = &data[i + 1..=i + 1 + ctxw];
+                            let nxt_sdrs: Vec<fuga::SdrVector> = nxt_win
+                                .iter()
+                                .map(|&c| byte_cache[c as usize].clone())
+                                .collect();
+                            let t_m = enc.encode(&structure_sdr_from_sdrs(&nxt_sdrs));
+                            tm = t_m.values.clone();
+                        }
                         let tv: Vec<f32> = t.values.clone(); // сырой таргет; остаток считает GPU
                         // v6: ПАТЧЕВОЕ ОКНО 1:1 С V2-ДЕКОДЕРОМ (последние 4 ПОЛНЫХ патча →
                         // следующий полный патч), 100% градиентный поток
@@ -248,7 +271,7 @@ fn main() {
                         // Кольцевой буфер для метрики остатка (последние 512 пар).
                         let xv: Vec<f32> = x.values.clone();
                         let pv: Vec<f32> = t.values.clone();
-                        if tx.send((x.values, tv, x2, t2, x2b)).is_err() {
+                        if tx.send((x.values, tv, x2, t2, x2b, xm, tm)).is_err() {
                             break 'outer;
                         }
                         if let Ok(mut pb) = probe_buf.lock() {
@@ -272,6 +295,7 @@ fn main() {
     let gpu = if use_gpu { fuga::ai::gpu_ops::try_new() } else { None };
     let mut w = vec![0.0f32; DIM * DIM];
     let mut w_patch: Vec<f32> = vec![0.0f32; DIM * DIM];
+    let mut w_macro: Vec<f32> = vec![0.0f32; DIM * DIM]; // Byte-H-JEPA: латент-предиктор
     let mut kan_c: Vec<f32> = vec![0.0f32; DIM * DIM * 6];
     let mut applied: usize = 0;
     let mut next_ckpt: usize = ckpt_every;
@@ -291,12 +315,18 @@ fn main() {
             let mut xs2: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut ts2: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut xs2b: Vec<Vec<f32>> = Vec::with_capacity(batch); // перекрывающиеся окна
+            let mut xms: Vec<Vec<f32>> = Vec::with_capacity(batch);
+            let mut tms: Vec<Vec<f32>> = Vec::with_capacity(batch);
             let mut recv = rx;
             loop {
                 match recv.recv() {
-                    Ok((x, t, x2, t2, x2b)) => {
+                    Ok((x, t, x2, t2, x2b, xm, tm)) => {
                         xs.push(x);
                         ts.push(t);
+                        if !xm.is_empty() && !tm.is_empty() {
+                            xms.push(xm);
+                            tms.push(tm);
+                        }
                         if !x2.is_empty() && !t2.is_empty() {
                             xs2.push(x2);
                             ts2.push(t2);
@@ -321,11 +351,32 @@ fn main() {
                                 }
                             }
                             applied += xs.len();
+                            // Byte-H-JEPA MACRO: Widrow-Hoff в эмбеддингах
+                            // err = z_tgt − W_macro·z_ctx; λ_macro масштабирует.
+                            if !xms.is_empty() {
+                                let lam_m = lr_macro * lambda_now(applied);
+                                for (xm_i, tm_i) in xms.iter().zip(tms.iter()) {
+                                    let mut pred = vec![0.0f32; DIM];
+                                    for r in 0..DIM {
+                                        let row = &w_macro[r * DIM..(r + 1) * DIM];
+                                        pred[r] = row.iter().zip(xm_i.iter()).map(|(a, b)| a * b).sum();
+                                    }
+                                    for r in 0..DIM {
+                                        let e = tm_i[r] - pred[r];
+                                        let row = &mut w_macro[r * DIM..(r + 1) * DIM];
+                                        for (w_, xv) in row.iter_mut().zip(xm_i.iter()) {
+                                            *w_ += lam_m * e * xv;
+                                        }
+                                    }
+                                }
+                            }
                             xs.clear();
                             ts.clear();
                             xs2.clear();
                             ts2.clear();
                             xs2b.clear();
+                            xms.clear();
+                            tms.clear();
                             // Капы (как в learn_transition: CAP_EVERY≈50 → soft).
                             if applied / batch % 50 == 0 {
                                 g.cap_w(4.0);
@@ -356,7 +407,7 @@ fn main() {
                                     &ident_p,
                                     &cm,
                                     None,
-                                    None,
+                                    Some(&w_macro),
                                     Some(&ck)
                                 )
                                 .ok();
@@ -460,7 +511,7 @@ fn main() {
             // CPU fallback: честный Widrow-Hoff (reĭенс) + KAN на остатке.
             let mut kan = fuga::ai::kan::KanTransition::new();
             let mut recv = rx;
-            while let Ok((x, t, x2, t2, x2b)) = recv.recv() {
+            while let Ok((x, t, x2, t2, x2b, xm, tm)) = recv.recv() {
                 // pred = W·x (линейный вклад)
                 let mut pred = vec![0.0f32; DIM];
                 for o in 0..DIM {
@@ -476,6 +527,26 @@ fn main() {
                     let row = o * DIM;
                     for i in 0..DIM {
                         w[row + i] += lr_w * err * x[i];
+                    }
+                }
+                // Byte-H-JEPA MACRO: Widrow-Hoff в эмбеддингах (CPU fallback)
+                if !xm.is_empty() && !tm.is_empty() {
+                    let lam_m = lr_macro * lambda_now(applied);
+                    let mut pm = vec![0.0f32; DIM];
+                    for o in 0..DIM {
+                        let row = o * DIM;
+                        let mut acc = 0.0f32;
+                        for i in 0..DIM {
+                            acc += w_macro[row + i] * xm[i];
+                        }
+                        pm[o] = acc;
+                    }
+                    for o in 0..DIM {
+                        let err = tm[o] - pm[o];
+                        let row = o * DIM;
+                        for i in 0..DIM {
+                            w_macro[row + i] += lam_m * err * xm[i];
+                        }
                     }
                 }
                 // KAN на честном остатке t − W·x (как hybrid.learn_pair).
@@ -564,7 +635,7 @@ fn main() {
         let s2: f64 = w_patch.iter().take(64).map(|x| *x as f64).sum();
         println!("[diag] нормы перед save: local_W={:.3} patch_W={:.3} sum64={:.4}/{:.4}", n1, n2, s1, s2);
     }
-    save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, None, Some(&kan_c))
+    save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, Some(&w_macro), Some(&kan_c))
         .expect("save unified+kan");
 
     // ТОЧЕЧНЫЙ ТЕСТ СЕРИАЛИЗАЦИИ (по пользовательской методике):
