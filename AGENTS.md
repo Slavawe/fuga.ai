@@ -246,6 +246,12 @@
 - Проверка формата после правок: `./target/release/unified_e2e && ./target/release/unified_roundtrip_cpp`.
 - C++: make в cpp/ (fuga_core.h — save/load_unified; decode.cpp).
 
+## ✅ ШАГ 1 ЗАКРЫТ: MegaByte v2 + гибрид + whitespace penalty (a65a92a)
+- **Добавлены параметры** `ws_pen` (штраф пробельным патчам в top-K коридоре) и `conf_th` (порог гибрида v2+MB — уверенный локальный байт вне коридора пробивает).
+- **Калибровка**: ws_pen=0.30 + conf_th=0.15 — плотный код 200B (`buf_appeod`, `definttoon`, `codetint` — читаемые имена без пробельной разреженности).
+- **Итог Шага 1**: порядок «патч → байт» (MegaByte) даёт 200B на ВСЕХ сидах (код-сид ожил: 3B→200B), гибрид даёт плотность v2. Шаг 1 закрыт.
+- **Параметры финальные**: top_k=8, β=0.3, ws_pen=0.30, conf_th=0.15, rep_word=0.20, rep_phrase=0.8, window=9.
+
 ## MEGABYTE-ПОРЯДОК ДЕКОДЕРА — ПЕРВЫЙ РЕЗУЛЬТАТ (aba555d, шаг 1 плана «1 потом 5 потом 3»)
 - **Реализовано**: `tm_generate_megabyte_v2` — патч решает ДО байтов: W_patch·x по окну 4 полных патча → top-K коридор патчей (по cosine к vocab) → байты внутри через W·x + β·cos(top_patch) + rep_word/rep_phrase, окно=9.
 - **A/B на релизе (v7.1_final)**:
