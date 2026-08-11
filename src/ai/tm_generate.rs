@@ -1674,6 +1674,8 @@ pub fn tm_generate_megabyte_v2(
     rep_word: f32,
     rep_phrase: f32,
     min_cos: f32,
+    ws_pen: f32,
+    conf_th: f32,
 ) -> Vec<u8> {
     if seed_bytes.is_empty() {
         return Vec::new();
@@ -1770,9 +1772,23 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             if recent_patches.contains(patch) {
                 continue;
             }
-            let score = pp.cosine_similarity(lat);
+            let mut score = pp.cosine_similarity(lat);
             if score < min_cos.max(0.0) {
                 continue;
+            }
+            // Whitespace Penalty (плотность): энтропийно-пустые патчи
+            // (пробелы/табы/кавычки) выбиваются из коридора — W_patch
+            // должен подтягивать плотные имена функций и операторы.
+            if ws_pen > 0.0 {
+                let ws: [u8; 6] = [b' ', b'\t', b'\n', b'\r', b'"', b'\''];
+                let ws_share = patch
+                    .iter()
+                    .filter(|b| ws.contains(*b))
+                    .count() as f32
+                    / patch.len().max(1) as f32;
+                if ws_share > 0.0 {
+                    score -= ws_pen * ws_share;
+                }
             }
             cand.push((score, patch));
         }
@@ -1816,14 +1832,20 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             .rev()
             .collect();
         let mut scores: Vec<(u8, f32)> = Vec::new();
+        let mut hybrid_cands: Vec<(u8, f32)> = Vec::new();
         for (byte, lat) in byte_latents.iter() {
-            if !corridor.contains(byte) {
-                continue; // жёсткий коридор патчей
-            }
-            let mut sc = pred.cosine_similarity(lat);
-            if sc < min_cos.max(0.0) {
+            let sc0 = pred.cosine_similarity(lat);
+            if sc0 < min_cos.max(0.0) {
                 continue;
             }
+            if !corridor.contains(byte) {
+                // ГИБРИД (v2+MB): байты вне коридора допустимы, если
+                // локальный W уверен (косинус ≥ conf_th) — плотность v2
+                // пробивает структурную разреженность коридора.
+                hybrid_cands.push((*byte, sc0));
+                continue;
+            }
+            let mut sc = sc0;
             if *byte == top_patch[0] && beta > 0.0 {
                 sc += beta * cand[0].0.max(0.0);
             } else if top_patch.len() > 1 && *byte == top_patch[1] && beta > 0.0 {
@@ -1861,6 +1883,25 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
                 }
             }
             scores.push((*byte, sc));
+        }
+        // ГИБРИД v2+MB: если локальный W уверен в байте вне коридора
+        // (cos ≥ conf_th) — побеждает плотность v2 (разреженность коридора
+        // не душит имена функций/операторы).
+        let mut hybrid_best: Option<(u8, f32)> = None;
+        if conf_th > 0.0 {
+            for (b, sc) in hybrid_cands.iter() {
+                if hybrid_best.map_or(true, |(_, bs)| *sc > bs) {
+                    hybrid_best = Some((*b, *sc));
+                }
+            }
+        }
+        if let Some((hb, hs)) = hybrid_best {
+            if hs >= conf_th {
+                let corridor_top = scores.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
+                if hs > corridor_top && corridor_top < conf_th {
+                    scores.push((hb, hs));
+                }
+            }
         }
         if scores.is_empty() {
             break;
