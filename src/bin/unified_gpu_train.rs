@@ -96,6 +96,7 @@ fn main() {
     let out_path: String = arg(&args, "--out", "/tmp/unified_gpu.fuga".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
     let ctxw: usize = arg(&args, "--ctx", 4);
+    let patch_ctx: usize = arg(&args, "--patch-ctx", 16); // v8 патчевый горизонт (32 байта)
     let ckpt_every: usize = arg(&args, "--ckpt-every", 500_000);
     let seed_text: Vec<u8> = args
         .iter()
@@ -130,6 +131,7 @@ fn main() {
     let cpu_handle = {
         let stop = stop.clone();
         let ctxw = ctxw;
+        let patch_ctx = patch_ctx;
         let lambda_patch = lambda_patch;
         let enc = enc.clone();
         let enc_patch = enc_patch.clone();
@@ -186,29 +188,29 @@ fn main() {
                         let mut t2 = Vec::new();
                         let mut x2b = Vec::new(); // перекрывающееся окно (сдвиг −1 патч)
                         let pp = (i + 1) / 2; // номер патча, в который входит data[i+1]
-                        if i + 3 <= data.len() && pp >= 4 {
-                            // последние 4 полных патча ДО целевого: pp-4 .. pp-1
-                            let w0 = &data[(pp - 4) * 2..(pp - 3) * 2];
-                            let w1 = &data[(pp - 3) * 2..(pp - 2) * 2];
-                            let w2p = &data[(pp - 2) * 2..(pp - 1) * 2];
-                            let w3 = &data[(pp - 1) * 2..pp * 2];
+                        if i + 3 <= data.len() && pp >= patch_ctx {
+                            // v8 ГОРИЗОНТ: последние patch_ctx полных патчей
+                            // ДО целевого: pp-patch_ctx .. pp-1 (32 байта при 16)
+                            let mut pw: Vec<&[u8]> = Vec::with_capacity(patch_ctx);
+                            for k in 0..patch_ctx {
+                                pw.push(&data[(pp - patch_ctx + k) * 2..(pp - patch_ctx + k + 1) * 2]);
+                            }
                             let next_patch = &data[pp * 2..(pp + 1) * 2];
                             let win_patch_sdrs: Vec<fuga::SdrVector> =
-                                [w0, w1, w2p, w3].iter().map(|p| encode_bytes_sdr(p)).collect();
+                                pw.iter().map(|p| encode_bytes_sdr(p)).collect();
                             let xs = enc_patch.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
                             let ts = enc_patch.encode(&encode_bytes_sdr(next_patch));
                             x2 = xs.values.clone();
                             t2 = ts.values.clone(); // сырой таргет патча
-                            // v7 УПЛОТНЕНИЕ: перекрывающееся окно со сдвигом −1 патч
-                            // (pp-5..pp-2 → pp) — насыщает АЛЬТЕРНАТИВНЫЕ рёбра
-                            // графа переходов (не только канонический путь).
-                            if pp >= 5 {
-                                let v0 = &data[(pp - 5) * 2..(pp - 4) * 2];
-                                let v1 = &data[(pp - 4) * 2..(pp - 3) * 2];
-                                let v2 = &data[(pp - 3) * 2..(pp - 2) * 2];
-                                let v3 = &data[(pp - 2) * 2..(pp - 1) * 2];
+                            // v8 УПЛОТНЕНИЕ: перекрывающееся окно со сдвигом −1 патч
+                            // (pp-patch_ctx-1 .. pp-2 → pp) — альтернативные рёбра.
+                            if pp >= patch_ctx + 1 {
+                                let mut pv: Vec<&[u8]> = Vec::with_capacity(patch_ctx);
+                                for k in 0..patch_ctx {
+                                    pv.push(&data[(pp - patch_ctx - 1 + k) * 2..(pp - patch_ctx + k) * 2]);
+                                }
                                 let win2_sdrs: Vec<fuga::SdrVector> =
-                                    [v0, v1, v2, v3].iter().map(|p| encode_bytes_sdr(p)).collect();
+                                    pv.iter().map(|p| encode_bytes_sdr(p)).collect();
                                 let xs2 = enc_patch.encode(&structure_sdr_from_sdrs(&win2_sdrs));
                                 x2b = xs2.values.clone();
                             }

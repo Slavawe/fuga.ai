@@ -1741,7 +1741,7 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
         let patch_window: Vec<&[u8]> = patches_v
             .iter()
             .rev()
-            .take(4)
+            .take(16) // v8 ГОРИЗОНТ: 16 патчей = 32 байта (как обучение)
             .rev()
             .map(|p| p.as_slice())
             .collect();
