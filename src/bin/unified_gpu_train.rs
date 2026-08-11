@@ -238,7 +238,7 @@ fn main() {
                         // патчевого блока), остальные шаги остаются на фон-цели.
                         // Это снимает 7/8 дорогих AST-целей с CPU hot path.
                         let mut ast_target: Option<&[u8]> = None;
-                        if i % 8 == 0 {
+                        if i % 1_000_000 == 0 { // BYPASS-режим: AST почти никогда
                             for (s, _, text) in ast_ranges.iter() {
                                 if *s == i + 1 {
                                     ast_target = Some(text.as_slice());
