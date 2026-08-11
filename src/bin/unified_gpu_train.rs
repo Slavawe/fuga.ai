@@ -204,6 +204,8 @@ fn main() {
                     if data.len() < 2 {
                         continue;
                     }
+                    // AST-маска: интервалы семантичных C-узлов строки (один парсинг).
+                    let ast_ranges = ast_node_ranges(&data);
                     for i in 0..data.len().saturating_sub(1) {
                         if stop.load(Ordering::Relaxed) {
                             break 'outer;
@@ -222,7 +224,24 @@ fn main() {
                         // семантический переход состояний в эмбеддингах.
                         let mut xm: Vec<f32> = x.values.clone();
                         let mut tm: Vec<f32> = Vec::new();
-                        if i + 1 + ctxw < data.len() {
+                        // AST-маска: ищем узел, начинающийся в i+1 (будущий узел).
+                        let mut ast_target: Option<&[u8]> = None;
+                        for (s, _, text) in ast_ranges.iter() {
+                            if *s == i + 1 {
+                                ast_target = Some(text.as_slice());
+                                break;
+                            }
+                        }
+                        if let Some(node_text) = ast_target {
+                            // Цель — семантический вектор ВСЕГО будущего узла.
+                            let nsdrs: Vec<fuga::SdrVector> = node_text
+                                .iter()
+                                .map(|&c| byte_cache[c as usize].clone())
+                                .collect();
+                            let t_m = enc.encode(&structure_sdr_from_sdrs(&nsdrs));
+                            tm = t_m.values.clone();
+                        } else if i + 1 + ctxw < data.len() {
+                            // Фон: латент следующего окна (скользящий переход).
                             let nxt_win: &[u8] = &data[i + 1..=i + 1 + ctxw];
                             let nxt_sdrs: Vec<fuga::SdrVector> = nxt_win
                                 .iter()
@@ -760,4 +779,40 @@ fn main() {
     println!("  единый файл всех технологий: {}", out_path);
     use std::path::Path;
     let _ = Path::new("");
+}
+/// AST-маска (пункт 5 Byte-H-JEPA): интервалы семантичных узлов C-AST строки.
+/// Возвращает (start, end, текст) для узлов с len >= MIN_LEN — «будущие узлы»
+/// для макро-целей. Парсим C один раз на строку (tree-sitter).
+fn ast_node_ranges(code: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
+    const MIN_LEN: usize = 6;
+    let src = String::from_utf8_lossy(code);
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_c::LANGUAGE.into())
+        .ok();
+    let Some(tree) = parser.parse(&src[..], None) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(usize, usize, Vec<u8>)> = Vec::new();
+    let mut cursor = tree.walk();
+    loop {
+        let n = cursor.node();
+        let (s, e) = (n.start_byte(), n.end_byte());
+        // Только узлы не ERROR, без пробельных хвостов, семантичный размер.
+        if !n.is_error() && !n.is_missing() && e - s >= MIN_LEN {
+            let text = src[s..e].as_bytes().to_vec();
+            if text.iter().any(|&b| b.is_ascii_alphabetic() || b == b'_') {
+                out.push((s, e, text));
+            }
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                break;
+            }
+        }
+    }
+    out
 }
