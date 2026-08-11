@@ -9,6 +9,12 @@ use crate::ai::sdr::{SdrVector, structure_sdr_from_sdrs, SDR_DIM};
 static LATENT_ENC_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<SdrVector, LatentVector>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+/// Предел кэша энкодера: ~200K записей × ~3KB ≈ 600MB. На полном корпусе
+/// уникальных окон сотни тысяч — без лимита кэш съедал всю RAM (OOM на
+/// v9: пик 2.8G к 520K пар). Кэш — только ускорение повторов; очистка
+/// детерминирована (значения пересчитываются идентично).
+const LATENT_ENC_CACHE_CAP: usize = 200_000;
+
 pub const LATENT_DIM: usize = 512;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +88,9 @@ impl SdrEncoder {
         for value in &mut values { *value /= norm; }
         let out = LatentVector { values };
         if let Ok(mut cache) = LATENT_ENC_CACHE.lock() {
+            if cache.len() >= LATENT_ENC_CACHE_CAP {
+                cache.clear(); // лимит памяти: кэш = ускорение, не состояние
+            }
             cache.insert(sdr.clone(), out.clone());
         }
         out
