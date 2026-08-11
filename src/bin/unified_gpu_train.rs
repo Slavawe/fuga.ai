@@ -233,12 +233,17 @@ fn main() {
                         // семантический переход состояний в эмбеддингах.
                         let mut xm: Vec<f32> = x.values.clone();
                         let mut tm: Vec<f32> = Vec::new();
-                        // AST-маска: ищем узел, начинающийся в i+1 (будущий узел).
+                        // Sparse AST-маска: макро-уровню не нужна микро-разметка
+                        // на каждом байте. Берём AST-цель раз в 8 байт (граница
+                        // патчевого блока), остальные шаги остаются на фон-цели.
+                        // Это снимает 7/8 дорогих AST-целей с CPU hot path.
                         let mut ast_target: Option<&[u8]> = None;
-                        for (s, _, text) in ast_ranges.iter() {
-                            if *s == i + 1 {
-                                ast_target = Some(text.as_slice());
-                                break;
+                        if i % 8 == 0 {
+                            for (s, _, text) in ast_ranges.iter() {
+                                if *s == i + 1 {
+                                    ast_target = Some(text.as_slice());
+                                    break;
+                                }
                             }
                         }
                         if let Some(node_text) = ast_target {
