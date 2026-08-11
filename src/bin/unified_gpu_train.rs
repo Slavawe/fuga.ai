@@ -26,6 +26,36 @@
 //                     [--lr-kan 0.3] [--ctx 4] [--no-gpu]
 use fuga::ai::gpu_ops::GpuOps;
 use fuga::ai::htm_temporal::{save_unified_with_kan, UnifiedMeta};
+
+/// v8 Syntax Loss: число ERROR-узлов в декоде по tree-sitter C.
+/// 0 = валидное AST; >0 = синтаксис сломан. Compiler-in-the-Loop метрика.
+fn syntax_error_count(code: &[u8]) -> usize {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_c::LANGUAGE.into())
+        .ok();
+    match parser.parse(&code[..], None) {
+        Some(tree) => {
+            let mut errs = 0;
+            let mut cursor = tree.walk();
+            loop {
+                let node = cursor.node();
+                if node.is_error() || node.is_missing() {
+                    errs += 1;
+                }
+                if cursor.goto_first_child() {
+                    continue;
+                }
+                while !cursor.goto_next_sibling() {
+                    if !cursor.goto_parent() {
+                        return errs;
+                    }
+                }
+            }
+        }
+        None => code.len().max(1),
+    }
+}
 use fuga::ai::sdr::{byte_basis, encode_bytes_sdr, structure_sdr_from_sdrs};
 use std::io::BufRead;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -396,6 +426,12 @@ fn main() {
                                         .collect::<String>()
                                 );
                                 eprintln!("  [ckpt] {} пар -> {}", applied, ckpt_path);
+                                // v8 Syntax Loss: число ERROR-узлов C-AST в декоде
+                                let errs = syntax_error_count(&dec_c);
+                                eprintln!(
+                                    "  [syntax] C-AST errors={} (0 = валидное дерево)",
+                                    errs
+                                );
                             }
                             if applied % (batch * 8) == 0 {
                                 eprintln!("  [gpu] applied {} pairs", applied);
