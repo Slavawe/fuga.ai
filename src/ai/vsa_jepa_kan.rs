@@ -88,20 +88,27 @@ impl FastKanLayer {
                 t_buf[base + k + 1] = 2.0 * x_norm * t_buf[base + k] - t_buf[base + k - 1];
             }
         }
-        // Матричное произведение weights · T
+        // Матричное произведение weights · T — параллельно по выходным нейронам.
+        use rayon::prelude::*;
         let out_f = self.out_features.min(output.len());
-        for o in 0..out_f {
-            let mut sum = 0.0f32;
-            let out_off = o * self.in_features * dg1;
-            for i in 0..in_f {
-                let in_off = i * dg1;
-                let w_off = out_off + in_off;
-                for k in 0..dg1 {
-                    sum += self.weights[w_off + k] * t_buf[in_off + k];
+        let in_features = self.in_features;
+        let weights = &self.weights;
+        let t = &t_buf;
+        output[..out_f]
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(o, out_o)| {
+                let out_off = o * in_features * dg1;
+                let mut sum = 0.0f32;
+                for i in 0..in_f {
+                    let in_off = i * dg1;
+                    let w_off = out_off + in_off;
+                    for k in 0..dg1 {
+                        sum += weights[w_off + k] * t[in_off + k];
+                    }
                 }
-            }
-            output[o] = sum;
-        }
+                *out_o = sum;
+            });
     }
 }
 
@@ -317,15 +324,21 @@ impl HybridCore {
     /// Направления из A_old уже в null-space P → их компонента гасится.
     #[inline]
     fn project_owm(&mut self) {
+        use rayon::prelude::*;
         let d = LATENT_DIM;
-        for o in 0..d {
-            let mut acc = 0.0f32;
-            let row = o * d;
-            for i in 0..d {
-                acc += self.p_owm[row + i] * self.buf_z_fused[i];
-            }
-            self.buf_px[o] = acc;
-        }
+        let p = &self.p_owm;
+        let zf = &self.buf_z_fused;
+        self.buf_px
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(o, px)| {
+                let row = o * d;
+                let mut acc = 0.0f32;
+                for i in 0..d {
+                    acc += p[row + i] * zf[i];
+                }
+                *px = acc;
+            });
     }
 
     /// Forward: ẑ = normalize(W_local·px + α·FastKAN(px))
@@ -393,44 +406,63 @@ impl HybridCore {
         self.fuse_vsa(z_ctx, hv);
         self.project_owm();
 
+        use rayon::prelude::*;
         // --- W_local Widrow-Hoff ---
-        // pred_w = W_local · px
-        for o in 0..d {
-            let mut acc = 0.0f32;
-            let row = o * d;
-            for i in 0..d {
-                acc += self.w_local[row + i] * self.buf_px[i];
-            }
-            self.buf_w_pred[o] = acc;
+        // pred_w = W_local · px  (параллельно по строкам)
+        {
+            let px = &self.buf_px;
+            let w = &self.w_local;
+            self.buf_w_pred
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(o, p)| {
+                    let row = o * d;
+                    let mut acc = 0.0f32;
+                    for i in 0..d {
+                        acc += w[row + i] * px[i];
+                    }
+                    *p = acc;
+                });
         }
         // err_w = z_target − pred_w
         let mut err_w_sq = 0.0f32;
-        let mut err_w = vec![0.0f32; d]; // единственная аллокация в backward (d=512 f32 = 2KB)
+        let mut err_w = vec![0.0f32; d];
         for o in 0..d {
             let e = z_target.values[o] - self.buf_w_pred[o];
             err_w[o] = e;
             err_w_sq += e * e;
         }
-        // ΔW_local = lr · err ⊗ px  (защита OWM встроена: px уже в свободном подпространстве)
-        for o in 0..d {
-            let row = o * d;
-            let ew = err_w[o];
-            for i in 0..d {
-                self.w_local[row + i] += lr_w * ew * self.buf_px[i];
-            }
+        // ΔW_local = lr · err ⊗ px  (параллельно по строкам; OWM встроен в px)
+        {
+            let px = &self.buf_px;
+            self.w_local
+                .par_chunks_mut(d)
+                .enumerate()
+                .for_each(|(o, row)| {
+                    let ew = lr_w * err_w[o];
+                    for i in 0..d {
+                        row[i] += ew * px[i];
+                    }
+                });
         }
         self.updates += 1;
 
         // --- FastKAN на остатке ---
-        // residual = normalize(z_target − W_local·px)  (то, что W не смог выразить)
-        // Пересчитываем pred_w после обновления W_local
-        for o in 0..d {
-            let mut acc = 0.0f32;
-            let row = o * d;
-            for i in 0..d {
-                acc += self.w_local[row + i] * self.buf_px[i];
-            }
-            self.buf_w_pred[o] = acc;
+        // residual = normalize(z_target − W_local·px), пересчёт pred после update
+        {
+            let px = &self.buf_px;
+            let w = &self.w_local;
+            self.buf_w_pred
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(o, p)| {
+                    let row = o * d;
+                    let mut acc = 0.0f32;
+                    for i in 0..d {
+                        acc += w[row + i] * px[i];
+                    }
+                    *p = acc;
+                });
         }
         let mut residual = vec![0.0f32; d];
         for o in 0..d {
@@ -457,18 +489,30 @@ impl HybridCore {
                 t_buf[base + k + 1] = 2.0 * xn * t_buf[base + k] - t_buf[base + k - 1];
             }
         }
+        // err_kan[o] = residual − KAN(px); квадрат нормы — редукция.
+        let mut err_kan = vec![0.0f32; d];
         for o in 0..d {
-            let e_kan = residual[o] - self.buf_kan_out[o];
-            err_kan_sq += e_kan * e_kan;
-            let out_off = o * d * dg1;
-            for i in 0..d {
-                let in_off = i * dg1;
-                for k in 0..dg1 {
-                    self.fast_kan.weights[out_off + in_off + k] +=
-                        lr_kan * e_kan * t_buf[in_off + k];
-                }
-            }
+            let e = residual[o] - self.buf_kan_out[o];
+            err_kan[o] = e;
+            err_kan_sq += e * e;
         }
+        // Обновление весов Чебышева — параллельно по выходным строкам (o).
+        // Каждая строка weights[o*d*dg1 .. (o+1)*d*dg1] независима.
+        use rayon::prelude::*;
+        let row_len = d * dg1;
+        let t = &t_buf;
+        self.fast_kan.weights
+            .par_chunks_mut(row_len)
+            .enumerate()
+            .for_each(|(o, row)| {
+                let scale = lr_kan * err_kan[o];
+                for i in 0..d {
+                    let in_off = i * dg1;
+                    for k in 0..dg1 {
+                        row[in_off + k] += scale * t[in_off + k];
+                    }
+                }
+            });
         self.kan_updates += 1;
 
         (err_w_sq, err_kan_sq)
