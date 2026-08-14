@@ -12,6 +12,7 @@ pub mod htm_temporal;
 pub mod hybrid;
 pub mod jepa;
 pub mod kan;
+pub mod vsa_jepa_kan;  // Единый гибридный контур VSA + H-JEPA + OWM + KAN
 pub mod latent_jepa;
 pub mod memory_store;
 pub mod moe;

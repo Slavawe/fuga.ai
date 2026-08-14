@@ -54,7 +54,9 @@ fn check(err: u32, msg: &str) {
     }
 }
 
-static PTX_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/fuga_kernel.ptx"));
+// CUDA PTX отключен (build.rs заглушён для CPU-тестирования)
+// static PTX_SOURCE: &str = include_str!(concat!(env!("OUT_DIR"), "/fuga_kernel.ptx"));
+static PTX_SOURCE: &str = ""; // Заглушка
 
 pub struct GpuContext {
     pub available: bool,
