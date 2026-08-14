@@ -516,6 +516,34 @@ impl HybridCore {
         err_sq
     }
 
+    /// Единый обучающий шаг для трейнера (unified_gpu_train).
+    /// Объединяет локальный (byte) канал + опциональный патчевый канал за один
+    /// вызов, применяет KAN-cap раз в 50 шагов. Возвращает (err_w², err_kan², err_patch²).
+    ///
+    /// Заменяет устаревшие раздельные вызовы g.hybrid_step / g.hybrid_step2.
+    /// z_patch=None → патчевый шаг пропускается (err_patch=0).
+    pub fn step(
+        &mut self,
+        z_ctx: &LatentVector,
+        z_target: &LatentVector,
+        hv: Option<&Hypervector>,
+        z_patch: Option<(&LatentVector, &LatentVector)>,
+        lr_w: f32,
+        lr_kan: f32,
+        lr_patch: f32,
+    ) -> (f32, f32, f32) {
+        let (err_w, err_kan) = self.learn_step(z_ctx, z_target, hv, lr_w, lr_kan);
+        let err_patch = match z_patch {
+            Some((pc, pt)) => self.learn_patch_step(pc, pt, lr_patch),
+            None => 0.0,
+        };
+        // Мягкий KAN-cap раз в 50 шагов (как cap_outputs в KanTransition).
+        if self.updates % 50 == 0 {
+            self.cap_kan();
+        }
+        (err_w, err_kan, err_patch)
+    }
+
     // -----------------------------------------------------------------------
     // Фаза 2: OWM консолидация — защита выученных направлений
     // -----------------------------------------------------------------------
