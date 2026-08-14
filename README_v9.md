@@ -94,7 +94,11 @@ cargo test --release --lib ai::vsa_jepa_kan::tests
 
 ### Standalone трейнер (CPU)
 
-См. документацию в [docs/PHASE4_REPORT.md](docs/PHASE4_REPORT.md)
+```bash
+# См. документацию в docs/PHASE4_REPORT.md
+rustc --edition 2021 -O examples/minimal_hybrid_train.rs
+./minimal_hybrid_train corpus.txt 1000
+```
 
 ---
 
@@ -107,8 +111,7 @@ cargo test --release --lib ai::vsa_jepa_kan::tests
 - [DATASETS_GUIDE.md](docs/DATASETS_GUIDE.md) — руководство по датасетам
 
 ### Исторические результаты
-- [README_v9.md](README_v9.md) — архитектура v9 (до HybridCore)
-- [docs/AGENTS_detailed_history_0809.md](docs/AGENTS_detailed_history_0809.md) — история v1-v9
+- [docs/AGENTS_detailed_history_0809.md](docs/AGENTS_detailed_history_0809.md) — детальная история v1-v9
 - [docs/FUGA_DOCS.md](docs/FUGA_DOCS.md) — техническая документация
 
 ---
