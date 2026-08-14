@@ -68,11 +68,39 @@ impl FastKanLayer {
         }
     }
     
+    /// Полновесный Чебышевский forward: out[o] = Σ_i Σ_k w[o,i,k]·T_k(tanh(x_i))
+    /// T_k — полиномы Чебышева первого рода (T_0=1, T_1=x, T_{k+1}=2x·T_k − T_{k-1}).
+    /// tanh нормирует вход в [-1,1] (область ортогональности Чебышева).
     fn forward(&self, input: &[f32], output: &mut [f32]) {
-        // Упрощённый forward через weights (для совместимости)
-        output.copy_from_slice(&input[..output.len().min(input.len())]);
-        for v in output.iter_mut() {
-            *v *= 0.1; // Малая амплитуда для стабильности
+        let dg1 = self.degree + 1;
+        let in_f = self.in_features.min(input.len());
+        // Буфер полиномов T_k(x_i) для каждого входного измерения (стек).
+        let mut t_buf = vec![0.0f32; in_f * dg1];
+        for i in 0..in_f {
+            let x_norm = input[i].tanh(); // нормировка в [-1, 1]
+            let base = i * dg1;
+            t_buf[base] = 1.0; // T_0 = 1
+            if self.degree > 0 {
+                t_buf[base + 1] = x_norm; // T_1 = x
+            }
+            for k in 1..self.degree {
+                // Рекуррентность Чебышева: T_{k+1} = 2x·T_k − T_{k-1}
+                t_buf[base + k + 1] = 2.0 * x_norm * t_buf[base + k] - t_buf[base + k - 1];
+            }
+        }
+        // Матричное произведение weights · T
+        let out_f = self.out_features.min(output.len());
+        for o in 0..out_f {
+            let mut sum = 0.0f32;
+            let out_off = o * self.in_features * dg1;
+            for i in 0..in_f {
+                let in_off = i * dg1;
+                let w_off = out_off + in_off;
+                for k in 0..dg1 {
+                    sum += self.weights[w_off + k] * t_buf[in_off + k];
+                }
+            }
+            output[o] = sum;
         }
     }
 }
@@ -229,8 +257,15 @@ impl HybridCore {
         for i in 0..d {
             p_owm[i * d + i] = 1.0;
         }
+        // W_local = I (как LatentPredictor::new): W·px = px на старте, чтобы
+        // сигнал (в т.ч. VSA-подмес) проходил через контур до обучения. Иначе
+        // при W=0 forward возвращает normalize(0) независимо от входа.
+        let mut w_local = vec![0.0f32; d * d];
+        for i in 0..d {
+            w_local[i * d + i] = 1.0;
+        }
         Self {
-            w_local: vec![0.0f32; d * d],
+            w_local,
             w_patch: vec![0.0f32; d * d],
             p_owm,
             fast_kan: FastKanLayer::new(d, d, HYBRID_KAN_DEGREE),
