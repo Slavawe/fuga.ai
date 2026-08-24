@@ -46,14 +46,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="astral/configs/astral_scaled.json")
     ap.add_argument("--steps", type=int, default=600)
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--profile-vram", action="store_true",
+                    help="печатать потребление VRAM на каждом логе (CUDA)")
     args = ap.parse_args()
     cfg = json.load(open(args.config))
     dim = cfg["vsa_dimension"]
-    print(f"[astral] {cfg['environment_name']}  VSA={dim} bit")
+    device = args.device
+    print(f"[astral] {cfg['environment_name']}  VSA={dim} bit  device={device}")
 
     env = ScaledAstralEnvironment(vector_dim=dim)
 
-    predictor = JepaPredictor(dim)
+    predictor = JepaPredictor(dim).to(device)
     opt = torch.optim.Adam(predictor.parameters(), lr=1e-3)
 
     # старт: реальный кадр из COCO (если докачан) или синтетика
@@ -68,20 +72,26 @@ def main():
 
         h_prev = state["hv"].detach()
         pred = predictor(h_prev, torch.tensor([action]))
-        err_pred = float((pred - nxt_real["hv"]).norm() / (nxt_real["hv"].norm() + 1e-9))
-        err_base = float((h_prev - nxt_real["hv"]).norm() / (nxt_real["hv"].norm() + 1e-9))
+        real_cpu = nxt_real["hv"].cpu()
+        h_prev_cpu = h_prev.cpu()
+        err_pred = float((pred.detach().cpu() - real_cpu).norm() / (real_cpu.norm() + 1e-9))
+        err_base = float((h_prev_cpu - real_cpu).norm() / (real_cpu.norm() + 1e-9))
         pred_errs.append(err_pred)
         base_errs.append(err_base)
 
         loss = err_pred + 0.05 * torch.relu(1.0 - pred.std()).mean() \
             if isinstance(err_pred, float) else None
         # тензорный путь:
-        pred_t = predictor(h_prev.view(1, -1), torch.tensor([action]))
+        pred_t = predictor(h_prev.view(1, -1).to(device),
+                           torch.tensor([action], device=device))
         loss = ((pred_t - nxt_real["hv"]) ** 2).mean()
         opt.zero_grad(); loss.backward(); opt.step()
         state = nxt_real
 
         if step % 100 == 0 or step == args.steps:
+            if device == "cuda" and args.profile_vram:
+                print(f"  VRAM allocated: "
+                      f"{torch.cuda.memory_allocated()/2**20:.0f} MB")
             w = 50
             bp = np.mean(pred_errs[-w:]) if pred_errs else 0
             bb = np.mean(base_errs[-w:]) if base_errs else 0
