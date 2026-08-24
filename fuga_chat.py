@@ -18,7 +18,7 @@ from fuga_persona import PersonaSynthesizer
 
 
 class FugaChatEngine:
-    def __init__(self, style="adaptive"):
+    def __init__(self, style="adaptive", persistent=True):
         self.persona = PersonaSynthesizer(style=style)
         self.state = {"last_intent": None, "facts_in_row": 0}
         self.sym = fuga_core.SymbolicExecutor()
@@ -28,7 +28,18 @@ class FugaChatEngine:
         self.last_subject = None
         # память фактов: lang -> subject -> [(relation, object)]
         self.memory = {"ru": {}, "en": {}}
+        self.persistent = None
+        if persistent:
+            try:
+                from fuga_memory import PersistentVSAMemory
+                self.persistent = PersistentVSAMemory(self.binder)
+            except Exception as e:
+                print(f"[v2.0 memory] offline: {e}")
         self._load_conceptnet()
+        if persistent and self.persistent:
+            restored = self.persistent.load_facts_into(self.memory)
+            if restored:
+                print(f"[v2.0 memory] восстановлено {restored} фактов прошлых сессий")
         self._load_ibm()
 
     # ---------- загрузка ----------
@@ -190,6 +201,12 @@ class FugaChatEngine:
 
     def respond(self, user_input: str) -> str:
         text = user_input.strip()
+        response = self._respond_inner(text)
+        if self.persistent:
+            self.persistent.add_episode(text, response)
+        return response
+
+    def _respond_inner(self, text: str) -> str:
         intent = self.detect_intent(text)
 
         if intent == "greeting":
@@ -219,6 +236,8 @@ class FugaChatEngine:
                     rel_guess = "isa"
                 o_ = "_".join(self._tok(rest, 6)) or rest
                 self.memory.setdefault("ru", {}).setdefault(s_, []).append((rel_guess, o_))
+                if self.persistent:
+                    self.persistent.add_fact("ru", s_, rel_guess, o_)
                 self.state["last_intent"] = "learn"
                 return self.persona.format_ingest(s_, rel_guess, o_)
             return "Формат обучения: 'запомни: X — это Y'."
