@@ -49,6 +49,9 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--profile-vram", action="store_true",
                     help="печатать потребление VRAM на каждом логе (CUDA)")
+    ap.add_argument("--novelty-filter", action="store_true",
+                    help="адаптивный surprise-фильтр: шаг оптимизатора только "
+                         "на непредсказуемых состояниях")
     args = ap.parse_args()
     cfg = json.load(open(args.config))
     dim = cfg["vsa_dimension"]
@@ -58,6 +61,13 @@ def main():
     env = ScaledAstralEnvironment(vector_dim=dim)
 
     predictor = JepaPredictor(dim).to(device)
+
+    flt = None
+    if args.novelty_filter:
+        from astral.data_filter import AstralDataStreamFilter
+        flt = AstralDataStreamFilter(novelty_threshold=0.35, adaptive=True)
+        print("[filter] adaptive novelty: optimizer.step() только при surprise "
+              ">= EMA*1.25")
     opt = torch.optim.Adam(predictor.parameters(), lr=1e-3)
 
     # старт: реальный кадр из COCO (если докачан) или синтетика
@@ -84,8 +94,13 @@ def main():
         # тензорный путь:
         pred_t = predictor(h_prev.view(1, -1).to(device),
                            torch.tensor([action], device=device))
-        loss = ((pred_t - nxt_real["hv"]) ** 2).mean()
-        opt.zero_grad(); loss.backward(); opt.step()
+        do_update = True
+        if flt is not None:
+            ok_f, _s = flt.should_ingest(pred_t.detach().cpu(), nxt_real["hv"].cpu())
+            do_update = ok_f
+        loss = ((pred_t - nxt_real["hv"].to(device)) ** 2).mean()
+        if do_update:
+            opt.zero_grad(); loss.backward(); opt.step()
         state = nxt_real
 
         if step % 100 == 0 or step == args.steps:
