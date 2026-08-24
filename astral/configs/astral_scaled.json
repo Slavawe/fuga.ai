@@ -1,0 +1,29 @@
+{
+  "environment_name": "Astral-Wide-v1",
+  "vsa_dimension": 32768,
+  "patch_size": 16,
+  "frame_resolution": 512,
+  "capacity_measured": {
+    "slots_reliable_at_2048": 64,
+    "slots_reliable_at_32768": 256,
+    "note": "unbinding acc@1 vs 999 distractors; 2048 деградирует на 256 слотах, 32K держит"
+  },
+  "kan_architecture": {
+    "input_dim": 32768,
+    "hidden_dim": 4096,
+    "output_dim": 32768,
+    "num_layers": 8,
+    "grid_size": 10,
+    "spline_order": 3,
+    "hardware_note": "CPU-sandbox: полная конфигурация требует GPU; локально валидируется уменьшенный профиль"
+  },
+  "jepa_predictor": {
+    "variance_loss_weight": 25.0,
+    "invariance_loss_weight": 25.0,
+    "covariance_loss_weight": 1.0
+  },
+  "memory": {
+    "persistent_vsa_path": "./vsa_memory/astral_32k_crystals.bin",
+    "max_facts_buffer": 1000000
+  }
+}
