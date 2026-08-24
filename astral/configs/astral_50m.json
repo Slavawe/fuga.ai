@@ -1,0 +1,23 @@
+{
+  "environment_name": "Astral-50M-v1",
+  "_param_math": "ChebyKAN params/layer = out*in*(degree+1); 12 слоёв x 896x896x5 = 48.2M. Профиль '16384 hidden' из черновика дал бы 1.34B параметров В ОДНОМ слое — превышение бюджета x27.",
+  "vsa_dimension": 32768,
+  "kan_architecture": {
+    "type": "cheby_kan",
+    "degree": 4,
+    "hidden_dim": 896,
+    "num_layers": 12,
+    "total_params_approx": 48200000,
+    "vram_fp16_weights_mb": 92,
+    "vram_estimate_batch64_total_mb": 1400,
+    "fits_gtx1660ti_6gb": true
+  },
+  "jepa_predictor": {
+    "variance_loss_weight": 25.0,
+    "invariance_loss_weight": 25.0,
+    "covariance_loss_weight": 1.0
+  },
+  "memory": {
+    "persistent_vsa_path": "./vsa_memory/astral_50m.bin"
+  }
+}
