@@ -1,0 +1,25 @@
+{
+  "environment_name": "Astral-1B-MoK",
+  "vsa_dimension": 32768,
+  "_param_math_WARNING": "Первый слой 32768->896 ChebyKAN(degree 4) = 147M параметров НА ЭКСПЕРТА. При 32 экспертах это 4.7GB только на входные слои. Решение: ОДИН общий VSA-адаптер (shared, 147M) + эксперты 896x896 внутри.",
+  "architecture": {
+    "type": "SparseMixtureOfKANs",
+    "num_experts": 32,
+    "top_k": 2,
+    "shared_vsa_adapter": {"in": 32768, "out": 896, "params": "147M (один раз)"},
+    "expert_config": {
+      "hidden_dim": 896,
+      "num_layers": 11,
+      "params_per_expert_approx": "44M",
+      "total_with_shared_adapter_approx": "1.55B"
+    },
+    "active_parameters_per_step": "~103M (адаптер + 2 эксперта)",
+    "vram_fp16_weights_gb": 3.1,
+    "vram_note": "Adam FP32 состояния x2 поверх весов НЕ влезают в 6GB -> нужен 8-bit optimizer или frozen эксперты с обучением только роутера"
+  },
+  "training": {
+    "novelty_filter_ema": 1.25,
+    "load_balancing_weight": 0.01,
+    "batch_size": 64
+  }
+}
