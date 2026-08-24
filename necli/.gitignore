@@ -1,0 +1,31 @@
+# LibreOffice lock files
+.~lock.*#
+
+# Python-generated files
+__pycache__/
+test.py
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+*.txt
+.env
+.data/*
+!.data/skills/
+.data/skills/*
+!.data/skills/default/
+!.data/agents/
+.ruff_cache/
+.pytest_cache/
+.prev_git/
+logs/
+dist/
+*.zip
+scripts/
+.claude/
+tests/
+docx_engine_port/

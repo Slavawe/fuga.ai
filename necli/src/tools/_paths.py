@@ -1,0 +1,104 @@
+"""Общие утилиты для работы с путями и рабочей директорией.
+
+Используются в file_ops, dir_ops, shell.
+Рабочая директория хранится в ContextVar — это даёт автоматическую
+изоляцию между параллельными asyncio-тасками (каждый таск получает
+свою копию контекста при создании). Это критично для субагентов,
+работающих в git worktree'ах параллельно с главным агентом.
+"""
+
+import contextvars
+import os
+from pathlib import Path
+
+_working_dir_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "necli_working_dir",
+    default=os.getcwd(),  # noqa: B039
+)
+
+
+def set_working_dir(path: str):
+    _working_dir_var.set(path)
+
+
+def get_working_dir() -> str:
+    return _working_dir_var.get()
+
+
+def use_working_dir(path: str):
+    """Контекст-менеджер для временной подмены working dir.
+
+    Использует ContextVar.set/reset — изменение видно только в текущем
+    asyncio-таске и его дочерних (Task копирует context при создании).
+
+        with use_working_dir("/tmp/sub-1"):
+            ... # tools видят /tmp/sub-1
+    """
+    class _Ctx:
+        def __init__(self, p):
+            self._p = p
+            self._tok = None
+
+        def __enter__(self):
+            self._tok = _working_dir_var.set(self._p)
+            return self
+
+        def __exit__(self, *exc):
+            if self._tok is not None:
+                _working_dir_var.reset(self._tok)
+
+    return _Ctx(path)
+
+
+def resolve_path(path: str, *, extensions: tuple[str, ...] | None = None) -> Path:
+    """Резолвит путь относительно рабочей директории.
+
+    Раскрывает ~, переменные окружения, относительные пути.
+    Нормализует через normpath (убирает .., .), но НЕ через realpath —
+    realpath следует за симлинками, что ломает изоляцию субагентов в
+    git worktree (если в worktree есть симлинк на main, запись утечёт).
+    """
+    p = os.path.expanduser(path)
+    p = os.path.expandvars(p)
+    if not os.path.isabs(p):
+        p = os.path.join(get_working_dir(), p)
+    candidate = Path(os.path.normpath(p))
+    if candidate.exists() or candidate.suffix:
+        return candidate
+
+    allowed_extensions = (
+        {extension.lower() for extension in extensions}
+        if extensions is not None else None
+    )
+    try:
+        matches = [
+            child for child in candidate.parent.iterdir()
+            if child.is_file()
+            and child.name.startswith(f"{candidate.name}.")
+            and (allowed_extensions is None or child.suffix.lower() in allowed_extensions)
+        ]
+    except OSError:
+        return candidate
+    if not matches:
+        return candidate
+    return min(
+        matches,
+        key=lambda child: (child.stem != candidate.name, child.name.casefold()),
+    )
+
+
+def clean_path(val) -> str:
+    """Нормализует путь из аргументов: strip + убирает обрамляющие кавычки.
+
+    Если на вход прилетает list/tuple — берёт первый элемент (модели иногда
+    кладут одиночный путь в массив).
+    """
+    if isinstance(val, (list, tuple)):
+        val = val[0] if val else ""
+    if not isinstance(val, str):
+        val = str(val)
+    val = val.strip()
+    if len(val) >= 2:  # noqa: SIM102
+        if (val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'"):
+            val = val[1:-1]
+    return val

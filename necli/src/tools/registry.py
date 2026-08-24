@@ -1,0 +1,252 @@
+"""
+Реестр инструментов и диспетчер выполнения.
+"""
+
+import time
+from collections.abc import Callable
+
+from config import READ_ONLY_TOOLS as _READ_ONLY_CANONICAL
+from logger import logger
+from tools.expand_result import execute_expand_tool_result
+from tools.file_ops import (
+    create_docx,
+    create_file,
+    docx_screenshot,
+    execute_grep,
+    patch_file,
+    read,
+)
+from tools.fuga_tool import execute_fuga_learn, execute_fuga_query
+from tools.image_search import execute_image_search
+from tools.memory_tool import memory_list, memory_read, memory_write
+from tools.models import ToolCall, ToolResult
+from tools.poll import execute_poll
+from tools.shell import execute_shell
+from tools.skill_tool import execute_skill
+from tools.subagent import execute_subagent
+from tools.web_fetch import execute_web_fetch
+from tools.web_search import execute_web_search
+
+
+# LSP-инструменты импортируются лениво, чтобы избежать циркулярного импорта:
+# apis/lsp_client.py импортирует tools.models, что инициализирует tools/__init__.py,
+# который импортирует tools.registry. Регистрируем тонкие обёртки.
+def _lsp_ref(call):
+    from apis.lsp_client import execute_lsp_references
+    return execute_lsp_references(call)
+
+
+def _lsp_diag(call):
+    from apis.lsp_client import execute_lsp_diagnostics
+    return execute_lsp_diagnostics(call)
+
+# Маппинг имя → функция-обработчик
+TOOL_REGISTRY: dict[str, Callable] = {
+    "shell": execute_shell,
+    "read": read,
+    "grep": execute_grep,
+    "patch_file": patch_file,
+    "create_file": create_file,
+    "create_docx": create_docx,
+    "docx_screenshot": docx_screenshot,
+    "poll": execute_poll,
+    "skill": execute_skill,
+    "subagent": execute_subagent,
+    "web_search": execute_web_search,
+    "web_fetch": execute_web_fetch,
+    "image_search": execute_image_search,
+    "expand_tool_result": execute_expand_tool_result,
+    "memory_write": memory_write,
+    "memory_list": memory_list,
+    "memory_read": memory_read,
+    "fuga_query": execute_fuga_query,
+    "fuga_learn": execute_fuga_learn,
+    "lsp_references": _lsp_ref,
+    "lsp_diagnostics": _lsp_diag,
+}
+
+
+def _hook_tool_input(call: ToolCall) -> dict:
+    """Готовит tool_input для hook payload из ToolCall."""
+    ti = dict(call.args or {})
+    if call.command and "command" not in ti:
+        ti["command"] = call.command
+    return ti
+
+
+def _run_pre_tool_hooks(call: ToolCall) -> ToolResult | None:
+    """PreToolUse: возвращает blocked-ToolResult или None (продолжать)."""
+    try:
+        from config.hooks import has_hooks
+
+        if not has_hooks("PreToolUse"):
+            return None
+        from hooks import run_hooks
+        from tools._paths import get_working_dir
+
+        outcome = run_hooks(
+            "PreToolUse",
+            {"tool_name": call.tool_name, "tool_input": _hook_tool_input(call)},
+            working_dir=get_working_dir(),
+        )
+        if outcome.blocked:
+            reason = outcome.block_reason or "Blocked by PreToolUse hook."
+            return ToolResult(
+                name=call.tool_name,
+                status="error",
+                output=f"⛔ {reason}",
+                exit_code=2,
+                command=call.command,
+            )
+    except Exception as e:
+        logger.opt(exception=True).warning("PreToolUse hook error ignored: {}", e)
+    return None
+
+
+def _run_post_tool_hooks(call: ToolCall, result: ToolResult) -> None:
+    """PostToolUse: может подмешать additionalContext в вывод инструмента."""
+    try:
+        from config.hooks import has_hooks
+
+        if not has_hooks("PostToolUse"):
+            return
+        from hooks import run_hooks
+        from tools._paths import get_working_dir
+
+        outcome = run_hooks(
+            "PostToolUse",
+            {
+                "tool_name": call.tool_name,
+                "tool_input": _hook_tool_input(call),
+                "tool_response": {"status": result.status, "exit_code": result.exit_code},
+            },
+            working_dir=get_working_dir(),
+        )
+        ctx = outcome.context_text
+        if ctx:
+            sep = "\n\n" if result.output else ""
+            result.output = f"{result.output}{sep}[hook] {ctx}"
+    except Exception as e:
+        logger.opt(exception=True).warning("PostToolUse hook error ignored: {}", e)
+
+
+def execute_call(call: ToolCall) -> ToolResult:
+    """Выполняет вызов инструмента через реестр."""
+    # PreToolUse hooks: могут заблокировать вызов до выполнения.
+    blocked = _run_pre_tool_hooks(call)
+    if blocked is not None:
+        return blocked
+
+    handler = TOOL_REGISTRY.get(call.tool_name)
+
+    if handler is None:
+        logger.warning(
+            "execute_call: unknown tool '{}' (args_keys={})",
+            call.tool_name,
+            list((call.args or {}).keys()),
+        )
+        return ToolResult(
+            name=call.tool_name or "unknown",
+            status="error",
+            output=(
+                f"Неизвестный инструмент: '{call.tool_name}'. "
+                f"Доступны: {', '.join(sorted(TOOL_REGISTRY.keys()))}"
+            ),
+            exit_code=1,
+            command=call.command,
+        )
+
+    # Валидация/нормализация args по схеме инструмента ДО вызова handler'а:
+    # резолвит алиасы (new_name→new_path), коэрсит типы (line="5"→5) и даёт
+    # модели точную диагностику вместо невнятного симптома из handler'а.
+    from tools.arg_validation import validate_and_normalize
+
+    norm_args, arg_error = validate_and_normalize(
+        call.tool_name, call.args or {}, command=call.command,
+    )
+    if arg_error is not None:
+        logger.warning("execute_call: invalid args for {}: {}", call.tool_name, arg_error)
+        return ToolResult(
+            name=call.tool_name,
+            status="error",
+            output=arg_error,
+            exit_code=1,
+            command=call.command,
+        )
+    call.args = norm_args
+
+    # `patches` тоже отрезаем — без него предпросмотр огромный.
+    args_preview = {k: (v if not isinstance(v, str) or len(v) <= 120 else v[:120] + "…")
+                    for k, v in (call.args or {}).items()
+                    if k not in ("content", "b64", "insert", "replace", "find", "patches")}
+    logger.debug("→ tool {} args={}", call.tool_name, args_preview)
+    t0 = time.monotonic()
+    try:
+        result = handler(call)
+    except Exception as e:
+        logger.opt(exception=True).error(
+            "✗ tool {} raised {}: {}", call.tool_name, type(e).__name__, e,
+        )
+        err = ToolResult(
+            name=call.tool_name, status="error",
+            output=f"Внутренняя ошибка инструмента: {type(e).__name__}: {e}",
+            exit_code=1, command=call.command,
+        )
+        err.elapsed = time.monotonic() - t0
+        return err
+    # Контракт 7.1: ToolResult.elapsed выставляется ВСЕГДА в одной точке —
+    # здесь, в центральном диспетчере. Если handler уже выставил ненулевое
+    # значение (например execute_and_show меряет дополнительно UI-обвязку) —
+    # оставляем его. Иначе ставим наше измерение.
+    if not getattr(result, "elapsed", 0):
+        result.elapsed = time.monotonic() - t0
+    if result.status == "error":
+        logger.warning(
+            "← tool {} ERROR exit={} out={!r}",
+            call.tool_name, result.exit_code, (result.output or "")[:200],
+        )
+    else:
+        logger.debug("← tool {} ok ({}b)", call.tool_name, len(result.output or ""))
+    # PostToolUse hooks: могут подмешать контекст в вывод.
+    _run_post_tool_hooks(call, result)
+    return result
+
+
+# Канонический набор — config.READ_ONLY_TOOLS.
+PLANNING_TOOLS = frozenset(_READ_ONLY_CANONICAL | {"poll", "skill", "web_search", "web_fetch"})
+SWARM_TOOLS = frozenset(PLANNING_TOOLS | {"shell", "subagent"})
+
+
+
+
+def is_tool_allowed(
+    tool_name: str,
+    mode: str,
+    active_skills: set[str] | None = None,
+) -> bool:
+    if mode == "agent":
+        return True
+    if mode in ("swarm", "auto"):
+        return tool_name in SWARM_TOOLS
+    return tool_name in PLANNING_TOOLS
+
+
+def build_blocked_result(call: ToolCall, mode: str = "planning") -> ToolResult:
+    """Создаёт ToolResult для инструмента, запрещённого текущим режимом."""
+    allowed = SWARM_TOOLS if mode in ("swarm", "auto") else PLANNING_TOOLS
+    allowed_human = ", ".join(sorted(allowed))
+    return ToolResult(
+        name=call.tool_name,
+        status="error",
+        output=(
+            f"Tool '{call.tool_name}' is not allowed in {mode} mode. "
+            f"Only {allowed_human} are available."
+        ),
+        exit_code=1,
+        command=call.command,
+    )
+
+
+def list_tools() -> list[str]:
+    """Возвращает список доступных инструментов."""
+    return sorted(TOOL_REGISTRY.keys())

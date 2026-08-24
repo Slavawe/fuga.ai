@@ -1,0 +1,264 @@
+"""Выполнение shell-команд через subprocess."""
+
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+from logger import logger
+from tools._paths import get_working_dir
+from tools.background import start_background, wait_background_result
+from tools.models import ToolCall, ToolResult
+
+_EXECUTION_TIMEOUT = 60
+
+# Regex для rm -rf / (корень, не /path) — блокируем только когда / является
+# отдельным аргументом, а не началом пути.
+_RM_RF_ROOT_RE = re.compile(
+    r'\brm\b\s+.*?(?:-rf|-r\s+-f)\s+/(?:\s|$|[;&|>`\n#])',
+    re.IGNORECASE,
+)
+
+# sudo — блокируем в любом месте команды (начало строки, после &&, ||, ;, |, и т.д.)
+_SUDO_RE = re.compile(
+    r'(?:^|[;&|`\n(])\s*sudo\b',
+    re.IGNORECASE,
+)
+
+_BLOCKED_COMMANDS = [
+    "rm -rf /*",
+    "mkfs",
+    "dd if=/dev/zero",
+    ":(){ :|:& };:",
+    "> /dev/sda",
+]
+
+# Паттерны heredoc / перенаправления для создания файлов
+_HEREDOC_RE = re.compile(
+    r'(?:cat|tee)\s+.*?<<\s*[\'"]?(\w+)[\'"]?',
+    re.DOTALL,
+)
+_CAT_REDIRECT_RE = re.compile(
+    r'cat\s+>',
+)
+# tee, пишущий в файл (с опциями -a и без), но НЕ как часть конвейера в grep и т.п.
+_TEE_REDIRECT_RE = re.compile(
+    r'(?:^|\||&&|;)\s*tee\b(?:\s+-\w+)*\s+\S',
+)
+
+# _working_dir, get_working_dir, set_working_dir — перенесены в tools/_paths.py
+# Реэкспортируются через этот модуль для обратной совместимости.
+
+
+def _utf8_env() -> dict:
+    """env с UTF-8 локалью. На Windows C.UTF-8 нет — задаём только PYTHONUTF8."""
+    env = dict(os.environ)
+    if sys.platform == "win32":
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+    else:
+        env["LC_ALL"] = "C.UTF-8"
+        env["LANG"] = "C.UTF-8"
+    return env
+
+
+def _is_blocked(command: str) -> str | None:
+    cmd_stripped = command.strip().lower()
+    for blocked in _BLOCKED_COMMANDS:
+        if blocked in cmd_stripped:
+            return f"Заблокировано: '{blocked}'"
+    # rm -rf / (корень, не /path) — проверяем через regex, чтобы не блокировать
+    # безопасные команды вроде rm -rf /tmp
+    if _RM_RF_ROOT_RE.search(command.strip()):
+        return "Заблокировано: 'rm -rf /'"
+    if _SUDO_RE.search(command.strip()):
+        return "Заблокировано: sudo — запрещено. Используйте инструменты necli напрямую без sudo."
+    return None
+
+
+_QUOTED_SEGMENT_RE = re.compile(r"""'[^']*'|"[^"]*\"""", re.DOTALL)
+
+def _strip_quoted(command: str) -> str:
+    """
+    Вырезает содержимое кавычек, чтобы паттерны cat/tee/heredoc не срабатывали
+    на литеральном тексте внутри строк (например `echo "cat > x"`). Реальные
+    shell-операторы (>, <<, |, &&) вне кавычек сохраняются.
+
+    Перед удалением проверяем баланс кавычек через shlex: при незакрытой кавычке
+    остаёмся осторожными и возвращаем команду как есть (fail-safe — лучше лишний
+    раз заблокировать, чем пропустить реальную запись файла).
+    """
+    try:
+        shlex.split(command, posix=True)
+    except ValueError:
+        return command
+    return _QUOTED_SEGMENT_RE.sub("", command)
+
+def _is_file_write_via_shell(command: str) -> str | None:
+    """
+    Детектирует попытки записи файлов через shell вместо нативных инструментов.
+    Возвращает сообщение-подсказку или None.
+
+    Политика: блокируем heredoc (cat/tee <<EOF) и редиректы 'cat >' / 'tee file',
+    направляя агента к create_file. echo/printf-редиректы НЕ блокируем —
+    это осознанное решение (мелкие inline-операции), зафиксированное тестами.
+    Содержимое кавычек игнорируется, чтобы литералы вроде `echo "cat > x"`
+    не давали ложных срабатываний.
+    """
+    cmd = _strip_quoted(command.strip())
+
+    # heredoc: cat > file << 'EOF', cat > file <<EOF, tee file << EOF
+    if _HEREDOC_RE.search(cmd):
+        return (
+            "REJECTED: Do not use heredoc (<<EOF) to write files. "
+            "Use the create_file tool instead.\n"
+            "Example:\n"
+            ':::call create_file path="file.py"\n'
+            "your content here\n"
+            "call:::"
+        )
+
+    # cat > file (without heredoc, just redirect)
+    if _CAT_REDIRECT_RE.search(cmd):
+        return (
+            "REJECTED: Do not use 'cat >' to write files. "
+            "Use the create_file tool instead."
+        )
+
+    # tee file (tee writes its stdin to a file even without heredoc)
+    if _TEE_REDIRECT_RE.search(cmd):
+        return (
+            "REJECTED: Do not use 'tee' to write files. "
+            "Use the create_file tool instead."
+        )
+
+    return None
+
+
+def _strip_shell_prefix(command: str) -> str:
+    """Убирает дублированный префикс 'shell' из команды."""
+    if command.startswith("shell"):
+        rest = command[5:]
+        if not rest or rest[0] in (' ', '\t', '\n'):
+            return rest.lstrip()
+    return command
+
+
+def execute_shell(call: ToolCall) -> ToolResult:
+    """Выполняет shell-команду."""
+    command = _strip_shell_prefix(call.command.strip())
+
+    if not command:
+        return ToolResult(
+            name="shell", status="error",
+            output="Пустая команда",
+            exit_code=-1, command="",
+        )
+
+    blocked = _is_blocked(command)
+    if blocked:
+        return ToolResult(
+            name=call.name, status="error",
+            output=blocked,
+            exit_code=-1, command=command,
+        )
+
+    # Блокируем запись файлов через shell
+    file_write_hint = _is_file_write_via_shell(command)
+    if file_write_hint:
+        return ToolResult(
+            name=call.name, status="error",
+            output=file_write_hint,
+            exit_code=-1, command=command,
+        )
+
+    # Фоновое выполнение: для тяжёлых/долгих команд. Запускаем в потоке,
+    # сразу возвращаем job-id и продолжаем работу. Уведомление о завершении
+    # придёт отдельным результатом в одном из следующих раундов.
+    if (call.args or {}).get("background"):
+        job_id = start_background(command, get_working_dir(), _utf8_env())
+        return ToolResult(
+            name=call.name, status="ok",
+            output=(
+                f"Started in background as {job_id}. Continue with other work — "
+                f"a notification with this command's output will arrive "
+                f"automatically once it finishes."
+            ),
+            exit_code=0, command=command,
+        )
+
+    # Субагент исполняет синхронные инструменты в worker thread. Его shell
+    # проводим через тот же process-group runner, что фоновые задачи, но без
+    # отдельной строки UI и без авто-доставки результата главному агенту.
+    from tools.cancellation import current_cancellation_scope
+    cancel_scope = current_cancellation_scope()
+    if cancel_scope is not None:
+        job_id = start_background(
+            command,
+            get_working_dir(),
+            _utf8_env(),
+            visible=False,
+            deliver_result=False,
+        )
+        cancel_scope.bind_job(job_id)
+        try:
+            result = wait_background_result(job_id)
+            result.name = call.name
+            return result
+        finally:
+            cancel_scope.clear_job(job_id)
+
+    # cd разрешён: команда выполняется в одном subprocess (shell=True), поэтому
+    # любой `cd` действует только внутри ЭТОГО вызова и не «утекает» между
+    # вызовами — следующий запуск снова стартует с cwd=get_working_dir().
+    # Это даёт агенту свободу работать в произвольных директориях
+    # (`cd /any/path && cmd`), не нарушая изоляцию субагентов.
+    logger.info("shell exec: {!r} (cwd={})", command[:300], get_working_dir())
+    run_kwargs = {
+        "capture_output": True, "text": True,
+        "timeout": _EXECUTION_TIMEOUT,
+        "cwd": get_working_dir(),
+        "env": _utf8_env(),
+    }
+    if sys.platform != "win32":
+        run_kwargs["executable"] = "/bin/bash"
+    try:
+        result = subprocess.run(command, shell=True, **run_kwargs)
+        logger.debug(
+            "shell done: exit={} stdout_len={} stderr_len={}",
+            result.returncode,
+            len(result.stdout or ""),
+            len(result.stderr or ""),
+        )
+
+        parts = []
+        if result.stdout:
+            parts.append(result.stdout)
+        if result.stderr:
+            parts.append(f"[stderr]\n{result.stderr}")
+
+        output = "\n".join(parts) if parts else "(no output)"
+
+        return ToolResult(
+            name=call.name,
+            status="ok" if result.returncode == 0 else "error",
+            output=output,
+            exit_code=result.returncode,
+            command=command,
+        )
+
+    except subprocess.TimeoutExpired:
+        logger.warning("shell timeout {}s: {!r}", _EXECUTION_TIMEOUT, command[:200])
+        return ToolResult(
+            name=call.name, status="error",
+            output=f"Timeout: {_EXECUTION_TIMEOUT}s",
+            exit_code=-1, command=command,
+        )
+    except Exception as e:
+        logger.opt(exception=True).error("shell crashed: {}", e)
+        return ToolResult(
+            name=call.name, status="error",
+            output=f"Error: {e}",
+            exit_code=-1, command=command,
+        )

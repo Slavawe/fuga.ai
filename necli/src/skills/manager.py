@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import logging
+import re
+import shutil
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from config.paths import BASE_DIR
+
+logger = logging.getLogger(__name__)
+
+SKILLS_DIR = BASE_DIR / "skills"
+# Дефолтные скиллы версионируются в git, пользовательские — нет (gitignore).
+# discover читает обе папки; пользовательский скилл перекрывает дефолтный по имени.
+# Новые скиллы (create/add) пишутся ТОЛЬКО в user, чтобы не попадать в git.
+DEFAULT_SKILLS_DIR = SKILLS_DIR / "default"
+USER_SKILLS_DIR = SKILLS_DIR / "user"
+SKILL_FILENAME = "SKILL.md"
+
+_active_skills: set[str] = set()
+_pending_messages: list[str] = []
+
+from _frontmatter import parse_frontmatter as _parse_frontmatter
+
+
+@dataclass
+class SkillInfo:
+    name: str
+    description: str
+    path: Path
+    disable_model_invocation: bool = False
+    _body: str | None = field(default=None, repr=False)
+
+    @property
+    def body(self) -> str:
+        if self._body is None:
+            self._body = _load_body(self.path)
+        return self._body
+
+
+def get_skills_dir() -> Path:
+    return USER_SKILLS_DIR
+
+
+
+
+
+def _load_body(skill_path: Path) -> str:
+    skill_md = skill_path / SKILL_FILENAME
+    if not skill_md.exists():
+        return ""
+    text = skill_md.read_text(encoding="utf-8")
+    _, body = _parse_frontmatter(text)
+    return body.strip()
+
+
+def _load_skill_info(skill_dir: Path) -> SkillInfo | None:
+    skill_md = skill_dir / SKILL_FILENAME
+    if not skill_md.exists():
+        return None
+    text = skill_md.read_text(encoding="utf-8")
+    meta, body = _parse_frontmatter(text)
+    name = meta.get("name", skill_dir.name)
+    description = meta.get("description", "")
+    if not description:
+        first_para = body.strip().split("\n\n")[0] if body.strip() else ""
+        description = first_para[:200]
+    disable = meta.get("disable-model-invocation", "false").lower() == "true"
+    return SkillInfo(
+        name=name,
+        description=description,
+        path=skill_dir,
+        disable_model_invocation=disable,
+        _body=body.strip(),
+    )
+
+
+def discover_skills() -> list[SkillInfo]:
+    # Дефолтные сначала, пользовательские поверх — одноимённый user-скилл
+    # перекрывает дефолтный. Имя для дедупликации — каноничное skill.name.
+    by_name: dict[str, SkillInfo] = {}
+    for base in (DEFAULT_SKILLS_DIR, USER_SKILLS_DIR):
+        if not base.exists():
+            continue
+        for d in sorted(base.iterdir()):
+            if d.is_dir():
+                info = _load_skill_info(d)
+                if info:
+                    by_name[info.name] = info
+    return sorted(by_name.values(), key=lambda s: s.name)
+
+
+def list_skills() -> list[SkillInfo]:
+    return discover_skills()
+
+
+def load_skill(name: str) -> SkillInfo | None:
+    for skill in discover_skills():
+        if skill.name == name:
+            return skill
+    for base in (USER_SKILLS_DIR, DEFAULT_SKILLS_DIR):
+        skill_dir = base / name
+        if skill_dir.exists():
+            return _load_skill_info(skill_dir)
+    return None
+
+
+def create_skill(name: str, description: str, content: str) -> SkillInfo | None:
+    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    skill_dir = USER_SKILLS_DIR / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / SKILL_FILENAME
+    text = f"---\nname: {name}\ndescription: {description}\n---\n\n{content}\n"
+    skill_md.write_text(text, encoding="utf-8")
+    return _load_skill_info(skill_dir)
+
+
+def remove_skill(name: str) -> bool:
+    skill = load_skill(name)
+    if skill is None:
+        logger.warning("skill remove: not found %s", name)
+        return False
+    shutil.rmtree(skill.path)
+    _active_skills.discard(name)
+    logger.info("skill remove: %s", name)
+    return True
+
+
+def activate_skill(name: str) -> None:
+    skill = load_skill(name)
+    if skill is None:
+        logger.warning("skill activate: not found %s", name)
+        return
+    # Используем каноничное skill.name (из frontmatter), а не имя-аргумент:
+    # при загрузке по имени директории они могут расходиться, и тогда
+    # _active_skills/gating (is_skill_active, registry) рассинхронизировались бы.
+    canonical = skill.name
+    _active_skills.add(canonical)
+    logger.info("skill activate: %s", canonical)
+    msg = (
+        f"━━━ СКИЛЛ АКТИВИРОВАН: {canonical} ━━━\n"
+        f"Следуй этим инструкциям до деактивации:\n\n"
+        f"{skill.body}\n"
+        f"━━━ КОНЕЦ СКИЛЛА: {canonical} ━━━"
+    )
+    _pending_messages.append(msg)
+
+
+def deactivate_skill(name: str) -> None:
+    _active_skills.discard(name)
+    logger.info("skill deactivate: %s", name)
+    msg = (
+        f"━━━ СКИЛЛ ДЕАКТИВИРОВАН: {name} ━━━\n"
+        f"Скилл '{name}' больше не действует. "
+        f"Не следуй его инструкциям."
+    )
+    _pending_messages.append(msg)
+
+
+def is_skill_active(name: str) -> bool:
+    return name in _active_skills
+
+
+def consume_pending_messages() -> list[str]:
+    msgs = list(_pending_messages)
+    _pending_messages.clear()
+    return msgs
+
+
+def reset_active_skills() -> None:
+    _active_skills.clear()
+    _pending_messages.clear()
