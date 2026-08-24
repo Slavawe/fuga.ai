@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Rust builds
+target/
+fuga-core/target/
+
+# Данные (гигабайты — качаются скриптами)
+datasets/
+dataset_vault/
+data/
+
+# Логи и временные файлы
+nohup.out
+*.log
+/tmp/
+
+# Чекпоинты и бинарные артефакты моделей
+*.fuga
+*.bin
+*.ckpt.*
+*.parquet
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+fuga_downloader

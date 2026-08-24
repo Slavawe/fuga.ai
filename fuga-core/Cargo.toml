@@ -1,0 +1,22 @@
+[package]
+name = "fuga-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fuga_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }
+numpy = "0.23"
+ndarray = "0.16"
+rayon = "1.10"
+rand = "0.8"
+serde_json = "1.0"
+tree-sitter = "0.25"
+tree-sitter-python = "0.23"
+tree-sitter-c = "0.23"
+
+[profile.release]
+opt-level = 3
