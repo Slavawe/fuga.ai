@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 """VL-JEPA Ingest v0: кадры/патчи -> VSA-кристаллы -> PersistentVSAMemory.
 
@@ -19,6 +18,9 @@ import time
 import numpy as np
 
 sys.path.insert(0, ".")
+
+
+import torch
 
 import fuga_core
 from fuga_memory import PersistentVSAMemory

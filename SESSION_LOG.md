@@ -105,3 +105,15 @@
 - [ ] OWM fine-tune slot translator на self_reflection.jsonl
 - [ ] Длинный прогон slot-decoder (scheduled sampling, attention sharpening)
 - [ ] UCF101 для motion-VSA (замена gated MSR-VTT)
+
+### Этап H — продолжение (24.08, инжест проверен)
+- COCO val2017 (5000 img) + annotations загружены и распакованы;
+  train2017 докачивается фоном (resume через curl -C -).
+- `vljepa_dataset_loader.py` smoke: **300 изображений → VSA-кристаллы за 5.1s**
+  (~60 img/s), 20 vision-фактов записано в PersistentVSAMemory.
+- Кросс-модальный retrieval БЕЗ контрастивного обучения: acc@1=0.000
+  (шанс 0.0033), acc@10=0.027 — ожидаемо: handcrafted цвет/граничные хеши
+  не выровнены с текстовыми HV. Следующий шаг — контрастивный JEPA-тренинг
+  (image-HV ↔ caption-HV) поверх готового инжеста.
+- Урок: `from __future__ import annotations` должен стоять сразу после
+  docstring; импорты torch — до использования в декораторах класса.
