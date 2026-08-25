@@ -327,3 +327,23 @@ int16-конверсии 32K-векторов; оптимизация возмо
 
 Интеграция: StreamMixer принимает extra_channel={name: [строки]},
 канал manuscript с весом потери x2 в UnifiedMoK.
+
+### Этап Q. FastVSA на Rust + трёхъязычный инжест ✅ (24.08)
+
+- `fuga-core`: класс FastVSA (xor/rotate/bundle на packed u64) +
+  pyfunction packed_u64_to_f32 (bit=0 -> +1, конвенция v3).
+- **Бенчмарк против Python-bigint (33K steps/s):**
+  | Операция | Rust |
+  |---|---|
+  | XOR-bind | 848,365 ops/s |
+  | Bit-rotate | 244,673 ops/s |
+  | Полный шаг (bind+rot) | **156,792 steps/s** (**×4.7**) |
+- `astral/multilingual_stream.py`: EN(FineWeb)/ZH(Wikipedia-zh; COIG мёртв
+  в datasets 5.x)/RU(Gazeta) — 120 документов через нативное ядро,
+  3.5 docs/s end-to-end (бутылочное горлышко — пословный binder.bind_batch).
+- Пер-модальный фильтр: pass 100% у всех языков с тривиальным предиктором —
+  ожидаемо; осмысленная фильтрация после обучения предиктора.
+- Teardown-краш HF-стримов: результаты печатаются до падения; обход os._exit.
+
+**Пуш заблокирован:** оба токена отозваны GitHub secret-scanning после
+утечки в чат. Локально 9 коммитов ждут отправки (2 ветки).

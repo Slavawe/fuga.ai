@@ -490,5 +490,136 @@ fn fuga_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filter::RustASTGrammarFilter>()?;
     m.add_class::<ibm_model::IbmModel1>()?;
     m.add_class::<symbolic_eval::SymbolicExecutor>()?;
+    m.add_class::<FastVSA>()?;
+    m.add_function(wrap_pyfunction!(packed_u64_to_f32, m)?)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// FastVSA: нативные битовые операции над packed состояниями (горячий путь).
+// ---------------------------------------------------------------------------
+
+/// Циклический сдвиг битов массива u64 (LSB-first внутри слов).
+fn rotate_words_u64(v: &[u64], shift: usize) -> Vec<u64> {
+    let words = v.len();
+    let total = words * 64;
+    let s = shift % total.max(1);
+    let word_shift = s / 64;
+    let bit_shift = s % 64;
+    let mut out = vec![0u64; words];
+    for i in 0..words {
+        let src = v[(i + words - word_shift) % words]; // сдвиг вправо по словам
+        if bit_shift == 0 {
+            out[i] = src;
+        } else {
+            let lo = src << bit_shift;
+            let hi_src = v[(i + words - word_shift - 1 + words) % words];
+            let hi = hi_src >> (64 - bit_shift);
+            out[i] = lo | hi;
+        }
+    }
+    out
+}
+
+#[pyclass]
+pub struct FastVSA {
+    dim_bits: usize,
+    dim_words: usize,
+}
+
+#[pymethods]
+impl FastVSA {
+    #[new]
+    pub fn new(dim_bits: usize) -> Self {
+        FastVSA { dim_bits, dim_words: dim_bits.div_ceil(64) }
+    }
+
+    /// Случайное packed состояние [dim_words] u64.
+    pub fn random_state<'py>(
+        &self, py: Python<'py>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<u64>>> {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let v: Vec<u64> = (0..self.dim_words).map(|_| rng.gen()).collect();
+        Ok(numpy::PyArray1::from_vec(py, v))
+    }
+
+    /// XOR-связывание (binding). a, b: [words].
+    pub fn bind<'py>(&self, py: Python<'py>, a: &Bound<'_, numpy::PyArray1<u64>>,
+                     b: &Bound<'_, numpy::PyArray1<u64>>)
+        -> PyResult<Bound<'py, numpy::PyArray1<u64>>>
+    {
+        // SAFETY: только чтение под GIL.
+        let av = unsafe { a.as_array() };
+        let bv = unsafe { b.as_array() };
+        let out: Vec<u64> = av.iter().zip(bv.iter()).map(|(&x, &y)| x ^ y).collect();
+        Ok(numpy::PyArray1::from_vec(py, out))
+    }
+
+    /// Битовая ротация.
+    pub fn rotate<'py>(&self, py: Python<'py>, x: &Bound<'_, numpy::PyArray1<u64>>,
+                       shift: usize)
+        -> PyResult<Bound<'py, numpy::PyArray1<u64>>>
+    {
+        use numpy::PyArrayMethods;
+        // SAFETY: только чтение.
+        let xv = unsafe { x.as_array() };
+        let owned: Vec<u64> = xv.iter().copied().collect();
+        Ok(numpy::PyArray1::from_vec(
+            py,
+            rotate_words_u64(&owned, shift),
+        ))
+    }
+
+    /// Побитовое большинство (bundling) по списку состояний.
+    pub fn bundle<'py>(&self, py: Python<'py>,
+                       states: Vec<Vec<u64>>)
+        -> PyResult<Bound<'py, numpy::PyArray1<u64>>>
+    {
+        let n = states.len().max(1);
+        let mut bundled = vec![0u64; self.dim_words];
+        for w in 0..self.dim_words {
+            let mut cnt = [0u32; 64];
+            for st in &states {
+                let word = st.get(w).copied().unwrap_or(0);
+                for b in 0..64 {
+                    cnt[b] += ((word >> b) & 1) as u32;
+                }
+            }
+            let mut out = 0u64;
+            for b in 0..64 {
+                if (cnt[b] as usize) * 2 >= n {
+                    out |= 1 << b;
+                }
+            }
+            bundled[w] = out;
+        }
+        Ok(numpy::PyArray1::from_vec(py, bundled))
+    }
+
+    fn dim_bits(&self) -> usize {
+        self.dim_words * 64
+    }
+}
+
+/// Свободная функция модуля: packed u64 -> ±1 f32.
+#[pyfunction]
+fn packed_u64_to_f32<'py>(py: Python<'py>, hv: &Bound<'_, numpy::PyArray1<u64>>)
+    -> PyResult<Bound<'py, numpy::PyArray2<f32>>>
+{
+    use numpy::PyArrayMethods;
+    // SAFETY: только чтение под GIL.
+    let view = unsafe { hv.as_array() };
+    let words = view.len();
+    let mut out = vec![-1.0f32; words * 64];
+    for (wi, &word) in view.iter().enumerate() {
+        for b in 0..64 {
+            if (word >> b) & 1 == 1 {
+                out[wi * 64 + b] = 1.0;
+            }
+        }
+    }
+    let arr = ndarray::Array2::from_shape_vec((words, 64), out)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("{e}")))?;
+    Ok(arr.into_pyarray(py))
 }
