@@ -4,9 +4,13 @@
   "_param_math_WARNING": "Первый слой 32768->896 ChebyKAN(degree 4) = 147M параметров НА ЭКСПЕРТА. При 32 экспертах это 4.7GB только на входные слои. Решение: ОДИН общий VSA-адаптер (shared, 147M) + эксперты 896x896 внутри.",
   "architecture": {
     "type": "SparseMixtureOfKANs",
-    "num_experts": 32,
+    "num_experts": 18,
     "top_k": 2,
-    "shared_vsa_adapter": {"in": 32768, "out": 896, "params": "147M (один раз)"},
+    "shared_vsa_adapter": {
+      "in": 32768,
+      "out": 896,
+      "params": "147M (один раз)"
+    },
     "expert_config": {
       "hidden_dim": 896,
       "num_layers": 11,
@@ -15,7 +19,8 @@
     },
     "active_parameters_per_step": "~103M (адаптер + 2 эксперта)",
     "vram_fp16_weights_gb": 3.1,
-    "vram_note": "Adam FP32 состояния x2 поверх весов НЕ влезают в 6GB -> нужен 8-bit optimizer или frozen эксперты с обучением только роутера"
+    "vram_note": "Adam FP32 состояния x2 поверх весов НЕ влезают в 6GB -> нужен 8-bit optimizer или frozen эксперты с обучением только роутера",
+    "total_parameters_approx": "939M (адаптер 147M + 18x44M)"
   },
   "training": {
     "novelty_filter_ema": 1.25,

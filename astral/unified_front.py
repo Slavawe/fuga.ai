@@ -6,6 +6,7 @@
 Профили: 'sandbox' (CPU, здесь) и конфиг astral_1b_mok.json (GPU).
 """
 
+import itertools
 import json
 import os
 import random
@@ -30,11 +31,50 @@ from astral.procedural_stream import ProceduralWorldGen
 from astral.data_filter import AstralDataStreamFilter
 
 
+class PerModalNoveltyFilter:
+    """Независимая EMA на каждый канал: у кода и физики разная дисперсия,
+    общая EMA давала pass_rate ~100% (баг 9af5b72)."""
+
+    def __init__(self, alpha=0.05, threshold=0.85):
+        # Порог на СХОДЯЩЕМСЯ лоссе: loss обычно ниже своего EMA (модель
+        # учится), поэтому ratio>=1.25 отсекал бы всё. Семантика: пропускаем
+        # сэмпл, если он не ЗАВЕДОМО проще тренда канала.
+        self.alpha = alpha
+        self.threshold = threshold
+        self.ema: dict[str, float] = {}
+        self.stats: dict[str, list[int]] = {}
+
+    def filter(self, channel: str, loss_val: float) -> bool:
+        ema = self.ema.get(channel)
+        if ema is None:
+            self.ema[channel] = loss_val
+            self._tick(channel, True)
+            return True
+        ratio = loss_val / (ema + 1e-8)
+        self.ema[channel] = (1-self.alpha)*ema + self.alpha*loss_val
+        ok = ratio >= self.threshold
+        self._tick(channel, ok)
+        return ok
+
+    def _tick(self, ch, ok):
+        st = self.stats.setdefault(ch, [0, 0])
+        st[0] += 1; st[1] += int(ok)
+
+    def report(self) -> str:
+        return " | ".join(
+            f"{ch}: pass {v[1]}/{v[0]} ({v[1]/max(v[0],1):.0%})"
+            for ch, v in sorted(self.stats.items()))
+
+
 class StreamMixer:
     """Интерливинг каналов с заданными пропорциями."""
 
-    def __init__(self, binder, text_limit: int | None = None):
+    def __init__(self, binder, text_limit: int | None = None,
+                 extra_channel: dict[str, list] | None = None):
         self.binder = binder
+        # опциональный 4-й канал: {name: [списки слов]}
+        self.extra = extra_channel or {}
+        self._extra_cycle = itertools.cycle(sorted(self.extra)) if self.extra else None
         self.proc = ProceduralWorldGen(vsa_dim=2048, n_basis=64)
         self.rng = random.Random(7)
 
@@ -44,6 +84,11 @@ class StreamMixer:
         self.code_iter = self.mega.code_bytes()
 
     def next_sample(self) -> tuple[str, torch.Tensor]:
+        if self._extra_cycle is not None and self.rng.random() < 0.20:
+            name = next(self._extra_cycle)
+            line = random.choice(self.extra[name])
+            pk = np.asarray(self.binder.bind_batch([line[:32]]))
+            return name, packed_to_torch(pk)[0]
         roll = self.rng.random()
         if roll < 0.40:                                   # физика/алгебра
             d = self.proc.generate_step()
@@ -104,7 +149,7 @@ def main():
 
     binder = fuga_core.HybridBinder(2048)
     mixer = StreamMixer(binder)
-    flt = AstralDataStreamFilter(adaptive=True, margin=0.25)
+    flt = PerModalNoveltyFilter(alpha=0.05, threshold=0.85)
 
     model = UnifiedMoK(in_dim=2048, hidden=192, out_dim=2048, n_experts=4)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -132,9 +177,11 @@ def main():
         kind, x = mixer.next_sample()
         tgt = target_for(kind, x)
         pred = model(x.unsqueeze(0))[0]
-
-        ok, s = flt.should_ingest(pred.detach(), tgt)
         loss_kind = F.mse_loss(pred, tgt)
+
+        with torch.no_grad():
+            loss_val = float(loss_kind)
+        ok = flt.filter(kind, loss_val)
         if ok:
             loss = loss_kind + F.cross_entropy(
                 model.router(model.adapter(x.unsqueeze(0))),

@@ -1,0 +1,23 @@
+{
+  "environment_name": "Astral-500M-MoK",
+  "_param_math": "shared VSA adapter 32768->896 ChebyKAN(deg4) = 147M фикс + 8 экспертов x (11 слоёв x 896^2 x 5 = 44M) = 499M. Переход к 1B = n_experts: 8 -> 18 (939M), топология не меняется.",
+  "vsa_dimension": 32768,
+  "architecture": {
+    "type": "SparseMixtureOfKANs",
+    "shared_vsa_adapter": {"in": 32768, "out": 896, "params_M": 147},
+    "num_experts": 8,
+    "top_k": 2,
+    "expert_config": {"hidden_dim": 896, "num_layers": 11,
+                      "params_per_expert_M": 44},
+    "total_parameters_M": 499
+  },
+  "training": {
+    "optimizer": "adamw_8bit_bitsandbytes",
+    "batch_size": 64,
+    "novelty_filter": {"adaptive": true, "per_modal_ema": true,
+                       "margin": 1.25, "alpha": 0.05},
+    "load_balancing_weight": 0.01
+  },
+  "vram_estimate_gb": {"weights_fp16": 1.0, "adamw8bit_states": 0.5,
+                       "activations_b64": 1.5, "total_est": 3.8}
+}
