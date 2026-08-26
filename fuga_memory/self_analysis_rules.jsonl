@@ -1,0 +1,4 @@
+{"rule": "избегать паттерна 'wat' (acceptability: шаблон дал неестественную поверхность)", "better_example": "water is a liquid", "ts": 1787746458.979748}
+{"rule": "избегать паттерна 'xx' (acceptability: шаблон дал неестественную поверхность)", "better_example": "adidas atlocation germany", "ts": 1787746458.9797697}
+{"rule": "избегать паттерна 'wat' (acceptability: шаблон дал неестественную поверхность)", "better_example": "water is a liquid", "ts": 1787746519.4927285}
+{"rule": "избегать паттерна 'xx' (acceptability: шаблон дал неестественную поверхность)", "better_example": "adidas atlocation germany", "ts": 1787746519.4927537}
