@@ -463,3 +463,13 @@ P(вы-форма | формальная генерация) − P(вы-форм
 - Live: «vmalloc» -> vmalloc_init (static inline void vmalloc_init(void){}),
   «schedule» -> swap_cluster_schedule_discard (swapfile.c).
 - Покрытие: C (Linux mm/sched), Go, Rust, Python. C++/Java отложены.
+
+### Этап Z. Шаг 3: C++/Java покрытие — стек 6 языков закрыт (24.08)
+
+- Клоны: nlohmann/json (C++, 31MB), google/gson (Java, 4MB), shallow --depth 1.
+- code_ingest на C++/Java: 208K строк @ 47.5 K-lines/s, 8490 узлов AST,
+  1991 рёбер. C++ и Java грамматики проверены на реальном коде.
+- Индекс код-памяти: 28 953 -> 30 125 символов.
+- Live-запросы: Gson (класс), parse/from_json (nlohmann), hugetlb_parse_params
+  (Linux C), readRequestJSON (Go) — 6 языков в единой VSA-памяти.
+- Пуш невозможен: токен не предоставлен; GPU-прогон невозможен: нет CUDA.
