@@ -33,9 +33,11 @@ class JepaPredictor(nn.Module):
             nn.SiLU(), nn.Linear(hidden, dim))
 
     def forward(self, state_hv, action):
+        dev = self.action_emb.weight.device
+        state_hv = state_hv.to(dev)
+        action = action.to(dev)
         if state_hv.dim() == 1:
             state_hv = state_hv.unsqueeze(0)
-        action = action.to(state_hv.device)
         if action.dim() == 0:
             action = action.view(1)
         a = self.action_emb(action)
@@ -69,9 +71,11 @@ class MoKPredictor(nn.Module):
         self._n_e = n_e
 
     def forward(self, state_hv, action):
+        dev = self.action_emb.weight.device      # устройство МОДЕЛИ (cuda/cpu)
+        state_hv = state_hv.to(dev)              # среда отдаёт CPU-тензор
+        action = action.to(dev)
         if state_hv.dim() == 1:
             state_hv = state_hv.unsqueeze(0)
-        action = action.to(state_hv.device)
         if action.dim() == 0:
             action = action.view(1)
         x = self.adapter(torch.cat([state_hv, self.action_emb(action)], dim=-1))
