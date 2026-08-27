@@ -104,6 +104,9 @@ def main():
                     help="печатать потребление VRAM на каждом логе (CUDA)")
     ap.add_argument("--fp16", action="store_true",
                     help="веса в FP16 (половина VRAM); Adam остаётся FP32")
+    ap.add_argument("--acc-steps", type=int, default=1,
+                    help="накопление градиентов (эффективный батч) — важно "
+                         "для MoK при последовательной среде")
     ap.add_argument("--novelty-filter", action="store_true",
                     help="адаптивный surprise-фильтр: шаг оптимизатора только "
                          "на непредсказуемых состояниях")
@@ -176,6 +179,8 @@ def main():
     base_errs, pred_errs = [], []
     state['hv'] = state['hv'].flatten()
     t0 = time.perf_counter()
+    acc_steps = max(getattr(args, "acc_steps", 1), 1)
+    opt.zero_grad()
     for step in range(args.steps + 1):
         action = random.randint(0, 7)
         nxt_real = env.step_action(state["hv"], action)
@@ -189,18 +194,18 @@ def main():
         pred_errs.append(err_pred)
         base_errs.append(err_base)
 
-        loss = err_pred + 0.05 * torch.relu(1.0 - pred.std()).mean() \
-            if isinstance(err_pred, float) else None
-        # тензорный путь:
-        pred_t = predictor(h_prev.view(1, -1).to(device),
-                           torch.tensor([action], device=device))
         do_update = True
         if flt is not None:
-            ok_f, _s = flt.should_ingest(pred_t.detach().cpu(), nxt_real["hv"].cpu())
+            ok_f, _s = flt.should_ingest(pred.detach().cpu(), nxt_real["hv"].cpu())
             do_update = ok_f
-        loss = ((pred_t - nxt_real["hv"].to(device)) ** 2).mean()
+        # накопление градиентов: эффективный батч acc_steps при последовательной
+        # среде (один сэмпл/шаг) — иначе 222M не сойдутся (проверено: sqrt(2)-коллапс)
         if do_update:
-            opt.zero_grad(); loss.backward(); opt.step()
+            loss = ((pred - nxt_real["hv"].to(pred.device)) ** 2).mean() / acc_steps
+            loss.backward()
+            if (step + 1) % acc_steps == 0:
+                opt.step()
+                opt.zero_grad()
         state = nxt_real
 
         if step % 100 == 0 or step == args.steps:
