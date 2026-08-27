@@ -755,3 +755,14 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
 - Доступные бэкенды: [torch, jax]. Типы выходов: torch.Tensor и
   jaxlib.Array.
 - ИИ создал библиотеку, совместил PyTorch и JAX — как и запрошено.
+
+### Этап AW. Массив 1: поглощение tokio + serde в VSA-память (24.08)
+
+- tokio (runtime/io/sync): 65 856 строк @ 715 K-lines/s, 722 символа
+  (abort, spawn, block_on, shutdown, poll_...).
+- serde (serde/src): 5 195 строк @ 205 K-lines/s, 37 символов
+  (deserialize, serialize, expected, ...).
+- Оба зарегистрированы в fuga_memory_tokio / fuga_memory_serde как
+  VSA-факты + BIM legacy-узлы.
+- Демонстрирует поглощение крупных Rust-экосистем (tokio = async runtime,
+  serde = сериализация) через тот же FileAgent/Rust-индексатор.
