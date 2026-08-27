@@ -29,6 +29,7 @@ class FugaChatEngine:
         # память фактов: lang -> subject -> [(relation, object)]
         self.memory = {"ru": {}, "en": {}}
         self.persistent = None
+        self._load_code_memory()
         if persistent:
             try:
                 from fuga_memory import PersistentVSAMemory
@@ -46,6 +47,18 @@ class FugaChatEngine:
     JUNK_REL = {"antonym", "distinctfrom", "relatedrelated", "synonym",
                 "formof", "etymologicallyrelatedto", "derivedfrom",
                 "etymologicallyderivedfrom"}
+
+    def _load_code_memory(self):
+        try:
+            from astral.code_memory import CodeQueryEngine
+            self.code_engine = CodeQueryEngine(self.binder, "fuga_memory_code")
+            n = self.code_engine.load_index_from_disk()
+            if n:
+                print(f"[code-memory] индекс {n} символов с диска")
+            return self.code_engine
+        except Exception as e:
+            self.code_engine = None
+            return None
 
     def _load_conceptnet(self):
         n = 0
@@ -242,6 +255,17 @@ class FugaChatEngine:
                 return self.persona.format_ingest(s_, rel_guess, o_)
             return "Формат обучения: 'запомни: X — это Y'."
         if intent == "query":
+            # код-запрос: токен совпал с символом из AST-индекса?
+            ce = getattr(self, "code_engine", None)
+            if ce is not None:
+                for tok in reversed(self._tok(text)):
+                    if len(tok) < 3:
+                        continue
+                    hits = ce.query(tok, 1)
+                    if hits:
+                        t, tx, nm = hits[0]
+                        self.last_subject = nm
+                        return f"[code-memory] {nm}: {t} — {tx[:120]}"
             subj = self.find_subject(text, "ru")
             # валидность субъекта: он должен быть префиксно связан с текстом,
             # иначе стем-матчинг утащил нас на чужое слово

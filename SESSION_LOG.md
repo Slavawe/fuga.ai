@@ -453,3 +453,13 @@ P(вы-форма | формальная генерация) − P(вы-форм
   AST / 9,342 рёбер вызовов.
 - Покрытие: C, Go, Rust, Python. C++/Java — требуют клона (LLVM/JDK
   крупные; отложено). Ключ скорости: tree-sitter нативные парсеры.
+
+### Этап Y. Код-память в fuga_chat: AST-граф -> VSA-факты -> диалог (24.08)
+
+- `astral/code_memory.py`: CodeQueryEngine — функции/структуры AST ->
+  факты code:имя -- type -- сигнатура в PersistentVSAMemory (28 953 символа),
+  префикс-поиск, пересборка индекса с диска.
+- `fuga_chat`: код-запрос сканирует токены по AST-индексу до фолбэков.
+- Live: «vmalloc» -> vmalloc_init (static inline void vmalloc_init(void){}),
+  «schedule» -> swap_cluster_schedule_discard (swapfile.c).
+- Покрытие: C (Linux mm/sched), Go, Rust, Python. C++/Java отложены.
