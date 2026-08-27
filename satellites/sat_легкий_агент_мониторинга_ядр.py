@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Autonomous satellite: sat_парсер_json_документов (self-spawned by mother model).
+"""Autonomous satellite: sat_легкий_агент_мониторинга_ядр (self-spawned by mother model).
 Connects to Rust core fuga-core (FastVSA bit ops).
 Params: ~84.2M, Anchors: 4, Ops: Pi^[0, 1, 2, 3]
 Shared VSA memory NOT copied - anchors exported from parent.
