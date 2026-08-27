@@ -82,7 +82,8 @@ class MoKPredictor(nn.Module):
         # топ-2
         top_p, top_i = torch.topk(self.router(x), 2, dim=-1)
         alpha = torch.softmax(top_p, -1)
-        out = torch.zeros(x.shape[0], self.head.out_features)
+        out = torch.zeros(x.shape[0], self.head.out_features,
+                          device=dev)
         for e, expert in enumerate(self.experts):
             mask = (top_i == e)
             if not mask.any():
