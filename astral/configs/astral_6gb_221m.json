@@ -1,0 +1,13 @@
+{
+  "environment_name": "Astral-6GB-221M",
+  "vsa_dimension": 32768,
+  "architecture": {
+    "type": "SparseMixtureOfKANs",
+    "num_experts": 4,
+    "top_k": 2,
+    "expert_config": {"hidden_dim": 768, "num_layers": 6,
+                      "params_per_expert_M": 18},
+    "total_parameters_M": 221,
+    "vram_note": "FP32 weights 0.88GB + Adam 1.76GB + activations ~1.5GB = ~4.1GB, запас ~1.9GB на batch 48. AdamW8bit снизит до ~2.5GB."
+  }
+}

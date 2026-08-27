@@ -93,6 +93,8 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--profile-vram", action="store_true",
                     help="печатать потребление VRAM на каждом логе (CUDA)")
+    ap.add_argument("--fp16", action="store_true",
+                    help="веса в FP16 (половина VRAM); Adam остаётся FP32")
     ap.add_argument("--novelty-filter", action="store_true",
                     help="адаптивный surprise-фильтр: шаг оптимизатора только "
                          "на непредсказуемых состояниях")
@@ -110,6 +112,14 @@ def main():
         pm = sum(p.numel() for p in predictor.parameters())
         print(f"  MoK-профиль: {pm/1e6:.0f}M параметров, "
               f"экспертов={predictor._n_e}")
+        est_vram = pm * 4 * 3 / 2**30    # веса FP32 + Adam x2
+        if args.fp16:
+            predictor = predictor.half()
+            est_vram = pm * 2 * 3 / 2**30  # FP16 веса + Adam
+        print(f"  оценочная VRAM: {est_vram:.1f}GB (всего 6GB)")
+        if est_vram > 5.5:
+            print("  ⚠️  риск OOM: уменьшите экспертов/hidden или включите "
+                  "bitsandbytes AdamW8bit")
     else:
         predictor = JepaPredictor(dim).to(device)
         pm = sum(p.numel() for p in predictor.parameters())
