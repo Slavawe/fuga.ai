@@ -777,3 +777,13 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   legacy-узлы — якоря для спутников компиляторного домена.
 - Массив 1 (tokio/serde) + Массив 3 (syn/quote) поглощены; массивы 2
   (numpy/scipy/sympy) и 4 (nix/io_uring/capstone) — по тому же шаблону.
+
+### Этап AY. Массив 2: поглощение sympy + numpy + einops (24.08)
+
+- sympy (символьная математика): 60 085 строк @ 441 K-lines/s, 2033 символа
+  (D, Dummy, diff, expand, integrate, solve, simplify, symbols...).
+- numpy (все ядро): 613 431 строка @ 422 K-lines/s, 11 865 символов
+  (array, dot, matmul, reshape, broadcast, einsum, linalg, fft...).
+- einops (тензорные операции): 6 031 строка @ 354 K-lines/s, 190 символов
+  (rearrange, reduce, repeat, pack, unpack...).
+- Все три зарегистрированы в VSA-память + BIM legacy-узлы.
