@@ -91,25 +91,40 @@ class FugaTokenizer:
         return tokens_hv
 
     def encode_tokens(self, data: bytes) -> list[bytes]:
-        """Список строк токенов (для decode/проверок)."""
+        """Список строк токенов (для decode/проверок).
+
+        Word-fallback (улучшение): если якорь не найден, максимальный
+        буквенно-цифровой прогон идёт ОДНИМ токеном — сохраняет
+        AST-идентификаторы (parse_docs, result) и остаётся обратимым.
+        """
+        import re as _re
+        _WORD = _re.compile(rb"[A-Za-z_][A-Za-z0-9_]*")
         toks = []
         i = 0
         n = len(data)
         while i < n:
             node = self.trie
             best = None
+            best_end = i
             j = i
             while j < n and data[j] in node:
                 node = node[data[j]]
                 j += 1
                 if "$" in node:
                     best = node["$"]
+                    best_end = j
+            # word-fallback: полный идентификатор длиннее короткого якоря ->
+            # берём идентификатор (сохраняет AST-границы: parse_docs, не parse+_docs)
+            m = _WORD.match(data, i)
+            word_end = m.end() if m is not None else i
+            if word_end > best_end:
+                best = data[i:word_end]
+                best_end = word_end
             if best is None:
                 best = data[i:i + 1]
-                i += 1
-            else:
-                i += len(best)
+                best_end = i + 1
             toks.append(best)
+            i = best_end
         return toks
 
     @staticmethod
