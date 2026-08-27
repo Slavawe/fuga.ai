@@ -41,6 +41,50 @@ class JepaPredictor(nn.Module):
         return torch.tanh(self.net(torch.cat([state_hv, a], dim=-1)))
 
 
+class MoKPredictor(nn.Module):
+    """MoK-топология из конфига: адаптер 32768->896 -> эксперты -> выход 896->32768."""
+
+    def __init__(self, cfg, dim, action_emb=8):
+        super().__init__()
+        try:
+            a = cfg["architecture"]
+            n_e = a["num_experts"]
+            hidden = a["expert_config"]["hidden_dim"]
+            layers = a["expert_config"]["num_layers"]
+        except (KeyError, TypeError):
+            raise ValueError("config needs architecture.num_experts")
+        self.action_emb = nn.Embedding(16, action_emb)
+        # общий VSA-адаптер
+        from antitf.kan import ChebyKANLayer
+        self.adapter = ChebyKANLayer(dim + action_emb, hidden, degree=4)
+        # эксперты (только внутренние hidden->hidden)
+        self.experts = nn.ModuleList([
+            nn.Sequential(*[ChebyKANLayer(hidden, hidden, degree=4)
+                            for _ in range(layers)])
+            for _ in range(n_e)])
+        # общий выходной слой
+        self.head = nn.Linear(hidden, dim)
+        self.router = nn.Linear(hidden, n_e)
+        self._n_e = n_e
+
+    def forward(self, state_hv, action):
+        if state_hv.dim() == 1:
+            state_hv = state_hv.unsqueeze(0)
+        x = self.adapter(torch.cat([state_hv, self.action_emb(action)], dim=-1))
+        # топ-2
+        top_p, top_i = torch.topk(self.router(x), 2, dim=-1)
+        alpha = torch.softmax(top_p, -1)
+        out = torch.zeros(x.shape[0], self.head.out_features)
+        for e, expert in enumerate(self.experts):
+            mask = (top_i == e)
+            if not mask.any():
+                continue
+            rows, slots = mask.nonzero(as_tuple=True)
+            out.index_add_(0, rows,
+                           alpha[rows, slots].unsqueeze(-1) * expert(x[rows]))
+        return torch.tanh(self.head(out))
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -60,7 +104,23 @@ def main():
 
     env = ScaledAstralEnvironment(vector_dim=dim)
 
-    predictor = JepaPredictor(dim).to(device)
+    use_mok = device == "cuda" and "num_experts" in cfg.get("architecture", {})
+    if use_mok:
+        predictor = MoKPredictor(cfg, dim).to(device)
+        pm = sum(p.numel() for p in predictor.parameters())
+        print(f"  MoK-профиль: {pm/1e6:.0f}M параметров, "
+              f"экспертов={predictor._n_e}")
+    else:
+        predictor = JepaPredictor(dim).to(device)
+        pm = sum(p.numel() for p in predictor.parameters())
+        if device == "cpu" and "num_experts" in cfg.get("architecture", {}):
+            arch = cfg.get("architecture", {})
+            target = arch.get("total_parameters_approx") or \
+                f"{arch.get('total_parameters_M', '?')}M"
+            print(f"  CPU-фолбэк: JepaPredictor ({pm/1e6:.0f}M парам.) — "
+                  f"MoK-профиль {target} требует --device cuda")
+        else:
+            print(f"  параметры: {pm/1e6:.0f}M")
 
     flt = None
     if args.novelty_filter:
