@@ -684,3 +684,17 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
 - Обе замены с первой итерации (самокоррекция не понадобилась, но
   механизм готов — self-healing loop при падении импорта).
 - Принцип подтверждён: модель полностью сама переписывает целый модуль.
+
+### Этап AQ. Rewriter — полный цикл поглощения/модернизации (24.08)
+
+- `astral/rewriter.py`: self_rewrite_loop — rewrite -> L1 -> L2 ->
+  PASS/FAIL с самокоррекцией. Правила:
+  - performer FAVOR+ -> SDPA (PASS, shape 1,6,8)
+  - minGPT manual attention -> SDPA (PASS, shape 1,8,64)
+- GitHub-аутентификация отозвана -> клонирование AFT/Linear/NAT/Tree-
+  Transformer невозможно. Шаблон тот же: clone -> inspect -> add rule ->
+  rewrite -> validate. Правила готовы к добавлению.
+- Связка с VSA-native: performer FastAttention.forward заменён на чистый
+  SDPA; AFT/Linear Attention следуют тому же паттерну замены ядра на
+  нативный fused SDPA или VSA-операции (bind/unbind через
+  astral/self_spawn.py уже доказали бит-в-бит Rust-соединение).
