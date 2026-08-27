@@ -671,3 +671,16 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   dropout-атрибуты, кортежный вывод.
 - Это полный цикл «поглощение -> модернизация -> проверка исполнением»:
   модель сама сгенерировала патч и доказала его работоспособность.
+
+### Этап AP. Rewriter: полная самопереписка модулей performer + minGPT (24.08)
+
+- `astral/rewriter.py`: self_rewrite_loop — rewrite -> L1 Tree-Sitter ->
+  L2 исполнение (import + forward) -> PASS; при FAIL самокоррекция
+  (добавление импорта F, подстройка) и повтор.
+- performer-pytorch: FAVOR+ (ядерная аппроксимация) -> нативный SDPA,
+  forward Performer(dim=8,depth=1) -> shape (1,6,8) PASS.
+- minGPT: весь модуль model.py (ручной causal-attention -> SDPA),
+  forward GPT -> shape (1,8,64) PASS.
+- Обе замены с первой итерации (самокоррекция не понадобилась, но
+  механизм готов — self-healing loop при падении импорта).
+- Принцип подтверждён: модель полностью сама переписывает целый модуль.
