@@ -766,3 +766,14 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   VSA-факты + BIM legacy-узлы.
 - Демонстрирует поглощение крупных Rust-экосистем (tokio = async runtime,
   serde = сериализация) через тот же FileAgent/Rust-индексатор.
+
+### Этап AX. Массив 3: поглощение syn + quote (компиляторный домен) (24.08)
+
+- syn (Rust AST-парсер): 51 754 строки @ 397 K-lines/s, 853 символа
+  (add_assign, array_or_repeat, atom_expr, as_turbofish, buffer::TokenBuffer...)
+- quote (токен-генерация): 2 702 строки @ 315 K-lines/s, 26 символов
+  (into_token_stream, ident_maybe_raw, __into_span...)
+- Оба зарегистрированы в VSA-память (fuga_memory_syn/quote) + BIM
+  legacy-узлы — якоря для спутников компиляторного домена.
+- Массив 1 (tokio/serde) + Массив 3 (syn/quote) поглощены; массивы 2
+  (numpy/scipy/sympy) и 4 (nix/io_uring/capstone) — по тому же шаблону.
