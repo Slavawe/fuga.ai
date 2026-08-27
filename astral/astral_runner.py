@@ -94,6 +94,10 @@ class MoKPredictor(nn.Module):
         return torch.tanh(self.head(out))
 
 
+def device_flag_has_cuda(args):
+    return getattr(args, "device", "cpu") == "cuda"
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -111,6 +115,12 @@ def main():
                     help="адаптивный surprise-фильтр: шаг оптимизатора только "
                          "на непредсказуемых состояниях")
     args = ap.parse_args()
+    import random as _r
+    _r.seed(0)
+    torch.manual_seed(0)
+    if device_flag_has_cuda(args):
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(0)
     cfg = json.load(open(args.config))
     dim = cfg["vsa_dimension"]
     device = args.device
