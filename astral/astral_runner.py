@@ -35,6 +35,7 @@ class JepaPredictor(nn.Module):
     def forward(self, state_hv, action):
         if state_hv.dim() == 1:
             state_hv = state_hv.unsqueeze(0)
+        action = action.to(state_hv.device)
         if action.dim() == 0:
             action = action.view(1)
         a = self.action_emb(action)
@@ -70,6 +71,9 @@ class MoKPredictor(nn.Module):
     def forward(self, state_hv, action):
         if state_hv.dim() == 1:
             state_hv = state_hv.unsqueeze(0)
+        action = action.to(state_hv.device)
+        if action.dim() == 0:
+            action = action.view(1)
         x = self.adapter(torch.cat([state_hv, self.action_emb(action)], dim=-1))
         # топ-2
         top_p, top_i = torch.topk(self.router(x), 2, dim=-1)
@@ -108,18 +112,39 @@ def main():
 
     use_mok = device == "cuda" and "num_experts" in cfg.get("architecture", {})
     if use_mok:
+        # ПРЕДЗАПУСКОВЫЙ КОНТРОЛЬ VRAM: до инстанцирования (иначе OOM-kill
+        # убьёт процесс до печати предупреждения — так и случилось с 500M).
+        n_experts = cfg["architecture"]["num_experts"]
+        hidden = cfg["architecture"]["expert_config"]["hidden_dim"]
+        n_layers = cfg["architecture"]["expert_config"]["num_layers"]
+        adapter_p = dim * hidden * 5
+        expert_p = n_experts * n_layers * hidden * hidden * 5
+        head_p = hidden * dim
+        pm = adapter_p + expert_p + head_p
+        bytes_per = (2 if args.fp16 else 4) + 8   # веса + Adam(2x FP32)
+        est = pm * bytes_per / 2**30
+        try:
+            total_vram = torch.cuda.get_device_properties(0).total_memory
+            total_gb = total_vram / 2**30
+        except Exception:
+            total_gb = 6.0
+        print(f"  MoK-профиль: {pm/1e6:.0f}M параметров, "
+              f"экспертов={n_experts}")
+        print(f"  оценочная VRAM: {est:.1f}GB (доступно {total_gb:.1f}GB)")
+        if est > total_gb * 0.85:
+            print("  ❌ OOM невозможен: профиль не влезает в VRAM с Adam FP32.")
+            print(f"     Решения: (1) astral/configs/astral_6gb_221m.json "
+                  f"({int(pm/1e6*0.42)}M), (2) pip install bitsandbytes + "
+                  f"AdamW8bit, (3) --fp16 (веса, но Adam остаётся FP32).")
+            raise SystemExit(1)
         predictor = MoKPredictor(cfg, dim).to(device)
         pm = sum(p.numel() for p in predictor.parameters())
-        print(f"  MoK-профиль: {pm/1e6:.0f}M параметров, "
-              f"экспертов={predictor._n_e}")
-        est_vram = pm * 4 * 3 / 2**30    # веса FP32 + Adam x2
+        bytes_per = (2 if args.fp16 else 4) + 8
+        est_vram = pm * bytes_per / 2**30
         if args.fp16:
             predictor = predictor.half()
-            est_vram = pm * 2 * 3 / 2**30  # FP16 веса + Adam
-        print(f"  оценочная VRAM: {est_vram:.1f}GB (всего 6GB)")
-        if est_vram > 5.5:
-            print("  ⚠️  риск OOM: уменьшите экспертов/hidden или включите "
-                  "bitsandbytes AdamW8bit")
+        print(f"  реальные параметры: {pm/1e6:.0f}M | "
+              f"оценочная VRAM: {est_vram:.1f}GB")
     else:
         predictor = JepaPredictor(dim).to(device)
         pm = sum(p.numel() for p in predictor.parameters())
