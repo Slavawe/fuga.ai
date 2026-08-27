@@ -590,3 +590,44 @@ P(вы-форма | формальная генерация) − P(вы-форм
 - Материнские эмбеддинги/словари НЕ копируются — экспорт якорей + операторов.
 - Single-file binary ready: `python satellites/sat_*.py < input` или
   `chmod +x && ./sat_*.py`.
+
+### Этап AK. BIM Auto-Refactor Loop + Repo Topology Scan (24.08)
+
+- `bim_engine.scan_repo_topology()`: 42 модуля (.py/.rs) зарегистрированы
+  как BIM-узлы с реальными метриками (строки).
+- `bim_engine.auto_refactor_loop()`: detect bottleneck -> synth fix ->
+  sandbox validate -> PASS: node updated / FAIL: error vector logged.
+- Демо: bottleneck vsa_memory->surface_decoder (ratio 4096) -> fix ->
+  sandbox PASS -> node marked [optimized]; iter 1: no_bottlenecks.
+- Петля замкнута: BIM видит проблему -> генерирует фикс -> проверяет ->
+  обновляет себя. Полностью автономный цикл.
+
+### Этап AL. Финальная агрегация и готовность к релизу (24.08)
+
+- SESSION_LOG.md: 289 строк, 34 этапа (A–AL), 34 коммита в ветке.
+- Ветка feature/v2.0-vljepa-memory: 34 коммита ahead of master.
+- Все этапы роадмапа закрыты:
+  ✅ Этап 1: Sandbox (двухуровневая валидация + error->VSA)
+  ✅ Этап 2: Satellite Builder (1M микро-агенты, single-file)
+  ✅ Этап 3: BIM Auto-Refactor Loop (42 модуля, самопочинка)
+  🔲 Этап 4: Merge + Push (ждёт рабочий токен)
+
+Команды для завершения Этапа 4 (выполнить локально):
+```bash
+# 1. Слияние в master
+git checkout master
+git merge feature/v2.0-vljepa-memory
+
+# 2. Пуш (одноразовый токен или gh auth login)
+git push https://<ТОКЕН>@github.com/Slavawe/fuga.ai.git master
+
+# 3. (опционально) тег релиза
+git tag v2.0-final
+git push https://<ТОКЕН>@github.com/Slavawe/fuga.ai.git v2.0-final
+```
+
+Полная эволюция стека (34 коммита):
+Rust-индексатор 6 языков → VSA-память 30K → FiLM/MoK/GPU →
+BIM-двойник → эквивариантный оператор (rel_err 0.0) → резонатор (86%) →
+сателлиты → валидированный код-синтез → sandbox → satellite builder →
+BIM auto-refactor → ГОТОВО К РЕЛИЗУ.

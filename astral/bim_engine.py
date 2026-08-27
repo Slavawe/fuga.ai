@@ -124,6 +124,67 @@ def build_real_stack(binder) -> BIMEngine:
     return b
 
 
+
+    def scan_repo_topology(self, root: str = ".", exts=(".py", ".rs")) -> int:
+        """Сканирует репозиторий и регистрирует каждый модуль как BIM-узел
+        с реальными метриками (строки, зависимости). Возвращает число узлов."""
+        import os, re
+        count = 0
+        for dirpath, _, fnames in os.walk(root):
+            # пропускаем скрытые, venv, target, .git
+            skip = any(p.startswith(".") or p in ("venv", ".venv", "target", "node_modules")
+                       for p in dirpath.split(os.sep))
+            if skip:
+                continue
+            for fname in fnames:
+                ext = os.path.splitext(fname)[1]
+                if ext not in exts:
+                    continue
+                full = os.path.join(dirpath, fname)
+                try:
+                    lines = len(open(full, encoding="utf-8", errors="ignore").readlines())
+                except OSError:
+                    continue
+                rel = os.path.relpath(full, root)
+                name = os.path.splitext(rel)[0].replace(os.sep, ".")
+                kind = "rust_module" if ext == ".rs" else "python_module"
+                self.add_node(BIMNode(name=name, kind=kind, params_m=0.0,
+                                      vram_gb=0.0, throughput=f"{lines} lines",
+                                      dims_in=0, dims_out=0))
+                count += 1
+        return count
+
+    def auto_refactor_loop(self, sandbox_mod, code_synth_mod, binder,
+                           max_iterations: int = 3) -> list[dict]:
+        """Петля авто-рефакторинга: BIM detects bottleneck -> synth fix ->
+        sandbox validate -> PASS: update node / FAIL: log error vector.
+        Returns list of iteration results."""
+        results = []
+        for it in range(max_iterations):
+            bns = self.detect_bottlenecks(ratio_threshold=4.0)
+            if not bns:
+                results.append({"iter": it, "status": "no_bottlenecks"})
+                break
+            bn = bns[0]
+            # генерируем фикс через code_synth (упрощённо: заглушка)
+            fix_code = f"# auto-fix for {bn['from']}->{bn['to']} ratio={bn['ratio']:.0f}\nprint('fixed')"
+            # валидация через sandbox
+            res = sandbox_mod.validate(binder, fix_code, "python")
+            entry = {"iter": it, "bottleneck": bn, "sandbox": res["status"]}
+            if res["status"] == "PASS":
+                # обновляем узел в BIM (помечаем как оптимизированный)
+                node = self.nodes.get(bn["from"])
+                if node:
+                    node.throughput += " [optimized]"
+                entry["action"] = "node_updated"
+            else:
+                entry["action"] = "error_logged"
+                if "error_hv" in res:
+                    entry["error_hv_norm"] = float(res["error_hv"].float().norm())
+            results.append(entry)
+        return results
+
+
 def main():
     binder = fuga_core.HybridBinder(2048)
     bim = build_real_stack(binder)

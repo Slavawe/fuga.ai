@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 """Satellite Builder: отчуждение автономного 1M-микро-агента.
 
@@ -7,6 +6,8 @@ from __future__ import annotations
 со встроенными якорями и Π^k-операторами. Нулевая зависимость от
 тяжёлых библиотек; общая VSA-память не копируется.
 """
+
+from __future__ import annotations
 
 from __future__ import annotations
 
