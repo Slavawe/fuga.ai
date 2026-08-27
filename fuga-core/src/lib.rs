@@ -1,3 +1,4 @@
+pub mod code_index;
 pub mod filter;
 pub mod ibm_model;
 pub mod symbolic_eval;
@@ -491,6 +492,7 @@ fn fuga_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ibm_model::IbmModel1>()?;
     m.add_class::<symbolic_eval::SymbolicExecutor>()?;
     m.add_class::<FastVSA>()?;
+    m.add_class::<code_index::CodeIndexer>()?;
     m.add_function(wrap_pyfunction!(packed_u64_to_f32, m)?)?;
     Ok(())
 }

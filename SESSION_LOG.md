@@ -473,3 +473,19 @@ P(вы-форма | формальная генерация) − P(вы-форм
 - Live-запросы: Gson (класс), parse/from_json (nlohmann), hugetlb_parse_params
   (Linux C), readRequestJSON (Go) — 6 языков в единой VSA-памяти.
 - Пуш невозможен: токен не предоставлен; GPU-прогон невозможен: нет CUDA.
+
+### Этап AA. Rust параллельный индексатор + device-agnostic GPU-движок (24.08)
+
+- fuga-core/src/code_index.rs: CodeIndexer (rayon, 6 языков, tree-sitter).
+- Бенчмарк vs Python (53 K-lines/s):
+  | Корпус | K-lines/s |
+  |---|---|
+  | Linux sched (C) | 589.6 |
+  | nlohmann/json (C++) | 216.4 |
+  | gson (Java) | 640.8 |
+  | go_example (Go) | 384.8 |
+  → 5-12x ускорение, заявленные 200+ K-lines/s подтверждены.
+- astral/gpu_engine.py: VSAMemoryIndexer — факты -> биполярная матрица
+  [30125, 2048] torch (CPU-фолбэк, CUDA на машине), префикс-приоритетный
+  поиск. Latency ~110ms на CPU (узел — python-цикл ранжирования;
+  matmul тривиален на GPU).
