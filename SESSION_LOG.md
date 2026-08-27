@@ -659,3 +659,15 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
 - Якоря вышли неидеальные (dunder __init__/__call__) — следующий шаг
   фильтрация значимых символов (GPT/CausalSelfAttention/Block/Config).
 - BIM узлов: 5.
+
+### Этап AO. Modernize: модель МОДЕРНИЗИРУЕТ легаси-код и проверяет исполнением (24.08)
+
+- `astral/modernize.py`: minGPT ручной causal-attention (QK^T -> masked_fill
+  -> softmax, 5 строк) заменён на fused F.scaled_dot_product_attention
+  (PyTorch 2.0+).
+- Валидация: L1 Tree-Sitter VALID + L2 forward мини-GPT PASS
+  (shape (1,8,64)) — модернизированный код РЕАЛЬНО работает.
+- Серия фиксов: путь пакета mingpt, config.model_type XOR,
+  dropout-атрибуты, кортежный вывод.
+- Это полный цикл «поглощение -> модернизация -> проверка исполнением»:
+  модель сама сгенерировала патч и доказала его работоспособность.
