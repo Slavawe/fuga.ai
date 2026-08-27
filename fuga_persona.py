@@ -13,7 +13,10 @@ class PersonaSynthesizer:
 
     def __init__(self, style: str = "adaptive", seed: int = 7):
         self.style = style
+        self.register = "neutral"     # formal / casual / neutral
         self.rng = random.Random(seed)
+        # регистровые векторы для live-трассы (γ/β-амплитуды)
+        self._reg_probe = {"formal": 0.0, "casual": 0.0, "neutral": 0.0}
 
         self.greetings = {
             "informative": ["На связи. Память VSA загружена, слушаю.",
@@ -80,6 +83,27 @@ class PersonaSynthesizer:
                 ["informative", "dry", "ironic", "laconic"])
         return self._style_cache[subject]
 
+    def set_register(self, reg: str) -> None:
+        self.register = reg if reg in ("formal", "casual", "neutral") else "neutral"
+
+    def register_trace(self) -> dict:
+        """Live-вектор регистра: амплитуда выбранного регистра=1, γ/β-нормы."""
+        amps = {"formal": 0.0, "casual": 0.0, "neutral": 0.0}
+        amps[self.register] = 1.0
+        # γ-норма ≈ насколько сильно регистр перекраивает поверхность,
+        # β-сдвиг ≈ сдвиг тона (casual -> -1, formal -> +1)
+        gamma = 1.0
+        beta = {"formal": 0.8, "casual": -0.8, "neutral": 0.0}[self.register]
+        return {"register": self.register, "gamma": gamma, "beta": beta,
+                "amplitudes": amps}
+
+    def _form_marker(self) -> str:
+        if self.register == "formal":
+            return self.rng.choice(["Вы", "вас", "ваш", "Ваше"])
+        if self.register == "casual":
+            return self.rng.choice(["ты", "тебе", "твой", "глянь"])
+        return ""
+
     def greeting(self) -> str:
         return self.rng.choice(self.greetings[self._effective_style(None)])
 
@@ -103,7 +127,12 @@ class PersonaSynthesizer:
         fact = fact_text.strip()
         if fact and not fact.endswith((".", "!", "?")):
             fact += "."
-        parts = [p.strip() for p in (op, f"{body_opener} {fact}".strip(), closer) if p]
+        marker = self._form_marker()
+        if marker:
+            intro = f"{marker}, {body_opener.lower()}" if body_opener else marker
+        else:
+            intro = body_opener
+        parts = [p.strip() for p in (op, f"{intro} {fact}".strip(), closer) if p]
         return " ".join(parts)
 
     def format_math(self, expr: str, value: float) -> str:

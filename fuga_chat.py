@@ -324,8 +324,19 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--demo":
         demo()
     else:
-        eng = FugaChatEngine()
-        print("Fuga chat (exit/пока — выход)")
+        import argparse
+        ap = argparse.ArgumentParser(description="Fuga chat")
+        ap.add_argument("--register", choices=["formal", "casual", "neutral"],
+                        default="neutral")
+        ap.add_argument("--vis", action="store_true",
+                        help="live-трасса регистра (latent_vis)")
+        args, _ = ap.parse_known_args()
+        eng = FugaChatEngine(style="adaptive")
+        eng.persona.set_register(args.register)
+        reg_tag = args.register if args.register != "neutral" else ""
+        print(f"Fuga chat ({reg_tag or 'neutral'} mode)"
+              + (" [vis:on]" if args.vis else ""))
+        print("Флаги: --register formal|casual|neutral | --vis")
         while True:
             try:
                 inp = input("Ты:   ")
@@ -333,4 +344,10 @@ if __name__ == "__main__":
                 break
             if inp.lower() in ("exit", "quit"):
                 break
-            print(f"Fuga: {eng.respond(inp)}")
+            resp = eng.respond(inp)
+            print(f"Fuga: {resp}")
+            if args.vis:
+                t = eng.persona.register_trace()
+                print(f"  [vis] reg={t['register']} γ={t['gamma']:.2f} "
+                      f"β={t['beta']:+.2f} "
+                      f"amp={t['amplitudes']}")
