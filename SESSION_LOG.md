@@ -441,3 +441,15 @@ P(вы-форма | формальная генерация) − P(вы-форм
   нужны: (а) temperature >=0.9 против пробельного коллапса, (б) больше
   отравляющих шаблонов и шагов, (в) текстовая метрика на non-empty
   генерациях.
+
+### Этап X. AST Code Ingest (6 языков, Tree-Sitter -> VSA) (24.08)
+
+- `astral/code_ingest.py`: tree-sitter 0.26 API (Parser(lang)), 6 грамматик
+  (c/cpp/rust/python/go/java). Извлечение функций/типов/рёбер вызовов,
+  рёбра -> bind(caller,callee), метрика K-lines/s.
+- Источники: локальный стек (.rs/.py) + sparse-клон Linux mm/,kernel/sched,
+  include/linux (64MB вместо 2.4GB) + golang/example (Go).
+- Результат: 285 файлов / 307K строк / **53.4 K-lines/s** / 32,602 узлов
+  AST / 9,342 рёбер вызовов.
+- Покрытие: C, Go, Rust, Python. C++/Java — требуют клона (LLVM/JDK
+  крупные; отложено). Ключ скорости: tree-sitter нативные парсеры.
