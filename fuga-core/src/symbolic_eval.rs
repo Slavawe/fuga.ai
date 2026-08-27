@@ -29,9 +29,30 @@ fn tokenize_expr(expr: &str) -> Result<Vec<Token>, String> {
                     .map_err(|_| format!("bad number: {num}"))?;
                 tokens.push(Token::Num(v));
             }
+            '^' => {
+                tokens.push(Token::Op('^'));
+                chars.next();
+            }
             '+' | '-' | '*' | '/' | '(' | ')' => {
                 tokens.push(Token::Op(c));
                 chars.next();
+            }
+            'a'..='z' | 'A'..='Z' | '_' => {
+                let mut name = String::new();
+                while let Some(&c2) = chars.peek() {
+                    if c2.is_alphanumeric() || c2 == '_' {
+                        name.push(c2);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let v = match name.as_str() {
+                    "pi" => std::f64::consts::PI,
+                    "e" => std::f64::consts::E,
+                    _ => return Err(format!("unknown identifier: {name}")),
+                };
+                tokens.push(Token::Num(v));
             }
             other => return Err(format!("unexpected char: {other}")),
         }
@@ -100,6 +121,17 @@ impl Parser {
     }
 
     fn factor(&mut self) -> Result<f64, String> {
+        let v = self.primary()?;
+        // правоассоциативная степень: a^b^c = a^(b^c)
+        if matches!(self.peek(), Some(Token::Op('^'))) {
+            self.next();
+            let e = self.factor()?;
+            return Ok(v.powf(e));
+        }
+        Ok(v)
+    }
+
+    fn primary(&mut self) -> Result<f64, String> {
         match self.next() {
             Some(Token::Num(v)) => Ok(v),
             Some(Token::Op('(')) => {
