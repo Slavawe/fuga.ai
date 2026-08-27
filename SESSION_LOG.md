@@ -744,3 +744,14 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   улучшение Астрала: Астрал теперь умеет сам создавать свои модули.
 - Использование созданного модуля: hamming(same_anchor)=0, cosine=1.0;
   hamming(vmalloc,schedule)=1014, cosine=0.010.
+
+### Этап AV. ИИ создаёт библиотеку, объединяющую PyTorch + JAX (24.08)
+
+- `astral/make_duo_lib.py` -> FileAgent создаёт `ai_lib/duo_nn.py`
+  (3187 байт): единый API над torch и jax — Linear, matmul, relu, softmax,
+  layer_norm; диспетчеризация по backend; автоматическая конверсия
+  массивов между numpy/torch/jax.
+- Валидация: L1 ✅, L2 (torch-forward + jax-forward из одного кода) ✅.
+- Доступные бэкенды: [torch, jax]. Типы выходов: torch.Tensor и
+  jaxlib.Array.
+- ИИ создал библиотеку, совместил PyTorch и JAX — как и запрошено.
