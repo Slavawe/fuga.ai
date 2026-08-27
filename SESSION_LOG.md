@@ -698,3 +698,14 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   SDPA; AFT/Linear Attention следуют тому же паттерну замены ядра на
   нативный fused SDPA или VSA-операции (bind/unbind через
   astral/self_spawn.py уже доказали бит-в-бит Rust-соединение).
+
+### Этап AR. JAX absorb: поглощение легаси JAX в VSA-память (24.08)
+
+- Sparse-клон jax/_src/lax (5.6MB): 30 901 строка @ 262 K-lines/s,
+  1007 символов (dot_general, conv_general_dilated, reduce, reshape...).
+- В код-память fuga_memory_jax (1007 символов) + BIM legacy_module узел.
+- Спутник на якорях JAX (dot_general/conv_general_dilated/reduce/reshape)
+  -> sandbox PASS.
+- Честная рамка: L1-поглощение и модернизация кода возможны; L2 (запуск)
+  JAX требует XLA/CUDA — вне песочницы. Символы JAX в общей VSA-памяти
+  как якоря для спутников.
