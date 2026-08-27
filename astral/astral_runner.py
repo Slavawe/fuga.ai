@@ -69,6 +69,7 @@ class MoKPredictor(nn.Module):
         self.head = nn.Linear(hidden, dim)
         self.router = nn.Linear(hidden, n_e)
         self._n_e = n_e
+        self._hidden = hidden
 
     def forward(self, state_hv, action):
         dev = self.action_emb.weight.device      # устройство МОДЕЛИ (cuda/cpu)
@@ -82,8 +83,7 @@ class MoKPredictor(nn.Module):
         # топ-2
         top_p, top_i = torch.topk(self.router(x), 2, dim=-1)
         alpha = torch.softmax(top_p, -1)
-        out = torch.zeros(x.shape[0], self.head.out_features,
-                          device=dev)
+        out = torch.zeros(x.shape[0], self._hidden, device=dev)
         for e, expert in enumerate(self.experts):
             mask = (top_i == e)
             if not mask.any():
