@@ -68,7 +68,18 @@ HV_Self = HV_Identity ⊗ e^{i(x·ωx + y·ωy + z·ωz)} ⊗ Rot(θ, φ, ψ)
 
 ## Порядок реализации
 
-1. D3: Spatial-JEPA (SE(3) + occupancy grid + world model) — CORE
-2. D1: Relational Δθ (язык → пространство) — на основе D3
-3. V1: VL-JEPA (восстановить веса, bridge) — на основе D3
-4. D2: Code Spatial Compiler (пространство → AST/структуры)
+1. D3: Spatial-JEPA (SE(3) + occupancy grid + world model) — CORE ✅
+2. D1: Relational Δθ (язык → пространство) — на основе D3 ✅
+3. V1: VL-JEPA (восстановить веса, bridge) — на основе D3 ✅
+4. D2: Code Spatial Compiler (пространство → AST/структуры) ✅
+5. UnifiedSpatialEngine — связка всех 4 в одну цепь ✅
+
+## Статус (29.08, вечер)
+
+| Модуль | Файл | Результат |
+|--------|------|-----------|
+| D3 Spatial-JEPA | spatial_jepa.py | SE(3) обратимость=1.000, WorldModel обобщение cos=0.713 |
+| D1 Relational Δθ | relational_concept.py | инференция 5/5, verify=1.000 |
+| D2 Code Compiler | code_spatial_compiler.py | Rust/Python структуры, AABB, SE(3) матрицы |
+| V1 VL-JEPA | vljepa_restore.py | 5.7M параметров, cos(same)=1.000, cos(diff)=-0.181 |
+| Связка | unified_spatial.py | текст→тройки→пространство→код, loss 32→19.9 |
