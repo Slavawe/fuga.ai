@@ -2000,6 +2000,8 @@ pub fn tm_generate_megabyte_v3(
     conf_th: f32,
     macro_w: &[f32],
     beta_macro: f32,
+    concept_flat: &[f32],
+    beta_concept: f32,
 ) -> Vec<u8> {
     if seed_bytes.is_empty() {
         return Vec::new();
@@ -2119,6 +2121,30 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             z_macro = Some(zm);
         }
 
+        // JEPA CONCEPT (lang-jepa, tag=8): концепт = предсказанный СЛЕДУЮЩИЙ
+        // смысл из контекста (attention + LayerNorm, порт concept.rs).
+        // cos(concept, lat) добавляется как 4-й приор к коридору патчей.
+        let mut z_concept: Option<crate::ai::latent_jepa::LatentVector> = None;
+        if !concept_flat.is_empty() && beta_concept > 0.0 {
+            if let Some(cp) = crate::ai::concept::ConceptPredictor::from_flat(concept_flat) {
+                // 4 последних байтовых латента (как x_ctx для W_macro)
+                let cwin = window_bytes.max(1);
+                let clo = window.len().saturating_sub(cwin);
+                let win_sdrs: Vec<crate::ai::sdr::SdrVector> = window[clo..]
+                    .iter()
+                    .map(|&b| crate::ai::sdr::byte_basis(b))
+                    .collect();
+                let mut ctx4 = [[0.0f32; crate::ai::latent_jepa::LATENT_DIM]; 4];
+                for (i, sdr) in win_sdrs.iter().take(4).enumerate() {
+                    let lat = encoder.encode(sdr);
+                    for j in 0..crate::ai::latent_jepa::LATENT_DIM {
+                        ctx4[i][j] = lat.values[j];
+                    }
+                }
+                z_concept = Some(cp.predict_next(&ctx4));
+            }
+        }
+
         // Top-K патчей по cosine к направлению (без недавних повторов).
         let mut cand: Vec<(f32, &Vec<u8>)> = Vec::new();
         for (patch, lat) in patch_latents.iter() {
@@ -2146,6 +2172,11 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             // JEPA MACRO: семантический приор к патчам (cos(z_macro, lat)).
             if let Some(zm) = &z_macro {
                 score += beta_macro * (zm.cosine_similarity(lat).max(0.0));
+            }
+            // JEPA CONCEPT (lang-jepa): 4-й приор — смысл следующего
+            // предложения фильтрует дрейф (cos(concept, lat)).
+            if let Some(zc) = &z_concept {
+                score += beta_concept * (zc.cosine_similarity(lat).max(0.0));
             }
             cand.push((score, patch));
         }

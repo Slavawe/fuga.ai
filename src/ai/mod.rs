@@ -51,6 +51,7 @@ pub mod crystal;
 pub mod self_mirror;
 pub mod temporal_predictor;
 pub mod tm_generate;
+pub mod concept;      // lang-jepa ConceptPredictor (FUGA1 tag=8 CONCEPT_W)
 pub mod transpile;
 pub use anomaly::{
     AnomalyDetector, AnomalyEvent, AnomalyReflector, CorrectionSignal, StyloProfile,

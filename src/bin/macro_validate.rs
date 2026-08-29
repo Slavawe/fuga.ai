@@ -76,11 +76,11 @@ fn main() {
         );
         let out3a = fuga::tm_generate_megabyte_v3(
             &tm, seed, 200, win, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001, 0.30, 0.05,
-            &w_macro, 0.3,
+            &w_macro, 0.3, &[], 0.0,
         );
         let out3b = fuga::tm_generate_megabyte_v3(
             &tm, seed, 200, win, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001, 0.30, 0.05,
-            &w_macro, 0.6,
+            &w_macro, 0.6, &[], 0.0,
         );
         let same = out2 == out3a;
         let same2 = out3a == out3b;

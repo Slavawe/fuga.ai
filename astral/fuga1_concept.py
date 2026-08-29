@@ -109,6 +109,66 @@ def torch_state_to_flat(state_dict: dict) -> bytes:
     return bytes(out)
 
 
+def predictor_flat(sd_predictor: dict) -> bytes:
+    """Чистый f32-blob концепт-предиктора БЕЗ метаданных.
+
+    7 тензоров в ФИКСИРОВАННОМ порядке (как Rust ConceptPredictor):
+      query [512], in_proj_w [1536*512], in_proj_b [1536],
+      out_proj_w [512*512], out_proj_b [512], ln_w [512], ln_b [512]
+    Итого: 1,052,160 f32. Rust читает напрямую (from_flat).
+    """
+    import struct
+    import torch
+
+    order = [
+        "query",
+        "context_attention.in_proj_weight",
+        "context_attention.in_proj_bias",
+        "context_attention.out_proj.weight",
+        "context_attention.out_proj.bias",
+        "projection.weight",
+        "projection.bias",
+    ]
+    out = bytearray()
+    for key in order:
+        t = sd_predictor[key].detach().cpu().float().reshape(-1)
+        out += struct.pack(f"<{len(t)}f", *t.tolist())
+    return bytes(out)
+
+
+def predictor_flat_to_dict(blob: bytes) -> dict:
+    """Обратно: чистый flat f32 → dict из 7 тензоров (фиксированные формы)."""
+    import struct
+    import torch
+
+    shapes = [
+        (1, 1, 512),        # query
+        (1536, 512),        # in_proj_w
+        (1536,),            # in_proj_b
+        (512, 512),         # out_proj_w
+        (512,),             # out_proj_b
+        (512,),             # ln_w
+        (512,),             # ln_b
+    ]
+    keys = [
+        "query",
+        "context_attention.in_proj_weight",
+        "context_attention.in_proj_bias",
+        "context_attention.out_proj.weight",
+        "context_attention.out_proj.bias",
+        "projection.weight",
+        "projection.bias",
+    ]
+    out = {}
+    pos = 0
+    for key, shape in zip(keys, shapes):
+        n = int(__import__("math").prod(shape))
+        vals = struct.unpack_from(f"<{n}f", blob, pos)
+        pos += 4 * n
+        out[key] = torch.tensor(list(vals)).reshape(shape)
+    return out
+
+
 def flat_to_torch_state(blob: bytes) -> dict:
     """Восстанавливает state_dict из плоского f32-blob (см. torch_state_to_flat)."""
     import torch
