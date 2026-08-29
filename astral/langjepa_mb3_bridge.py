@@ -60,6 +60,9 @@ class ConceptChannel:
         # in_proj: qkv [3*dim, dim] → [1, L+1, dim]
         qkv = F.linear(torch.cat([ctx, q], dim=1), self.in_proj, self.in_bias)
         q, k, v = qkv.split(self.dim, dim=-1)
+        # ВАЖНО: query — ТОЛЬКО последняя строка (learnable), а не все L+1.
+        # Контекстные строки в q не должны attend на себя.
+        q = q[:, -1:, :]  # [1,1,dim] — предсказатель следующего концепта
         attn = torch.softmax((q @ k.transpose(-2, -1)) / (self.dim ** 0.5), dim=-1)
         out = attn @ v  # [1, 1, dim]
         out = F.linear(out, self.out_proj, self.out_bias)
@@ -97,11 +100,11 @@ def main():
         sims = concept @ F.normalize(hvs, dim=-1).T
         top_vals, top_idx = torch.topk(sims, 5)
         print("\n  ближайшие якоря к концепту:")
-        for i, idx in enumerate(top_idx[0].tolist()):
+        for i, idx in enumerate(top_idx.tolist()):
             name = anchors[idx][0]
             if isinstance(name, bytes):
                 name = name.decode("utf-8", errors="replace")
-            print(f"    {i+1}. {name!r}  cos={top_vals[0][i].item():.3f}")
+            print(f"    {i+1}. {name!r}  cos={top_vals[i].item():.3f}")
 
     print("\n  MB3 score = patch + βm·macro + βc·concept  (4-й приор активен)")
 
