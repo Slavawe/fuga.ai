@@ -7,5 +7,7 @@
 //! Phase 1 (this pass): argument parsing helpers.
 //! Phase 1+ (next): analyze/train/tm/crystal/agent/query/reflect/sim/print.
 
+pub mod analyze;
 pub mod args;
 pub mod print;
+pub mod train;
