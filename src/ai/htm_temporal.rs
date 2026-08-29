@@ -1212,6 +1212,7 @@ pub const TAG_META: u32 = 4;
 pub const TAG_HJEPA: u32 = 5;
 pub const TAG_KAN_C: u32 = 6;
 pub const TAG_MACRO_W: u32 = 7; // Byte-H-JEPA: макро-предиктор (Widrow-Hoff в эмбеддингах)
+pub const TAG_CONCEPT_W: u32 = 8; // lang-jepa: концепт-предиктор (context→следующий концепт)
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnifiedMeta {
@@ -1354,6 +1355,42 @@ pub fn load_unified_macro(path: &str) -> Option<Vec<f32>> {
             return None;
         }
         if tag == TAG_MACRO_W {
+            let section = &data[pos..pos + len];
+            let n = len / 4;
+            let mut vals = Vec::with_capacity(n);
+            for i in 0..n {
+                let off = i * 4;
+                vals.push(f32::from_le_bytes(section[off..off + 4].try_into().ok()?));
+            }
+            return Some(vals);
+        }
+        pos += len;
+    }
+    None
+}
+
+/// Прочитать только секцию CONCEPT_W (tag=8) из FUGA1-файла — плоские f32
+/// веса lang-jepa концепт-предиктора (context → следующий концепт).
+/// Интерпретация структуры — на стороне Python (astral/models/
+/// lang_jepa_adapter.py): Rust хранит/читает как непрозрачный f32-blob,
+/// аналогично KAN_C (tag=6).
+pub fn load_unified_concept(path: &str) -> Option<Vec<f32>> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 5 || &data[..5] != UNIFIED_MAGIC {
+        return None;
+    }
+    let mut pos = 5;
+    while pos + 8 <= data.len() {
+        let tag = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+        let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        pos += 8;
+        if tag == TAG_END {
+            return None;
+        }
+        if pos + len > data.len() {
+            return None;
+        }
+        if tag == TAG_CONCEPT_W {
             let section = &data[pos..pos + len];
             let n = len / 4;
             let mut vals = Vec::with_capacity(n);

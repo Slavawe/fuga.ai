@@ -532,6 +532,9 @@ enum UnifiedTag : uint32_t {
     TAG_OWM_P = 3,
     TAG_META = 4,
     TAG_HJEPA = 5,
+    TAG_KAN_C = 6,
+    TAG_MACRO_W = 7,
+    TAG_CONCEPT_W = 8,
 };
 
 inline constexpr const char *UNIFIED_MAGIC = "FUGA1";
