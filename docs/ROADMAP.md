@@ -143,3 +143,15 @@ python3 src/bin/name_metric.py <ckpt>     # точность имён
 **Вывод**: 1M даёт 185B связного (`the and the soue t and the shee...`),
 1.5M переобучился (14B) — подтверждает AGENTS.md (ранняя остановка
 1.2M). **1M = рабочая точка серии на чистом корпусе**.
+
+## Мультиязычный кодовый корпус (29.08, вечер)
+- **Источник**: 4 реальные кодовые базы (shallow-клоны, --depth 1)
+  linux (96K файлов), rust (62K), go, php-src
+- **Экстракция**: tools/extract_multicode.py (C/.h/.rs/.go/.php,
+  ASCII>0.98, фрагменты 100-400 байт, без test/vendor/target)
+- **Результат**: /tmp/fuga_multicode.jsonl = **4,437,290 фрагментов (1.7GB)**
+  linux 3.8M, rust 206K, go 190K, php 196K
+- **Прогон 1M (GPU, 642s, 1557 pairs/s)**: |W|=11.513 |Wp|=6.481
+- **ПРОРЫВ**: V2 «in the beginning» → **44B реального C-кода Linux**
+  (`blkcg_gq`, `blkcg_oss_folkcg` — идентификаторы ядра!)
+- Чекпоинт: /tmp/multicode_1M_concept.fuga (с CONCEPT_W tag=8)
