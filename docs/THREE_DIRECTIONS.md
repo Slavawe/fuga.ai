@@ -83,3 +83,18 @@ HV_Self = HV_Identity ⊗ e^{i(x·ωx + y·ωy + z·ωz)} ⊗ Rot(θ, φ, ψ)
 | D2 Code Compiler | code_spatial_compiler.py | Rust/Python структуры, AABB, SE(3) матрицы |
 | V1 VL-JEPA | vljepa_restore.py | 5.7M параметров, cos(same)=1.000, cos(diff)=-0.181 |
 | Связка | unified_spatial.py | текст→тройки→пространство→код, loss 32→19.9 |
+## 5. «Руки»: Embodied VLA Executant (29.08, вечер)
+
+**Модуль**: astral/models/vla_hands.py — 4 слоя:
+
+| Слой | Что | Результат |
+|------|-----|-----------|
+| H1 VLAExecutor | vision-латент → 7-DoF [x,y,z,r,p,y,gripper] | вектор действия |
+| H2 AffordanceField | FPE-поле возможностей (не точка, а поле) | cube: (2,0,0) score=1.00 |
+| H3 PhaseTrajectory | плавная SE(3) траектория (smoothstep) | 21 точка, max-шаг 0.15 |
+| H4 AdaptiveLayer | онлайн-адаптация + OWM-защита направлений | loss 2.11→0.028, cos=0.994 |
+
+**Ключевое**: H4 — АДАПТИВНЫЙ ИИ (не статичные веса):
+- Widrow-Hoff онлайн-обновление action-головы по сигналу успеха
+- consolidate() — OWM-ортогонализация выученных направлений
+- «Руки» учатся на своём опыте, а не только на претрейне
