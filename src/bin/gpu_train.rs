@@ -26,7 +26,7 @@ use fuga::ai::gpu_ops::GpuOps;
 use fuga::ai::latent_jepa::{LatentPredictor, SdrEncoder};
 use fuga::ai::sdr::{byte_basis, encode_bytes_sdr, structure_sdr_from_sdrs};
 
-const DIM: usize = 512;
+const DIM: usize = fuga::ai::latent_jepa::LATENT_DIM;
 
 // Извлечь байты из JSONL-строки (doc/code/chapters) — как в full_byte_train.
 fn extract_bytes(line: &str) -> Vec<u8> {

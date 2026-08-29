@@ -63,7 +63,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
-const DIM: usize = 512;
+const DIM: usize = fuga::ai::latent_jepa::LATENT_DIM;
 
 fn extract_bytes(line: &str) -> Vec<u8> {
     let v: serde_json::Value = match serde_json::from_str(line) {

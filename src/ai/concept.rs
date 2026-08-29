@@ -10,7 +10,14 @@
 
 use crate::ai::latent_jepa::{LatentVector, LATENT_DIM};
 
-const N_FEATURES: usize = 1_052_160;
+const N_FEATURES: usize =
+    LATENT_DIM                                        // query
+    + 3 * LATENT_DIM * LATENT_DIM                      // in_proj_w
+    + 3 * LATENT_DIM                                   // in_proj_b
+    + LATENT_DIM * LATENT_DIM                          // out_proj_w
+    + LATENT_DIM                                       // out_proj_b
+    + LATENT_DIM                                       // ln_w
+    + LATENT_DIM;                                      // ln_b
 
 /// Плоские веса концепт-предиктора (7 тензоров, конкатенированы, на heap).
 pub struct ConceptPredictor {
@@ -26,14 +33,15 @@ impl ConceptPredictor {
         Some(Self { data: flat.to_vec() })
     }
 
-    // Офсеты каждого тензора в data
-    const O_QUERY: usize = 0;                              // 512
-    const O_IN_PROJ_W: usize = 512;                        // 786432
-    const O_IN_PROJ_B: usize = 512 + 786432;                // 1536
-    const O_OUT_PROJ_W: usize = 512 + 786432 + 1536;        // 262144
-    const O_OUT_PROJ_B: usize = 512 + 786432 + 1536 + 262144; // 512
-    const O_LN_W: usize = 512 + 786432 + 1536 + 262144 + 512; // 512
-    const O_LN_B: usize = 512 + 786432 + 1536 + 262144 + 512 + 512; // 512 = 1052160
+    // Офсеты каждого тензора в data (вычисляются от LATENT_DIM)
+    // Каждая константа самодостаточна (const-ссылки требуют Self:: — не использовать).
+    const O_QUERY: usize = 0;
+    const O_IN_PROJ_W: usize = LATENT_DIM;
+    const O_IN_PROJ_B: usize = LATENT_DIM + 3 * LATENT_DIM * LATENT_DIM;
+    const O_OUT_PROJ_W: usize = LATENT_DIM + 3 * LATENT_DIM * LATENT_DIM + 3 * LATENT_DIM;
+    const O_OUT_PROJ_B: usize = LATENT_DIM + 3 * LATENT_DIM * LATENT_DIM + 3 * LATENT_DIM + LATENT_DIM * LATENT_DIM;
+    const O_LN_W: usize = LATENT_DIM + 3 * LATENT_DIM * LATENT_DIM + 3 * LATENT_DIM + LATENT_DIM * LATENT_DIM + LATENT_DIM;
+    const O_LN_B: usize = LATENT_DIM + 3 * LATENT_DIM * LATENT_DIM + 3 * LATENT_DIM + LATENT_DIM * LATENT_DIM + LATENT_DIM + LATENT_DIM;
 
     fn w(&self, offset: usize, idx: usize) -> f32 {
         self.data[offset + idx]

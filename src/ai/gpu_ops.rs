@@ -19,7 +19,8 @@
 //! acceleration, never a hard dependency.
 use std::num::NonZeroU64;
 
-pub const DIM: u32 = 512;
+use crate::ai::latent_jepa::LATENT_DIM;
+pub const DIM: u32 = LATENT_DIM as u32;
 
 const SHADER: &str = r#"
 @group(0) @binding(0) var<storage, read_write> w: array<f32>;
@@ -30,9 +31,9 @@ const SHADER: &str = r#"
 @compute @workgroup_size(256)
 fn delta(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= 512u * 512u) { return; }
-    let row = i / 512u;
-    let col = i % 512u;
+    if (i >= 1024u * 1024u) { return; }
+    let row = i / 1024u;
+    let col = i % 1024u;
     w[i] += lr[0] * err[row] * x[col];
 }
 "#;
@@ -47,10 +48,10 @@ const CAP_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn cap_w(@builtin(global_invocation_id) gid: vec3<u32>) {
     let row = gid.x;
-    if (row >= 512u) { return; }
+    if (row >= 1024u) { return; }
     var sq = 0.0;
-    for (var i = 0u; i < 512u; i = i + 1u) {
-        let v = w[row * 512u + i];
+    for (var i = 0u; i < 1024u; i = i + 1u) {
+        let v = w[row * 1024u + i];
         sq += v * v;
     }
     if (sq > cap[0]) {
@@ -127,10 +128,10 @@ const RESIDUAL_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn residual(@builtin(global_invocation_id) gid: vec3<u32>) {
     let o = gid.x;
-    if (o >= 512u) { return; }
-    let row = o * 512u;
+    if (o >= 1024u) { return; }
+    let row = o * 1024u;
     var pred = 0.0f;
-    for (var i = 0u; i < 512u; i = i + 1u) {
+    for (var i = 0u; i < 1024u; i = i + 1u) {
         pred += w[row + i] * x[i];
     }
     err[o] = t[o] - pred;
@@ -148,11 +149,11 @@ const KAN_CAP_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn kan_cap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let o = gid.x;
-    if (o >= 512u) { return; }
+    if (o >= 1024u) { return; }
     var sq = 0.0;
-    for (var i = 0u; i < 512u; i = i + 1u) {
+    for (var i = 0u; i < 1024u; i = i + 1u) {
         for (var k = 0u; k < 6u; k = k + 1u) {
-            let v = c[(o * 512u + i) * 6u + k];
+            let v = c[(o * 1024u + i) * 6u + k];
             sq += v * v;
         }
     }
