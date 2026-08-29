@@ -171,10 +171,11 @@ class UnifiedEngine:
         code_anchors = ["fn", "main", "let", "return", "if", "else", "for", "struct", "impl"]
         # Безопасно: только якоря, которые реально есть в списке
         code_anchors = [a for a in code_anchors if a in self.anchors]
+        if not code_anchors:
+            return seed  # нет кодовых якорей — нечего генерировать
         code_words = [seed]  # начальная история
         out = seed
-        cur = code_anchors[0] if code_anchors else "main"
-        counts: dict[str, int] = {cur: 1}
+        counts: dict[str, int] = {code_anchors[0]: 1}
         for _ in range(length):
             # Контекст кода → фазовая суперпозиция последних 3 токенов
             z = torch.ones(self.fpe.dim, dtype=torch.complex64)
@@ -191,7 +192,7 @@ class UnifiedEngine:
             nxt = code_anchors[int(code_sims.argmax())]
             counts[nxt] = counts.get(nxt, 0) + 1
             code_words.append(nxt)
-            # Структура (как в旧版本е)
+            # Структура (каркас кода: ключевое слово → фрагмент)
             if nxt == "fn":
                 out += " fn main() {"
             elif nxt == "let":
@@ -210,7 +211,6 @@ class UnifiedEngine:
                 out += " } else {"
             else:
                 out += f" {nxt}"
-            cur = nxt
         return out + " }"
 
     # ── Комбинирование слов и кода ──────────────────────────────
