@@ -1,144 +1,75 @@
-// v6_validate.rs — валидация v6: ctx=8 → window=9, β=0.3 (явный Patch Loss)
-// загружает чекпоинт FUGA1, прогоняет V2-декодер (конфигурация из AGENTS.md:
-// α=0, τ=0.01, corridor=0, β=0.3, rep_word=0.20, window=9) на 4 сидах,
-// печатает норму остатка и декоды — единая метрика для всех чекпоинтов v5.
-use fuga::ai::htm_temporal::{load_unified, TemporalMemory};
-use fuga::ai::kan::KanTransition;
-use std::collections::HashSet;
-use std::io::BufRead;
+// v6_validate.rs — валидация чекпоинта ПОЛНОЙ конфигурацией декодера v2
+// (AGENTS.md v6.2: α=0, τ=0.01, corridor=0, min_cos=0.001, β=0,
+//  rep_word=0.20, rep_phrase=0.8, window=9, PHR_LEN=12)
+use fuga::ai::htm_temporal::{load_unified, UnifiedMeta};
+use fuga::tm_generate_cosine_gate_v2;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let ckpt = args.get(1).cloned().unwrap_or_else(|| "fuga_unified_v4.fuga".into());
-    let corpora: Vec<&str> = if args.len() > 2 {
-        args[2..].iter().map(|s| s.as_str()).collect()
-    } else {
-        vec!["fisig_corpus.jsonl", "corpus_doc_code_pairs.jsonl", "training_stack.jsonl", "corpus.jsonl"]
-    };
+    let ckpt = args.get(1).cloned().unwrap_or_else(|| "fuga_unified_v6.fuga".into());
+    let corpus_path = args.get(2).cloned().unwrap_or_else(|| "corpus.jsonl".into());
 
-    let data = load_unified(&ckpt);
-    let Some((w, pw, _owm, meta, _hj, kan_c)) = data else {
-        println!("НЕ ЗАГРУЖЕН");
-        return;
-    };
+    // Загрузка чекпоинта (FUGA1)
+    let (local_w, patch_w, owm_p, meta, _hj, kan_c) =
+        load_unified(&ckpt).expect("не FUGA1 чекпоинт");
     let _ = &meta;
-    println!(
-        "ckpt={} ctx={} steps={} | |W|={:.3} |Wp|={:.3}",
-        ckpt,
-        meta.ctx,
-        meta.steps,
-        w.iter().map(|v| v * v).sum::<f32>().sqrt(),
-        pw.iter().map(|v| v * v).sum::<f32>().sqrt()
-    );
+    println!("== V6.2 VALIDATE: {} ==", ckpt);
+    println!("  local_w={} patch_w={} owm_p={} kan={:?}",
+             local_w.len(), patch_w.len(), owm_p.len(),
+             kan_c.as_ref().map(|k| k.len()));
 
-    let mut tm = TemporalMemory::new(64, 8);
-    assert!(tm.load_unified_fuga1(&ckpt), "load FUGA1");
-    let mut kan = KanTransition::new();
+    // TemporalMemory с энкодером (как в talk_model)
+    let mut tm = fuga::ai::htm_temporal::TemporalMemory::new(64, 4);
+    tm.apply_byte_w(local_w.clone());
+    tm.apply_patch_w(patch_w.clone());
+
+    // Патч-словарь из корпуса (как в unified_gpu_train: чанки по 2 байта)
+    let mut patch_vocab: Vec<Vec<u8>> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&corpus_path) {
+        let mut seen = std::collections::HashSet::new();
+        for line in text.lines() {
+            let bytes = line.as_bytes();
+            for chunk in bytes.chunks(2) {
+                if chunk.len() == 2 && seen.insert(chunk.to_vec()) {
+                    patch_vocab.push(chunk.to_vec());
+                }
+            }
+            if patch_vocab.len() > 1000 {
+                break;
+            }
+        }
+    }
+    println!("  patch_vocab={} (из {})", patch_vocab.len(), corpus_path);
+
+    // KAN (пустой — α=0)
+    let mut kan = fuga::ai::kan::KanTransition::new();
     if let Some(c) = &kan_c {
         if c.len() == kan.c.len() {
             kan.c.clone_from(c);
         }
     }
 
-    // patch_vocab из корпусов (тот же способ, что в трейнере)
-    let mut seen: HashSet<Vec<u8>> = HashSet::new();
-    let mut patch_vocab: Vec<Vec<u8>> = Vec::new();
-    for corp in &corpora {
-        let Ok(f) = std::fs::File::open(corp) else { continue };
-        let rd = std::io::BufReader::new(f);
-        for line in rd.lines().flatten() {
-            if line.len() < 4 { continue; }
-            for w in line.as_bytes().windows(2) {
-                if seen.insert(w.to_vec()) && patch_vocab.len() < 5000 {
-                    patch_vocab.push(w.to_vec());
-                }
-            }
-            if patch_vocab.len() >= 5000 { break; }
-        }
-        if patch_vocab.len() >= 5000 { break; }
-    }
+    // Полная конфигурация v6.2 из AGENTS.md
+    let (alpha, tau, corridor, min_cos, beta) = (0.0f32, 0.01f32, 0u8, 0.001f32, 0.0f32);
+    let (rep_word, rep_phrase) = (0.20f32, 0.8f32);
 
-    let seeds: Vec<Vec<u8>> = vec![
-        b"the force of gravity is".to_vec(),
-        b"in the beginning".to_vec(),
-        b"let x = 4".to_vec(),
-        b"fn main() {".to_vec(),
+    let seeds: Vec<&[u8]> = vec![
+        b"fn main() {",
+        b"the force of gravity is",
+        b"in the beginning",
+        b"let x = 4",
     ];
-    for seed in &seeds {
-        let out = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.30, 0.0, 0.20, 0.0);
-        println!(
-            "[V2] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            out.len(),
-            String::from_utf8_lossy(&out).chars().take(90).collect::<String>()
+    for seed in seeds {
+        let out = tm_generate_cosine_gate_v2(
+            &tm, &kan, seed, 200, 9, 2, &patch_vocab,
+            alpha, tau, corridor, min_cos, beta, 0.0, rep_word, rep_phrase,
         );
+        let s = String::from_utf8_lossy(&out);
+        println!("\n--- SEED {:?} ---", String::from_utf8_lossy(seed));
+        println!("  V2 rep_phrase={} ({} B): {:?}", rep_phrase, out.len(),
+                 s.chars().take(90).collect::<String>());
     }
-    // A/B: β=0 — без патч-смещения, чистый W·x + rep_word
-    println!("-- β=0 (контроль) --");
-    for seed in &seeds {
-        let out0 = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.0);
-        println!(
-            "[V2β0] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            out0.len(),
-            String::from_utf8_lossy(&out0).chars().take(90).collect::<String>()
-        );
-    }
-    // A/B: rep_phrase=0.5 — фразовый штраф на повтор байтовых блоков 10 байт
-    println!("-- rep_phrase=0.5 --");
-    for seed in &seeds {
-        let outp = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 1.0,
-        );
-        println!(
-            "[V2ph] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            outp.len(),
-            String::from_utf8_lossy(&outp).chars().take(90).collect::<String>()
-        );
-    }
-    // A/B2: rep_phrase=0.8
-    println!("-- rep_phrase=0.8 --");
-    for seed in &seeds {
-        let outp = fuga::tm_generate_cosine_gate_v2(
-            &tm, &kan, seed, 200, 9, 2, &patch_vocab, 0.0, 0.01, 0, 0.001, 0.0, 0.0, 0.20, 0.8,
-        );
-        println!(
-            "[V2ph8] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            outp.len(),
-            String::from_utf8_lossy(&outp).chars().take(90).collect::<String>()
-        );
-    }
-    println!("== v6 validate done == ");
-    // A/B3: MegaByte-порядок v2 — патч решает ДО байтов (top-K коридор)
-    println!("-- MegaByte v2 (top_k=8, β=0.3, rep_word=0.20, rep_phrase=0.8) --");
-    for seed in &seeds {
-        let outm = fuga::tm_generate_megabyte_v2(
-            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.3, 0.20, 0.8, 0.001, 0.30, 0.05,
-        );
-        println!(
-            "[MB2] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            outm.len(),
-            String::from_utf8_lossy(&outm).chars().take(90).collect::<String>()
-        );
-    }
-    // A/B4: MegaByte v2 сетка (top_k=4, β=0.5) — узкий коридор
-    println!("-- MegaByte v2 (top_k=4, β=0.5) --");
-    let seeds2 = &seeds[..2];
-    for seed in seeds2 {
-        let outm = fuga::tm_generate_megabyte_v2(
-            &tm, seed, 200, 9, 2, &patch_vocab, 8, 0.5, 0.20, 0.8, 0.001, 0.30, 0.15,
-        );
-        println!(
-            "[MB2b] {:?} ({}B): {:?}",
-            String::from_utf8_lossy(seed),
-            outm.len(),
-            String::from_utf8_lossy(&outm).chars().take(90).collect::<String>()
-        );
-    }
-    println!("== v7 validate done == ");
+    println!("\n== v6.2 VALIDATE DONE ==");
+    // Удержать типы (UnifiedMeta не используется явно)
+    let _ = UnifiedMeta::default();
 }
