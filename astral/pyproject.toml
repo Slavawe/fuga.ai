@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fuga-astral"
+version = "0.2.0"
+description = "Fuga Cognitive Engine - Astral Self-Improvement Layer"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["astral*", "antitf*"]

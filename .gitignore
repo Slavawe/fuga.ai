@@ -28,3 +28,7 @@ nohup.out
 .vscode/
 .DS_Store
 fuga_downloader
+
+# Python build artifacts
+*.egg-info/
+__pycache__/

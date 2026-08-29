@@ -609,7 +609,7 @@ impl GpuOps {
         }
         
         let slice = self.staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
@@ -853,7 +853,7 @@ impl GpuOps {
             }
         }
         let slice = self.staging2.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
@@ -967,7 +967,7 @@ impl GpuOps {
             }
         }
         let slice = self.kan_staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });

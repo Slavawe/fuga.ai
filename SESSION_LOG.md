@@ -831,3 +831,48 @@ BIM auto-refactor → ГОТОВО К РЕЛИЗУ.
   следующего латента).
 - Цикл завершён: ИИ проглотил и переварил две архитектуры и создал
   собственную гибридную версию.
+
+### Этап BD. Evolution V3: автономный R&D-агент (24.08)
+
+- 1. Auto-Maintainer: сгенерирован и закоммичен ai_modules/auto_maintained.py
+- 2. Progressive Continual: MambaSSM+KAN, замороженные VSA-кристаллы,
+  адаптивный VICReg. Задача A -> B -> повтор A: forgetting +0.000
+  (катастрофического забывания НЕТ).
+- 3. Architecture Search: ядра mamba (scan_*), syn (parse/scan/serialize)
+  из VSA-памяти -> гибридный блок swiglu+topk (MoE-мотив) для duo_nn.
+- Три направления роадмапа собраны в одном модуле evolution_v3.py.
+
+### Этап BE. Self-Improve: модель САМА улучшила себя (ACT) (24.08)
+
+- `astral/self_improve.py`: цикл — architecture_selector находит пробел
+  (Recurrent-Depth) -> модель генерирует код через FileAgent
+  (переиспользует MambaSSM + ChebyKANLayer, без дублей) -> L1+L2
+  валидация -> git-коммит.
+- Результат: ai_modules/act_looped_depth.py сгенерирован моделью,
+  обучен (loss сходится, halting head оценивает глубину), закоммичен.
+- Модель улучшила себя автономно: сама решила, чего не хватает,
+  сама написала и проверила решение.
+
+### Этап BF. J-Space Workbench: модель поглотила и вживила (24.08)
+
+- `astral/jspace_workbench.py`: модель поглотила JSpaceWorkbench из ТЗ,
+  вживила с Rust-связкой: concept_memory = VSA-якоря fuga_core
+  (не случайные), ACT-цикл мысли (halting head, адаптивная глубина),
+  J-Lens Decoder -> логиты по кодбуку VSA-токенов.
+- Результаты: J-latent (5,512), ACT-шагов 3 из 6, обучение сходится
+  (loss 20.1 -> 0.000).
+- Принцип: модель делает сама, я лишь корректирую API (bind_batch
+  список-списков).
+
+### Этап BG. Cyc-KB: интеграция духа OpenCyc (формальный здравый смысл) (24.08)
+
+- `astral/cyc_kb.py`: онтология здравого смысла в VSA-памяти
+  (fuga_memory_cyc) + транзитивный вывод (contained_in, part_of,
+  subclass_of) через SymbolicExecutor.
+- Инференция работает: cup contained_in car -> cup->box->car (transitive),
+  cat subclass_of animal -> cat->mammal->animal. Прямые факты и
+  корректные unknown подтверждены.
+- OpenCyc репозиторий удалён (Cyc закрыт в 2017) — модель интегрировала
+  ДУХ системы: компактно, выводимо, в бестокеновом стеке.
+- Lush (LeNet/backprop эпохи) — концепции уже в стеке (OwnJAX grad,
+  duo_nn), поглощение кода по шаблону при доступности зеркала.
