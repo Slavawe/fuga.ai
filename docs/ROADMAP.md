@@ -128,6 +128,18 @@ python3 src/bin/name_metric.py <ckpt>     # точность имён
 - [x] Шаг 5: HDC/FPE/PhaseCrystal (пруф: 72/88/100%)
 - [x] Шаг 6: Barlow Twins (анти-коллапс)
 - [x] Шаг 7: UnifiedEngine (speak/codegen/combine)
-- [ ] Шаг 2: большой прогон 1M на чистом корпусе (идёт: /tmp/code_500k.fuga)
+- [x] Шаг 2: прогон 1M/1.5M на чистом корпусе — **1M = рабочая точка**
 - [ ] Шаг 4: концепт-приор βc в полном декодере
 - [ ] Шаг 8: полный A/B v2/MB3/MB3+concept
+
+## A/B: 1M vs 1.5M (чистый корпус, V2 с rep_phrase=0.8) — 29.08
+| сид | 1M | 1.5M |
+|---|---|---|
+| fn main() { | 6B | 2B |
+| the force of gravity is | 2B | 20B |
+| in the beginning | **185B** | 14B |
+| let x = 4 | 4B | 4B |
+
+**Вывод**: 1M даёт 185B связного (`the and the soue t and the shee...`),
+1.5M переобучился (14B) — подтверждает AGENTS.md (ранняя остановка
+1.2M). **1M = рабочая точка серии на чистом корпусе**.
