@@ -23,6 +23,17 @@ nohup.out
 *.ckpt.*
 *.parquet
 
+# Веса моделей (PyTorch/CPU, гигабайты — не в git!)
+*.pt
+*.fgc
+*.facts.jsonl
+*.onnx
+*.safetensors
+
+# Дубли-копии памяти
+model_copy/
+fuga_memory_copy/
+
 # IDE / OS
 .idea/
 .vscode/
