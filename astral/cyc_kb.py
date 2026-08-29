@@ -12,17 +12,14 @@ Cyc пытался вручную закодировать здравый смы
 from __future__ import annotations
 
 
-import sys
-import os
 
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from fuga_core import SymbolicExecutor
-from fuga_memory import PersistentVSAMemory
+from astral.core.memory import PersistentVSAMemory
 from antitf.rust_bridge import packed_to_torch
 
 

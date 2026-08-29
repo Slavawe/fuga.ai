@@ -22,7 +22,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, ".")
 
 random.seed(0)
 torch.manual_seed(0)

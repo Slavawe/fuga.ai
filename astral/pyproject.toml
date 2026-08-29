@@ -12,6 +12,20 @@ dependencies = [
     "numpy",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["astral*", "antitf*"]
+[tool.setuptools]
+packages = [
+    "astral",
+    "astral.core",
+    "astral.models",
+    "astral.ingest",
+    "astral.agents",
+    "astral.experiments",
+]
+
+[tool.setuptools.package-dir]
+astral = "."
+"astral.core" = "core"
+"astral.models" = "models"
+"astral.ingest" = "ingest"
+"astral.agents" = "agents"
+"astral.experiments" = "experiments"

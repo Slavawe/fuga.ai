@@ -14,10 +14,8 @@ from __future__ import annotations
 
 from __future__ import annotations
 
-import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from astral import sandbox
@@ -114,7 +112,6 @@ def run_performer(out_path: str) -> dict:
     import torch
     repo_root = "/tmp/opencode/performer"
     if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
     spec = importlib.util.spec_from_file_location("mod_performer", out_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -130,7 +127,6 @@ def run_mingpt(out_path: str) -> dict:
     import torch
     repo_root = "/tmp/opencode/mingpt"
     if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
     spec = importlib.util.spec_from_file_location("mod_gpt", out_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

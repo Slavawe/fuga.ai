@@ -13,7 +13,6 @@ import os
 import sys
 import subprocess
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from astral.file_agent import FileAgent

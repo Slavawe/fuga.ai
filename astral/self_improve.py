@@ -16,7 +16,6 @@ import subprocess
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from astral.file_agent import FileAgent
@@ -29,7 +28,6 @@ ACT_CODE = '''"""self-improved: ACT looped-depth модуль, сгенерир�
 ChebyKANLayer (сплайны) — БЕЗ дубликатов. Halting head решает глубину.
 """
 import sys, os
-sys.path.insert(0, {root!r})
 
 import torch
 import torch.nn as nn

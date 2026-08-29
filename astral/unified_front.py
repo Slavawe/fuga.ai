@@ -14,7 +14,6 @@ import re
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import torch
@@ -24,7 +23,6 @@ import torch.nn.functional as F
 import fuga_core
 from antitf.rust_bridge import packed_to_torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antitf.kan import ChebyKANLayer
 from astral.procedural_stream import ProceduralWorldGen

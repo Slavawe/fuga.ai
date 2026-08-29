@@ -20,7 +20,6 @@ import os
 import sys
 import textwrap
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch
@@ -55,7 +54,6 @@ def render_rust_satellite(name, anchors, ops, params_m) -> str:
         """
         import sys
         import numpy as np
-        sys.path.insert(0, {os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))!r})
 
         from fuga_core import FastVSA
 

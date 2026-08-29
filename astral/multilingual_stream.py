@@ -14,15 +14,12 @@ from __future__ import annotations
 from __future__ import annotations
 
 import itertools
-import os
 import random
 import re
-import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch

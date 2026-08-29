@@ -13,10 +13,7 @@
 from __future__ import annotations
 
 
-import sys
-import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from fuga_core import SymbolicExecutor
@@ -41,7 +38,7 @@ def verify_with_kan(result: float, steps: list[str], binder) -> dict:
     """KAN-аппроксимация: проверяет правдоподобие результата через
     VSA-косинус с эталонными якорями (BIM-память)."""
     # заглушка: KAN-аппроксимация — сравниваем с ожидаемым диапазоном
-    from fuga_memory import PersistentVSAMemory
+    from astral.core.memory import PersistentVSAMemory
     mem = PersistentVSAMemory(binder, directory="fuga_memory_ownjax")
     plausible = -1e9 < result < 1e9
     return {"kan_plausible": plausible, "result": result,

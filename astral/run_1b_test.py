@@ -8,8 +8,6 @@ from __future__ import annotations
 astral/configs/astral_1b_mok.json (shared VSA-адаптер 147M + эксперты).
 """
 
-import os
-import sys
 import time
 
 import numpy as np
@@ -17,7 +15,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from antitf.kan import ChebyKANLayer
 from astral.procedural_stream import ProceduralWorldGen

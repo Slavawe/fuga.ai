@@ -17,7 +17,6 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, ".")
 
 random.seed(0)
 torch.manual_seed(0)

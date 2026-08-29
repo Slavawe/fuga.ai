@@ -16,10 +16,8 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 import glob
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from astral.fuga_tokenizer import FugaTokenizer

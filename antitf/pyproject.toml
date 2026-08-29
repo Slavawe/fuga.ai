@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fuga-antitf"
+version = "0.1.0"
+description = "Fuga Cognitive Engine - Python-Rust bridge layer (PyO3 bindings)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+]
+
+[tool.setuptools]
+packages = ["antitf"]
+
+[tool.setuptools.package-dir]
+antitf = "."

@@ -13,14 +13,11 @@ from __future__ import annotations
 from __future__ import annotations
 
 import json
-import os
 import re
-import sys
 
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch

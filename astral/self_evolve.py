@@ -13,11 +13,8 @@ from __future__ import annotations
 
 
 import importlib.util
-import os
-import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from fuga_core import CodeIndexer
@@ -58,11 +55,10 @@ def generate_improved_tokenizer_code(binder) -> str:
 """
 import sys, os, json, glob, hashlib, re
 import numpy as np
-sys.path.insert(0, {os.path.abspath('..')!r})
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch
-from fuga_memory import PersistentVSAMemory
+from astral.core.memory import PersistentVSAMemory
 from astral.fuga_tokenizer import FugaTokenizer
 
 

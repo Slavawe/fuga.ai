@@ -12,11 +12,8 @@ from __future__ import annotations
 
 
 import subprocess
-import sys
-import os
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn
@@ -35,7 +32,6 @@ def auto_maintainer(binder, agent: FileAgent) -> dict:
 Хэлпер для VSA-радиусов: нормировка гипервекторов в ±1.
 """
 import sys, os
-sys.path.insert(0, {os.path.abspath(".")!r})
 import numpy as np
 import fuga_core
 from antitf.rust_bridge import packed_to_torch

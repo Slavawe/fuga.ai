@@ -16,18 +16,16 @@ from __future__ import annotations
 
 
 import os
-import sys
 import time
 from collections import defaultdict
 
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch
-from fuga_memory import PersistentVSAMemory
+from astral.core.memory import PersistentVSAMemory
 
 
 class FugaTokenizer:

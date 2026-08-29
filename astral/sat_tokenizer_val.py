@@ -15,7 +15,6 @@ import sys
 import time
 import textwrap
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from astral.fuga_tokenizer import FugaTokenizer
@@ -25,7 +24,6 @@ VALIDATION_CODE = """#!/usr/bin/env python3
 # sat_tokenizer_val: автономный валидатор FugaTokenizer (рождён {ts})
 # L1 reversibility | L1 AST-boundaries | L2 speed -> JSON в stdout
 import sys, os, json, time
-sys.path.insert(0, {root!r})
 from astral.fuga_tokenizer import FugaTokenizer
 import fuga_core
 

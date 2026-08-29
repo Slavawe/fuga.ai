@@ -8,15 +8,12 @@ ACT-механика: один и тот же блок применяется р
 
 from __future__ import annotations
 
-import sys
-import os
 import time
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from astral.mamba_jepa_hybrid import MambaSSM
 from antitf.kan import ChebyKANLayer

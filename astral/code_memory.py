@@ -16,9 +16,8 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, ".")
 
-from fuga_memory import PersistentVSAMemory
+from astral.core.memory import PersistentVSAMemory
 
 
 class CodeQueryEngine:

@@ -11,15 +11,12 @@ JSpaceWorkbench:
 from __future__ import annotations
 
 
-import sys
-import os
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from antitf.rust_bridge import packed_to_torch

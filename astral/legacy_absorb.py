@@ -19,9 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fuga_core
 from fuga_core import CodeIndexer
@@ -51,7 +49,7 @@ def absorb(binder, repo_dir: str, repo_name: str, bim: BIMEngine,
     symbols = sorted({n for _, n, _ in items if n})
 
     # 2. в код-память (через спутниковый CodeQueryEngine-путь: напрямую факты)
-    from fuga_memory import PersistentVSAMemory
+    from astral.core.memory import PersistentVSAMemory
     mem = PersistentVSAMemory(binder, directory=f"fuga_memory_{repo_name}")
     for n in symbols[:2000]:
         mem.add_fact("en", f"code:{n}", "legacy_symbol", repo_name,

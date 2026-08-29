@@ -10,12 +10,9 @@
 from __future__ import annotations
 
 import functools
-import sys
-import os
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Array(np.ndarray):
@@ -212,7 +209,7 @@ def main():
 
     # 5. VSA-регистр примитивов
     import fuga_core
-    from fuga_memory import PersistentVSAMemory
+    from astral.core.memory import PersistentVSAMemory
     binder = fuga_core.HybridBinder(2048)
     mem = PersistentVSAMemory(binder, directory="fuga_memory_ownjax")
     n = register_ops_vsa(binder, mem)

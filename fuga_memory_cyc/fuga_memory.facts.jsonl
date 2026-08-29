@@ -5,3 +5,10 @@
 {"lang": "en", "subject": "cyc:engine", "relation": "part_of", "object": "car", "ts": 1787902369.1905644}
 {"lang": "en", "subject": "cyc:cat", "relation": "subclass_of", "object": "mammal", "ts": 1787902369.1906075}
 {"lang": "en", "subject": "cyc:mammal", "relation": "subclass_of", "object": "animal", "ts": 1787902369.1906486}
+{"lang": "en", "subject": "cyc:cup", "relation": "contained_in", "object": "box", "ts": 1787986118.4714398}
+{"lang": "en", "subject": "cyc:box", "relation": "contained_in", "object": "car", "ts": 1787986118.4715164}
+{"lang": "en", "subject": "cyc:book", "relation": "contained_in", "object": "bag", "ts": 1787986118.4715536}
+{"lang": "en", "subject": "cyc:bag", "relation": "part_of", "object": "suitcase", "ts": 1787986118.4715827}
+{"lang": "en", "subject": "cyc:engine", "relation": "part_of", "object": "car", "ts": 1787986118.471609}
+{"lang": "en", "subject": "cyc:cat", "relation": "subclass_of", "object": "mammal", "ts": 1787986118.4716349}
+{"lang": "en", "subject": "cyc:mammal", "relation": "subclass_of", "object": "animal", "ts": 1787986118.471659}
