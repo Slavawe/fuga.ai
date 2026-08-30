@@ -111,8 +111,7 @@ fn main() {
             if b == b'\n' { '\n' } else if b == b'\t' { '\t' }
             else if (0x20..=0x7e).contains(&b) { b as char } else { '·' }
         }).collect();
-        let mut disp = text.clone();
-        disp.truncate(disp.len().min(120));
+        let disp: String = text.chars().take(120).collect();
         println!("  BLT: {}B → {:?}", out.len(), disp);
     }
     println!("\n=== BLT-ДЕКОДЕР ГОТОВ ===");
