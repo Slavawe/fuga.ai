@@ -1,7 +1,11 @@
 pub mod code_index;
 pub mod filter;
 pub mod ibm_model;
+pub mod nongrad;
 pub mod symbolic_eval;
+
+// Re-export безградиентного ядра для PyO3-регистрации
+pub use nongrad::{lif_step, stdp_oja_batch, stdp_oja_update, vsa_cos, vsa_predict};
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
@@ -494,6 +498,12 @@ fn fuga_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FastVSA>()?;
     m.add_class::<code_index::CodeIndexer>()?;
     m.add_function(wrap_pyfunction!(packed_u64_to_f32, m)?)?;
+    // Безградиентное ядро (Rust): STDP/Oja, predict, LIF, косинус
+    m.add_function(wrap_pyfunction!(stdp_oja_update, m)?)?;
+    m.add_function(wrap_pyfunction!(stdp_oja_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(vsa_predict, m)?)?;
+    m.add_function(wrap_pyfunction!(lif_step, m)?)?;
+    m.add_function(wrap_pyfunction!(vsa_cos, m)?)?;
     Ok(())
 }
 

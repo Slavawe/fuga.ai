@@ -27,6 +27,14 @@ from astral.experiments.neat_hyperneat import CPPN
 from astral.experiments.snn_neuromorphic import LIFNeuron
 from astral.experiments.mini_cognitive import MiniVSA
 
+# Rust-ядро (fuga_core.nongrad) — если собрано, горячие операции в Rust.
+# Фолбэк на numpy, если модуль не собран (чистый Python).
+try:
+    import fuga_core
+    _RUST = fuga_core if hasattr(fuga_core, "stdp_oja_update") else None
+except Exception:
+    _RUST = None
+
 
 class NonGradientEngine:
     """Полностью безградиентный движок обучения (HTM+VSA+SNN+NEAT)."""
@@ -64,15 +72,20 @@ class NonGradientEngine:
 
     # ── STDP: Oja-нормализация (соревновательное Hebb) ──────
     def _stdp_update(self, pre: np.ndarray, post: np.ndarray, spike: bool) -> None:
-        """STDP + Oja: Δw = lr·pre·post − lr·post²·w.
+        """STDP + Oja: Δw = lr·pre·post − lr·post²·w (Rust-ядро).
 
-        Oja's rule: веса соревнуются — сильные каналы вытесняют слабые.
-        Без неё веса схлопываются в «всё предсказывает всё».
+        Если fuga_core.nongrad доступен — обновление в Rust (быстрее);
+        иначе — numpy-фолбэк.
         """
-        if spike:
-            # Hebb: w += lr·pre·post
+        if not spike:
+            return
+        if _RUST is not None:
+            w = np.ascontiguousarray(self.weights, dtype=np.float32)
+            _RUST.stdp_oja_update(w, pre.astype(np.float32),
+                                  post.astype(np.float32), self.lr, 2.0)
+            self.weights = w
+        else:
             hebb = self.lr * np.outer(pre, post)
-            # Oja: w -= lr·post²·w  (нормализация)
             oja = self.lr * (np.linalg.norm(post) ** 2) * self.weights
             self.weights += hebb - oja
             np.clip(self.weights, -2.0, 2.0, out=self.weights)
@@ -96,9 +109,14 @@ class NonGradientEngine:
             self.sequence_memory[tok_id] = []
         self.sequence_memory[tok_id].append(nxt_id)
 
-        # 2. VSA: предсказание следующего
+        # 2. VSA: предсказание следующего (Rust-ядро)
         hv = self.vsa.item(token)
-        pred = self._vsa_bind(hv, np.sign(self.weights @ hv))
+        if _RUST is not None:
+            w = np.ascontiguousarray(self.weights, dtype=np.float32)
+            pred = _RUST.vsa_predict(w, hv.astype(np.float32))
+            pred = np.asarray(pred)
+        else:
+            pred = self._vsa_bind(hv, np.sign(self.weights @ hv))
 
         # 3. SNN + STDP
         spiked = self._spike(sdr)
@@ -106,7 +124,10 @@ class NonGradientEngine:
 
         # 4. Fitness (косинус предсказания с реальным)
         hv_next = self.vsa.item(next_token)
-        cos = self.vsa.cos(pred, hv_next)
+        if _RUST is not None:
+            cos = float(_RUST.vsa_cos(pred.astype(np.float32), hv_next.astype(np.float32)))
+        else:
+            cos = self.vsa.cos(pred, hv_next)
         self.fitness_history.append(cos)
 
         # 5. NEAT: мутация при падении fitness
@@ -120,6 +141,68 @@ class NonGradientEngine:
             "cos": cos,
             "fitness_mean": float(np.mean(self.fitness_history[-20:])) if self.fitness_history else 0.0,
             "weight_sum": float(np.sum(np.abs(self.weights))),
+        }
+
+    # ── Rust batch-обучение (весь цикл за 1 вызов PyO3) ────
+    def train_facts_rust(self, memory_dirs: list[str], epochs: int = 1,
+                         max_tokens: int | None = None) -> dict:
+        """Обучение через Rust batch-ядро (0 градиентов, максимальная скорость).
+
+        Пары собираются в батчи [B, 512] и передаются в
+        fuga_core.stdp_oja_batch() — PyO3 вызывается 1 раз на батч,
+        весь цикл STDP/Oja выполняется в Rust.
+        """
+        if _RUST is None:
+            # фолбэк на numpy-версию
+            return self.train_facts(memory_dirs, epochs, max_tokens)
+
+        triples = []
+        for d in memory_dirs:
+            facts = os.path.join(d, "fuga_memory.facts.jsonl")
+            if not os.path.exists(facts):
+                continue
+            with open(facts, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        o = json.loads(line)
+                        triples.append((o.get("subject", ""), o.get("relation", ""), o.get("object", "")))
+                    except Exception:
+                        continue
+
+        tokens: list[tuple[str, str]] = []
+        for s, r, o in triples:
+            if s:
+                tokens.append((s, o))
+            if r:
+                tokens.append((r, o))
+        if max_tokens:
+            tokens = tokens[:max_tokens]
+
+        # SDR для всех пар (входы для Rust)
+        pre_arr = np.zeros((len(tokens), self.dim), dtype=np.float32)
+        post_arr = np.zeros((len(tokens), self.dim), dtype=np.float32)
+        for i, (a, b) in enumerate(tokens):
+            pre_arr[i] = self._to_sdr(a).astype(np.float32)
+            post_arr[i] = self._to_sdr(b).astype(np.float32)
+            # HTM-память (Python-часть остаётся)
+            tid = hash(a) % (2**20)
+            if tid not in self.sequence_memory:
+                self.sequence_memory[tid] = []
+            self.sequence_memory[tid].append(hash(b) % (2**20))
+
+        w = np.ascontiguousarray(self.weights, dtype=np.float32)
+        for _ in range(epochs):
+            _RUST.stdp_oja_batch(w, pre_arr, post_arr, self.lr, 2.0)
+        self.weights = w
+        self.step_count = len(tokens) * epochs
+
+        return {
+            "triples": len(triples),
+            "pairs": len(tokens),
+            "steps": self.step_count,
+            "htm_states": len(self.sequence_memory),
+            "weight_sum": float(np.sum(np.abs(self.weights))),
+            "backend": "Rust-batch",
         }
 
     # ── Полное обучение на корпусе фактов fuga_memory_* ─────
