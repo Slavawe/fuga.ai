@@ -1,5 +1,6 @@
 pub mod anomaly;
 pub mod answer_engine;
+pub mod blt_patch;
 pub mod byte_lstm;
 pub mod gpu_ops;
 pub mod codegen;
