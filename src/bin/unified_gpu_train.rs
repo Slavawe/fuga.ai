@@ -112,6 +112,10 @@ fn main() {
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_patch: f32 = arg(&args, "--lr-patch", 0.1);
     let lr_macro: f32 = arg(&args, "--lr-macro", 0.05); // Byte-H-JEPA канал
+    // BLT-патчевание (SKILL 1: contract-first — флаг включает переменные
+    // границы патчей вместо фиксированных 2 байт; старый путь не тронут).
+    let use_blt = args.iter().any(|a| a == "--blt");
+    let blt_threshold: f32 = arg(&args, "--blt-threshold", 0.85);
     // v7 Patch Graph Curriculum: λ-старт 0.4 → экспоненциальное затухание к
     // floor 0.10 (~1.5M). τ в шагах: λ(t) = floor + (start−floor)·exp(−t/τ).
     let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.4); // стартовый вес Patch Loss
@@ -178,6 +182,26 @@ fn main() {
         }
     };
 
+    // BLT-энтропия (SKILL 1: contract-first, Tracing Floor). Обучается на
+    // корпусе ОДИН раз (bigram-распределение байтов), затем — переменные
+    // границы патчей для W_patch. Старый путь (фиксированные 2 байта)
+    // не тронут: BLT активируется ТОЛЬКО флагом --blt (SKILL 4: merge-safe).
+    let blt_entropy: std::sync::Arc<fuga::ai::blt_patch::BltEntropy> = if use_blt {
+        let mut e = fuga::ai::blt_patch::BltEntropy::new();
+        for corp in corpus.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Ok(f) = std::fs::File::open(corp) {
+                let rd = std::io::BufReader::new(f);
+                for line in rd.lines().flatten() {
+                    e.learn(line.as_bytes());
+                }
+            }
+        }
+        eprintln!("[blt] энтропия обучена (--blt), threshold={}", blt_threshold);
+        std::sync::Arc::new(e)
+    } else {
+        std::sync::Arc::new(fuga::ai::blt_patch::BltEntropy::new())
+    };
+
     // ОГРАНИЧЕННЫЙ канал (backpressure, sync_channel — урок OOM).
     // Трёхканальная пара: (x_local, err_local, x_patch, err_patch).
     type Pair5 = (
@@ -207,6 +231,9 @@ fn main() {
         let byte_cache = byte_cache.clone();
         let corpus = corpus.clone();
         let probe_buf = probe_buf.clone();
+        let use_blt = use_blt;
+        let blt_threshold = blt_threshold;
+        let blt_entropy = blt_entropy.clone();
         std::thread::spawn(move || {
             let corpora: Vec<String> = corpus
                 .split(',')
@@ -218,7 +245,7 @@ fn main() {
             // обучения бит-в-бит совпадает с историческим однопоточным.
             // AST-маска оставлена за бортом: ast_ranges всегда пуст (bypass),
             // ветка мёртвая — см. комментарий ниже.
-            let make_pair = |data: &[u8], i: usize| -> Pair5 {
+            let make_pair = |data: &[u8], i: usize, blt_off: Option<&[usize]>| -> Pair5 {
                 let win_lo = i.saturating_sub(ctxw);
                 let win: &[u8] = &data[win_lo..=i];
                 let nxt = data[i + 1];
@@ -245,6 +272,45 @@ fn main() {
                 let mut x2 = Vec::new();
                 let mut t2 = Vec::new();
                 let mut x2b = Vec::new(); // перекрывающееся окно (сдвиг −1 патч)
+                // BLT-режим (--blt): окно строится по ПЕРЕМЕННЫМ границам
+                // энтропийных патчей (blt_off = кумулятивные смещения).
+                if let Some(offs) = blt_off {
+                    // Позиция data[i+1] лежит в патче pp_off: наихудший O(n)
+                    // (bounded: документ ≤ 64KB, патчей ≤ ~4K).
+                    let target = i + 1;
+                    let pp_off = offs.iter().rposition(|&o| o <= target).unwrap_or(0);
+                    // окно: patch_ctx патчей ДО патча pp_off (pp_off-1 .. pp_off-patch_ctx)
+                    if pp_off >= patch_ctx && pp_off + 1 < offs.len() {
+                        let mut pw: Vec<&[u8]> = Vec::with_capacity(patch_ctx);
+                        for k in 0..patch_ctx {
+                            let lo = offs[pp_off - 1 - k];
+                            let hi = offs[pp_off - k];
+                            pw.push(&data[lo..hi]);
+                        }
+                        pw.reverse(); // хронологический порядок (старые → новые)
+                        let next_patch = &data[offs[pp_off]..offs[pp_off + 1]];
+                        let win_patch_sdrs: Vec<fuga::SdrVector> =
+                            pw.iter().map(|p| encode_bytes_sdr(p)).collect();
+                        let xs = enc_patch.encode(&structure_sdr_from_sdrs(&win_patch_sdrs));
+                        let ts = enc_patch.encode(&encode_bytes_sdr(next_patch));
+                        x2 = xs.values.clone();
+                        t2 = ts.values.clone();
+                        // перекрывающееся окно: сдвиг −1 патч
+                        if pp_off >= patch_ctx + 1 {
+                            let mut pv: Vec<&[u8]> = Vec::with_capacity(patch_ctx);
+                            for k in 0..patch_ctx {
+                                let lo = offs[pp_off - 2 - k];
+                                let hi = offs[pp_off - 1 - k];
+                                pv.push(&data[lo..hi]);
+                            }
+                            pv.reverse();
+                            let win2_sdrs: Vec<fuga::SdrVector> =
+                                pv.iter().map(|p| encode_bytes_sdr(p)).collect();
+                            let xs2 = enc_patch.encode(&structure_sdr_from_sdrs(&win2_sdrs));
+                            x2b = xs2.values.clone();
+                        }
+                    }
+                } else {
                 let pp = (i + 1) / 2; // номер патча, в который входит data[i+1]
                 if i + 3 <= data.len() && pp >= patch_ctx {
                     let mut pw: Vec<&[u8]> = Vec::with_capacity(patch_ctx);
@@ -269,6 +335,7 @@ fn main() {
                         x2b = xs2.values.clone();
                     }
                 }
+                } // else: старый фиксированный 2-байтовый путь (без --blt)
                 (x.values, tv, x2, t2, x2b, xm, tm)
             };
             'outer: for corpus_file in &corpora {
@@ -343,6 +410,15 @@ fn main() {
                     // tree-sitter ЗАЦИКЛИВАЛСЯ на бинарных строках. ast_ranges
                     // всегда пуст — макро-цель идёт фоном (следующее окно).
                     let n = data.len().saturating_sub(1);
+                    // BLT (SKILL 1: contract-first): границы энтропийных патчей
+                    // документа — один раз на документ, затем в make_pair.
+                    let blt_offsets: Option<Vec<usize>> = if use_blt {
+                        Some(fuga::ai::blt_patch::blt_patch_offsets(
+                            &data, &blt_entropy, blt_threshold, 16,
+                        ))
+                    } else {
+                        None
+                    };
                     if threads > 1 {
                         // CPU/GPU конвейер: блоками по 2048 пары кодируются на
                         // всех ядрах (rayon), порядок пар СОХРАНЁН (collect по
@@ -358,7 +434,7 @@ fn main() {
                             let b1 = (b0 + PAR_BLOCK).min(n);
                             let pairs: Vec<Pair5> = (b0..b1)
                                 .into_par_iter()
-                                .map(|i| make_pair(&data, i))
+                                .map(|i| make_pair(&data, i, blt_offsets.as_deref()))
                                 .collect();
                             for p in pairs {
                                 if stop.load(Ordering::Relaxed) {
@@ -387,7 +463,7 @@ fn main() {
                             if stop.load(Ordering::Relaxed) {
                                 break 'outer;
                             }
-                            let p = make_pair(&data, i);
+                            let p = make_pair(&data, i, blt_offsets.as_deref());
                             let xv = p.0.clone();
                             let pv = p.1.clone();
                             if tx.send(p).is_err() {

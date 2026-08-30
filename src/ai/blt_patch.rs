@@ -90,6 +90,22 @@ pub fn blt_patch(data: &[u8], entropy: &BltEntropy, threshold: f32,
     patches
 }
 
+/// Границы BLT-патчей как кумулятивные смещения (для тренировки W_patch).
+/// Возвращает offsets: [0, len(p0), len(p0)+len(p1), ...].
+/// Патч k = data[offsets[k]..offsets[k+1]].
+pub fn blt_patch_offsets(data: &[u8], entropy: &BltEntropy, threshold: f32,
+                         max_patch: usize) -> Vec<usize> {
+    let patches = blt_patch(data, entropy, threshold, max_patch);
+    let mut offsets = Vec::with_capacity(patches.len() + 1);
+    offsets.push(0);
+    let mut acc = 0usize;
+    for p in &patches {
+        acc += p.len();
+        offsets.push(acc);
+    }
+    offsets
+}
+
 /// Декодирование через BLT-патчи: W_patch направление по окну патчей.
 ///
 /// Отличие от MB2: патчи ПЕРЕМЕННОЙ длины (BLT), а не chunks(plen).
