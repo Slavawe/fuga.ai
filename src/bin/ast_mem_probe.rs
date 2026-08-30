@@ -28,14 +28,15 @@ fn ast_node_ranges_probe(code: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
         if cursor.goto_first_child() {
             continue;
         }
-        while !cursor.goto_next_sibling() {
-            if !cursor.goto_parent() {
+        loop {
+            if cursor.goto_next_sibling() {
                 break;
+            }
+            if !cursor.goto_parent() {
+                return out;
             }
         }
     }
-    out
-}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
