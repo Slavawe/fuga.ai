@@ -19,6 +19,13 @@ import numpy as np
 
 from astral.experiments.hard_teacher_vsa_blt import VSA_BLT_Memory, HardTeacher
 
+# Rust-ядро для batch-косинуса (fuga_core.vsa_cos_batch), фолбэк numpy
+try:
+    import fuga_core
+    _RUST = fuga_core if hasattr(fuga_core, "vsa_cos_batch") else None
+except Exception:
+    _RUST = None
+
 
 class VSADecoder:
     """Генерация через VSA+BLT память + учитель.
@@ -103,21 +110,26 @@ class VSADecoder:
         code_chars = b"{}();=<>+-*/\"'\\n\t "
         structure = sum(1 for b in patch if b in code_chars) / len(patch)
         base = readability * 0.6 + structure * 0.4
-        # +VSA-близость к фактам учителя (математика)
+        # +VSA-близость к фактам учителя (математика) — batch через Rust
         hv = self.memory.vsa.item(patch.decode("latin-1"))
-        fact_cos = 0.0
-        n = 0
+        # собираем HV всех фактов в матрицу [B, dim]
+        fact_hvs = []
         for fact_str, _ in self.teacher.fact_hvs:
             parts = fact_str.lower().split()
             if len(parts) >= 3:
                 fact_hv = self.teacher.vsa_math.encode_fact(
                     parts[0], parts[1], " ".join(parts[2:]))
-                fact_hv_np = fact_hv.numpy()
-                fact_cos += float(np.dot(hv, fact_hv_np) /
-                                  (np.linalg.norm(hv) * np.linalg.norm(fact_hv_np) + 1e-9))
-                n += 1
-        if n:
-            base += 0.4 * (fact_cos / n)
+                fact_hvs.append(fact_hv.numpy().astype(np.float32))
+        if not fact_hvs:
+            return base
+        fact_mat = np.stack(fact_hvs)
+        hv_f = hv.astype(np.float32)
+        if _RUST is not None:
+            cosines = np.asarray(_RUST.vsa_cos_batch(fact_mat, hv_f))
+        else:
+            norms = np.linalg.norm(fact_mat, axis=1) * np.linalg.norm(hv_f) + 1e-9
+            cosines = (fact_mat @ hv_f) / norms
+        base += 0.4 * float(np.mean(cosines))
         return base
 
     def generate(self, seed: str, max_bytes: int = 200) -> str:

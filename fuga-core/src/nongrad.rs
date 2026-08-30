@@ -103,6 +103,39 @@ pub fn vsa_cos(a: &Bound<'_, PyArray1<f32>>, b: &Bound<'_, PyArray1<f32>>) -> f3
     dot / (na.sqrt() * nb.sqrt() + 1e-9)
 }
 
+/// BATCH-косинус: cos между каждым вектором [B, dim] и одним [dim].
+/// Возвращает [B] косинусов за ОДИН вызов PyO3 (для VSA-поиска учителя).
+#[pyfunction]
+pub fn vsa_cos_batch<'py>(
+    py: Python<'py>,
+    a: &Bound<'_, PyArray2<f32>>,
+    b: &Bound<'_, PyArray1<f32>>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let shape = a.shape();
+    let rows = shape[0];
+    let cols = shape[1];
+    let a_s = unsafe { a.as_slice()? };
+    let b_s = unsafe { b.as_slice()? };
+    let mut out = Vec::with_capacity(rows);
+    // |b|
+    let mut nb = 0.0f32;
+    for j in 0..cols {
+        nb += b_s[j] * b_s[j];
+    }
+    let nb = nb.sqrt() + 1e-9;
+    for i in 0..rows {
+        let mut dot = 0.0f32;
+        let mut na = 0.0f32;
+        for j in 0..cols {
+            let v = a_s[i * cols + j];
+            dot += v * b_s[j];
+            na += v * v;
+        }
+        out.push(dot / (na.sqrt() * nb + 1e-9));
+    }
+    Ok(out.into_pyarray(py))
+}
+
 /// BATCH-обучение: весь цикл STDP/Oja за ОДИН вызов PyO3.
 ///
 /// Принимает: weights [dim,dim], pre [B,dim], post [B,dim], lr, clip.
