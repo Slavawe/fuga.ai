@@ -76,12 +76,18 @@ fn main() {
 
     // 4. BLT-патчи на сидах
     let beam_size: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let seeds = [
-        "fn main() {",
-        "the force of gravity is",
-        "in the beginning",
-        "let x = 4",
-    ];
+    // Кастомный сид (6-й аргумент): мультиязычная генерация
+    let custom_seed: Option<String> = args.get(5).cloned();
+    let seeds: Vec<&str> = if let Some(s) = &custom_seed {
+        vec![s.as_str()]
+    } else {
+        vec![
+            "fn main() {",
+            "the force of gravity is",
+            "in the beginning",
+            "let x = 4",
+        ]
+    };
     println!("\n=== BLT-ДЕКОДЕР (threshold={}) ===", threshold);
     for seed in seeds {
         // статистика BLT-патчей на сиде
@@ -105,7 +111,9 @@ fn main() {
             if b == b'\n' { '\n' } else if b == b'\t' { '\t' }
             else if (0x20..=0x7e).contains(&b) { b as char } else { '·' }
         }).collect();
-        println!("  BLT: {}B → {:?}", out.len(), &text[..text.len().min(120)]);
+        let mut disp = text.clone();
+        disp.truncate(disp.len().min(120));
+        println!("  BLT: {}B → {:?}", out.len(), disp);
     }
     println!("\n=== BLT-ДЕКОДЕР ГОТОВ ===");
 }
