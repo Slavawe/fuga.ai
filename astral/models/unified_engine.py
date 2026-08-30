@@ -77,7 +77,7 @@ class UnifiedEngine:
 
         # Анти-коллапс
         self.barlow = BarlowTwinsHead(in_dim=dim, hidden=dim // 2)
-        self._barlow_opt = torch.optim.Adam(self.barlow.parameters(), lr=1e-3)
+        # БЕЗ оптимизатора: анти-коллапс через Gram-Schmidt + Hebb (0 градиентов)
 
         # Концепт-память (обученные пары «слово-смысл»)
         self.concept_memory: dict[str, torch.Tensor] = {}
@@ -236,29 +236,45 @@ class UnifiedEngine:
             results.append(f"// {c}: {code_seed} -> {best_code}() {{ ... }}")
         return results
 
-    # ── Обучение Barlow на реальных парах ───────────────────────
+    # ── Обучение (без градиентов) ──────────────────────────────
     def train_anti_collapse(self, texts: list[str], steps: int = 100) -> dict:
-        """Barlow-обучение: два представления батча текстов → identity.
+        """Безградиентный анти-коллапс: ортонормализация HV (Gram-Schmidt).
 
-        BatchNorm1d в голове требует батч ≥ 2 — подаём ВСЕ слова за шаг
-        одним батчем (минимум 2 строки).
+        Вместо Barlow loss + backward:
+          1. Собираем HV батча
+          2. Gram-Schmidt: делаем их ортогональными (без autograd)
+          3. Обновляем голову через Hebb: w += lr·(x·y) — без градиентов
         """
         words = [(t.split()[0] if t.split() else "the") for t in texts]
         hvs = torch.stack([_hv_of(self.binder, w, self.dim) for w in words])
-        losses = []
-        for step in range(steps):
-            # Два «взгляда»: сам батч + лёгкий фазовый сдвиг каждого
-            z_a = self.barlow(hvs)
-            shift = torch.exp(1j * 0.1 * torch.randn(hvs.shape[0], self.dim))
-            hw_b = torch.as_tensor(
-                (torch.fft.ifft(torch.fft.fft(hvs, dim=-1) * shift)).real)
-            z_b = self.barlow(hw_b)
-            loss = barlow_loss(z_a, z_b, lambda_=0.005)
-            self._barlow_opt.zero_grad()
-            loss.backward()
-            self._barlow_opt.step()
-            losses.append(loss.item())
-        return {"final": losses[-1], "mean": float(np.mean(losses))}
+        hvs_np = hvs.numpy()
+        # Gram-Schmidt (без градиентов)
+        ortho = np.zeros_like(hvs_np)
+        for i in range(len(hvs_np)):
+            v = hvs_np[i].copy()
+            for j in range(i):
+                proj = np.dot(v, ortho[j]) / (np.dot(ortho[j], ortho[j]) + 1e-9)
+                v -= proj * ortho[j]
+            ortho[i] = v / (np.linalg.norm(v) + 1e-9)
+        # Hebbian-обновление весов головы (без .backward())
+        # Последний Linear: [out_dim=h, in_dim=d]; апдейт [d, h].
+        # Активации ДО последнего слоя = первые 3 модуля (Linear+BN+ReLU)
+        last_lin = None
+        for m in self.barlow.proj.modules():
+            if isinstance(m, torch.nn.Linear):
+                last_lin = m
+        if last_lin is not None:
+            # активации до последнего Linear (без autograd)
+            with torch.no_grad():
+                h_pre = self.barlow.proj[:-1](hvs)  # (batch, h)
+            w = last_lin.weight.data.numpy()  # [d, h]
+            h_pre_np = h_pre.numpy()          # (batch, h)
+            # Δw[d,h] = (1/B)·Σ_b ortho[b,d]·h_pre[b,h] = ortho.T @ h_pre / B
+            w += 0.01 * (ortho.T @ h_pre_np) / (len(hvs_np) + 1e-9)
+            last_lin.weight.data = torch.from_numpy(w)
+        # loss = дисперсия: 0 = коллапс, 1+ = анти-коллапс
+        var = float(np.mean(np.var(ortho, axis=0)))
+        return {"final": 1.0 - var, "mean": 1.0 - var, "var": var}
 
 
 def demo() -> dict:

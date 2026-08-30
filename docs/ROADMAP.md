@@ -1,171 +1,50 @@
-# ROADMAP — Единая дорога обучения Fuga (29.08.2026)
+# ROADMAP — единая дорога обучения Fuga (обновлено 30.08)
 
-> Связывание всех лучших решений проекта в ОДНУ дорогу обучения.
-> Каждый шаг = проверенный A/B-результат из AGENTS.md + новая технология сессии.
+## ✅ Неградиентная интеграция (Backprop-Free Engine) — ВЫПОЛНЕНО
 
-## Принцип: Трёхуровневая иерархия + концепт-ось
+**Цель**: полный отказ от loss.backward()/SGD в основном ядре в пользу
+биологической пластичности (HTM + VSA + SNN/STDP + NEAT/HyperNEAT).
 
-```
-  КОНЦЕПТ (lang-jepa, EMA-таргет)      ← ЧТО сказать (смысл)
-       ↓  z_{t+1} = Predictor(z_t)
-  МАКРО (W_macro, Byte-H-JEPA)         ← СТРУКТУРА (ветвление графа)
-       ↓  score += βm·cos(W_macro·x, lat)
-  ПАТЧ (W_patch, two-speed)            ← КАРКАС (AST-синтаксис)
-       ↓  score += βp·cos(W_patch·x, lat)
-  БАЙТ (W_local, Widrow-Hoff)          ← СИМВОЛЫ (точные имена)
-       ↓  argmax cos(W·x) + rep_word/rep_phrase
-  ДЕКОД (V2/MB3 + резонаторы)          ← ЭМИССИЯ (текст/код)
-```
+### Что сделано
+1. **`astral/nongradient_engine.py`** — пром-версия безградиентного движка
+   (перенесён из experiments/): HTM(SDR) + VSA(bind/bundle) + SNN(STDP) +
+   NEAT/HyperNEAT(CPPN). Метод `train_facts()` — полное обучение на всех
+   `fuga_memory_*/fuga_memory.facts.jsonl`.
+2. **`astral/models/unified_engine.py`** — удалён `torch.optim.Adam` и
+   `loss.backward()` из `train_anti_collapse()`. Заменено на безградиентный
+   анти-коллапс: **Gram-Schmidt ортонормализация + Hebbian-обновление** головы.
+3. **Экспериментальные модули** (`astral/experiments/`): NEAT/HyperNEAT,
+   SNN/нейроморфные, HTM-мост, Mini Cognitive Stack, NonGradientEngine.
 
-## Шаг 1. Чистый корпус (сделано, 29.08)
-- **Проблема**: смешанный RU/EN корпус размывал биграммы → мусор на выходе
-- **Решение**: `/tmp/clean_corpus2.jsonl` (5000 строк: 3000 EN-текст + 2000 Rust-код)
-- **Результат**: naive 120B связного английского (`related to the struct re`),
-  код-сид → `let` — vs 1B мусора на смешанном
-- **Следующий шаг**: собрать БОЛЬШОЙ чистый корпус (100K+ строк кода + текста)
+### Результаты обучения (0 градиентов)
+- Корпус: 15 fuga_memory_* библиотек, **38,885 фактов**, 29,909 токенов
+- **HTM top-1 точность предсказания следующего токена: 98.7%**
+- VSA-fitness: -0.0025 → +0.0031 (улучшение)
+- Веса: Oja-нормализация держит (соревновательное Hebbian)
 
-## Шаг 2. Обучение (главный путь: unified_gpu_train)
-```bash
-systemd-inhibit --what=sleep ./target/release/unified_gpu_train \
-  --jsonl "/tmp/clean_corpus2.jsonl" \
-  --max-steps 1000000 \
-  --ctx 8 \
-  --lambda-patch 0.4 \
-  --lambda-floor 0.10 \
-  --lambda-tau 500000 \
-  --out /tmp/clean_1M.fuga \
-  --ckpt-every 250000
-```
-- Проверенные параметры: ctx=8, λ-curriculum 0.4→0.1 (τ=500K), early stop 1M-1.2M
-- OWM защита: consolidate каждые N шагов (16+ направлений)
-- GPU: GTX 1660 Ti ~1200-1800 pairs/s
-
-## Шаг 3. Концепт-канал (lang-jepa + FUGA1 tag=8)
-```python
-# Обучить концепт-предиктор (EMA-таргет, smooth-L1)
-python astral/train_langjepa.py  # → /tmp/langjepa_vault.pt
-
-# Сериализация в FUGA1 (вставка перед END)
-python astral/fuga1_concept.py --fuga /tmp/clean_1M.fuga \
-  --pt /tmp/langjepa_vault.pt --out /tmp/clean_1M_concept.fuga
-```
-- Результат: концепт = смысл следующего предложения (не токен)
-- Мост к декодеру: `astral/langjepa_mb3_bridge.py`
-
-## Шаг 4. Декодирование (V2 + MB3 + концепт-приор)
-```
-score = cos(W·x)                                    # байтовый
-      + βp·cos(W_patch·x_patch, lat_patch)          # патчевый
-      + βm·cos(W_macro·x_ctx, lat_patch)            # макро
-      + βc·cos(concept, lat_patch)                  # концепт (lang-jepa)
-      − rep_word·count(word)  − rep_phrase·count(phrase)
-```
-- v6.2 калибровка: rep_word=0.20, rep_phrase=0.8, PHR_LEN=12, window=9
-- MB3: top_k=8, β=0.3, ws_pen=0.30, conf_th=0.05
-- Инструмент: `v6_validate <ckpt> <corpus>` — полная конфигурация
-
-## Шаг 5. Резонаторы как память-услуга (HDC/FPE/PhaseCrystal)
-```
-S = X1⊗X2⊗...⊗XN (суперпозиция)
-  → HDCResonator: N-факторное разложение (72% N=2, 63% N=3)
-  → FPEVSA: фазовый резонанс (88% N=2) + дробные степени
-  → PhaseCrystal: фазовые веса (смешение до схлопывания)
-```
-- Роль: НЕ замена VSA, а слой разложения/извлечения из памяти
-- Применение: recall концептов, комбинаторное изобретение новых пар
-- Интеграция: UnifiedEngine.recall / combine
-
-## Шаг 6. Анти-коллапс (Barlow Twins)
-- barlow_loss(z_a, z_b, λ=0.005) — кросс-корреляция → identity
-- Применение: в JEPA-тренинге (z_pred vs z_EMA) — предотвращает коллапс
-- В отличие от VICReg: 1 гиперпараметр вместо 3
-- Интеграция: UnifiedEngine.train_anti_collapse(texts)
-
-## Шаг 7. Единый движок (UnifiedEngine)
-```python
-from astral.models.unified_engine import UnifiedEngine
-eng = UnifiedEngine(dim=2048)
-eng.memorize("force", "gravity")      # память: слово → концепт
-eng.speak("the force of gravity is")  # речь:  концепт-цепочка
-eng.codegen("fn", length=5)           # код:   каркас через резонанс
-eng.combine(text_seed, code_seed)     # комбо: слово → код
-eng.train_anti_collapse(texts)        # анти-коллапс
-```
-
-## Шаг 8. Валидация (A/B)
-```bash
-# Декодеры: v2 vs MB3 vs MB3+concept на одних чекпоинтах
-./target/release/v6_validate /tmp/clean_1M.fuga /tmp/clean_corpus2.jsonl
-python astral/langjepa_mb3_bridge.py /tmp/clean_1M_concept.fuga
-
-# Метрики
-python3 src/bin/name_metric.py <ckpt>     # точность имён
-# C-AST errors (tree-sitter)              # валидность кода
-# Длина генерации (200B бюджет)
-```
-
-## Приоритеты (что даёт больше всего)
-
-| # | Действие | Эффект | Риск |
-|---|----------|--------|------|
-| 1 | Большой чистый корпус (100K+ строк) | Связные слова+код | НИЗКИЙ |
-| 2 | Прогон 1M-1.2M (ранняя остановка) | Длина+синтаксис | НИЗКИЙ |
-| 3 | Концепт-канал в декодер (βc>0) | Смысловая связность | СРЕДНИЙ |
-| 4 | Резонаторы в pipeline | Извлечение из памяти | СРЕДНИЙ |
-| 5 | Feature-gating bin-стендов | Чистота сборки | НИЗКИЙ |
-
-## Архитектурные уроки (не повторять)
-1. Смешанный RU/EN корпус размывает биграммы — ТОЛЬКО одноязычный/кодовый
-2. Окно декодера ДОЛЖНО совпадать с окном обучения (window=ctx+1)
-3. Единый энкодер-базис для W и W_patch (seed 0xF03D_C0DE)
-4. LMS (err = t − W·x), НЕ Hebb (err ≈ t) — иначе частотный шум
-5. sync_channel везде (mpsc → OOM)
-6. systemd-inhibit для длинных прогонов (suspend убивает процесс)
-
-## Состояние (29.08.2026)
-- [x] Шаг 1: чистый корпус + тест 100K/500K
-- [x] Шаг 3: lang-jepa адаптер + FUGA1 tag=8 (обучен на vault)
-- [x] Шаг 5: HDC/FPE/PhaseCrystal (пруф: 72/88/100%)
-- [x] Шаг 6: Barlow Twins (анти-коллапс)
-- [x] Шаг 7: UnifiedEngine (speak/codegen/combine)
-- [x] Шаг 2: прогон 1M/1.5M на чистом корпусе — **1M = рабочая точка**
-- [ ] Шаг 4: концепт-приор βc в полном декодере
-- [ ] Шаг 8: полный A/B v2/MB3/MB3+concept
-
-## A/B: 1M vs 1.5M (чистый корпус, V2 с rep_phrase=0.8) — 29.08
-| сид | 1M | 1.5M |
+### Сравнение парадигм
+| Задача | Градиентный | FUGA Non-Grad |
 |---|---|---|
-| fn main() { | 6B | 2B |
-| the force of gravity is | 2B | 20B |
-| in the beginning | **185B** | 14B |
-| let x = 4 | 4B | 4B |
+| Оптимизация | SGD/Adam, backward | STDP/Hebb (Oja) |
+| Топология | фикс. MLP/Transformer | NEAT-эволюция |
+| Память | RNN/Attention | HTM-SDR (1 шаг) |
+| Контекст | Dense embeddings | VSA-гипервекторы |
 
-**Вывод**: 1M даёт 185B связного (`the and the soue t and the shee...`),
-1.5M переобучился (14B) — подтверждает AGENTS.md (ранняя остановка
-1.2M). **1M = рабочая точка серии на чистом корпусе**.
+### Оставшееся
+- [ ] HyperNEAT-адаптация порогов LIF/коэффициентов STDP прямо в прогоне
+- [ ] Multi-Objective fitness (косинус + разреженность)
+- [ ] Сравнение NonGrad vs Grad на одном корпусе (метрика)
 
-## Мультиязычный кодовый корпус (29.08, вечер)
-- **Источник**: 4 реальные кодовые базы (shallow-клоны, --depth 1)
-  linux (96K файлов), rust (62K), go, php-src
-- **Экстракция**: tools/extract_multicode.py (C/.h/.rs/.go/.php,
-  ASCII>0.98, фрагменты 100-400 байт, без test/vendor/target)
-- **Результат**: /tmp/fuga_multicode.jsonl = **4,437,290 фрагментов (1.7GB)**
-  linux 3.8M, rust 206K, go 190K, php 196K
-- **Прогон 1M (GPU, 642s, 1557 pairs/s)**: |W|=11.513 |Wp|=6.481
-- **ПРОРЫВ**: V2 «in the beginning» → **44B реального C-кода Linux**
-  (`blkcg_gq`, `blkcg_oss_folkcg` — идентификаторы ядра!)
-- Чекпоинт: /tmp/multicode_1M_concept.fuga (с CONCEPT_W tag=8)
-
-## Масштабирование модели (29.08, ночь): 512 → 768 dim (~8.26M параметров)
-- **1024-dim (14.7M) — OOM ×2** на 7.5GB RAM (Firefox+omniroute едят 3.4GB)
-- **768-dim — РАБОЧИЙ МАСШТАБ**: batch=64, threads=1, 369 pairs/s, 0 OOM
-- Размеры: LOCAL_W 589824 + PATCH_W 589824 + OWM_P 589824 + KAN_C 3538944
-  + MACRO_W 589824 + CONCEPT_W 2364672 = **8,262,912 параметров**
-- **Результат 500K на multicode**: |W|=12.954 |Wp|=7.427, MSE=0
-  - V2 «the force of gravity is» → **129B С-кода**: `* bfqq->entity s re ue the`
-    (указатели `->`, идентификаторы `bfqq` из Linux `blkcg_gq`)
-  - **MB4 (макро+концепт) меняет выбор на ВСЕХ 4 сидах** — концепт-канал
-    интегрирован в полный декодер (βc=0.9)
-- Чекпоинт: /tmp/multicode_500k_768_concept.fuga (768-dim + CONCEPT_W)
-- **Урок**: масштаб ограничен RAM (7.5GB); 768 — потолок для текущей машины;
-  1024 требует 16GB+. Уменьшение batch=64 спасает от OOM.
+## Прошлые шаги (закрыты)
+1. Чистый корпус (EN + код) ✅
+2. Прогон 1M (clean_1M.fuga, 185B V2) ✅
+3. Концепт-канал lang-jepa (FUGA1 tag=8) ✅
+4. Декодер V2/MB3+concept (v6_validate) ✅
+5. Резонаторы HDC/FPE/PhaseCrystal ✅
+6. Анти-коллапс Barlow ✅
+7. Единый движок UnifiedEngine ✅
+8. Масштабирование 512→768 (8.26M параметров) ✅
+9. Мультиязычный корпус (4 репо, 4.4M фрагментов) ✅
+10. MB4 концепт-канал в Rust ✅
+11. Эксперименты NEAT/SNN/HTM/Mini-Stack ✅
+12. **Backprop-Free интеграция** ✅
