@@ -31,9 +31,9 @@ const SHADER: &str = r#"
 @compute @workgroup_size(256)
 fn delta(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= 1024u * 1024u) { return; }
-    let row = i / 1024u;
-    let col = i % 1024u;
+    if (i >= 768u * 768u) { return; }
+    let row = i / 768u;
+    let col = i % 768u;
     w[i] += lr[0] * err[row] * x[col];
 }
 "#;
@@ -48,10 +48,10 @@ const CAP_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn cap_w(@builtin(global_invocation_id) gid: vec3<u32>) {
     let row = gid.x;
-    if (row >= 1024u) { return; }
+    if (row >= 768u) { return; }
     var sq = 0.0;
-    for (var i = 0u; i < 1024u; i = i + 1u) {
-        let v = w[row * 1024u + i];
+    for (var i = 0u; i < 768u; i = i + 1u) {
+        let v = w[row * 768u + i];
         sq += v * v;
     }
     if (sq > cap[0]) {
@@ -128,10 +128,10 @@ const RESIDUAL_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn residual(@builtin(global_invocation_id) gid: vec3<u32>) {
     let o = gid.x;
-    if (o >= 1024u) { return; }
-    let row = o * 1024u;
+    if (o >= 768u) { return; }
+    let row = o * 768u;
     var pred = 0.0f;
-    for (var i = 0u; i < 1024u; i = i + 1u) {
+    for (var i = 0u; i < 768u; i = i + 1u) {
         pred += w[row + i] * x[i];
     }
     err[o] = t[o] - pred;
@@ -149,11 +149,11 @@ const KAN_CAP_SHADER: &str = r#"
 @compute @workgroup_size(64)
 fn kan_cap(@builtin(global_invocation_id) gid: vec3<u32>) {
     let o = gid.x;
-    if (o >= 1024u) { return; }
+    if (o >= 768u) { return; }
     var sq = 0.0;
-    for (var i = 0u; i < 1024u; i = i + 1u) {
+    for (var i = 0u; i < 768u; i = i + 1u) {
         for (var k = 0u; k < 6u; k = k + 1u) {
-            let v = c[(o * 1024u + i) * 6u + k];
+            let v = c[(o * 768u + i) * 6u + k];
             sq += v * v;
         }
     }

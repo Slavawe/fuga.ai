@@ -19,7 +19,7 @@ static LATENT_ENC_CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::
 /// детерминирована (значения пересчитываются идентично).
 const LATENT_ENC_CACHE_CAP: usize = 200_000;
 
-pub const LATENT_DIM: usize = 1024;
+pub const LATENT_DIM: usize = 768;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LatentVector {
