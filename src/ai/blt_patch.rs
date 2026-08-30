@@ -204,6 +204,156 @@ pub fn load_ckpt(tm: &mut TemporalMemory, path: &str) -> bool {
     tm.load_unified_fuga1(path)
 }
 
+/// Beam Search декодирование через BLT-патчи (K параллельных гипотез).
+///
+/// Вместо greedy top-1 (HypothesisPool в Python) — декодер держит
+/// `beam_size` кандидатных последовательностей, на каждом шаге каждую
+/// расширяет топ-кандидатами и отсекает по кумулятивному баллу.
+/// Оценка — ВСЯ в Rust (W_patch·x косинус), Python не участвует.
+///
+/// Балл: сумма косинусов направлений (не лог-вероятность — но
+/// сравним между кандидатами той же длины). anti-repeat: −rep штраф
+/// за недавние патчи в этой ветке.
+pub fn tm_generate_megabyte_blt_beam(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    entropy: &BltEntropy,
+    threshold: f32,
+    patch_vocab: &[Vec<u8>],
+    beam_size: usize,
+    top_per_beam: usize,
+    min_cos: f32,
+    rep_penalty: f32,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let encoder = &tm.predictor().encoder;
+    let patch_w: Vec<f32> = tm.patch_predictor_w().to_vec();
+    let dim = crate::ai::latent_jepa::LATENT_DIM;
+
+    // Пре-кодируем латенты ВСЕГО vocab один раз (вне цикла) — быстро.
+    let vocab_lats: Vec<LatentVector> = patch_vocab
+        .iter()
+        .map(|p| encoder.encode(&sdr::encode_bytes_sdr(p)))
+        .collect();
+
+    // Направление W_patch·x для одного окна патчей.
+    let dir = |window: &[Vec<u8>]| -> LatentVector {
+        let xs: Vec<sdr::SdrVector> = window
+            .iter()
+            .map(|p| sdr::encode_bytes_sdr(p))
+            .collect();
+        let xp = encoder.encode(&sdr::structure_sdr_from_sdrs(&xs));
+        let mut pp = LatentVector::zero();
+        for o in 0..dim {
+            let row = o * dim;
+            let mut acc = 0.0f32;
+            for i in 0..dim {
+                acc += patch_w[row + i] * xp.values[i];
+            }
+            pp.values[o] = acc;
+        }
+        let pn = pp.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut pp.values {
+            *v /= pn;
+        }
+        pp
+    };
+
+    // Окно последних 8 патчей текущего состояния.
+    let window_of = |out: &[u8]| -> Vec<Vec<u8>> {
+        let patches = blt_patch(out, entropy, threshold, 16);
+        let start = patches.len().saturating_sub(8);
+        patches[start..].to_vec()
+    };
+
+    // Beam: (байты, кумулятивный балл, недавние патчи для rep)
+    struct Beam {
+        out: Vec<u8>,
+        score: f32,
+        recent: Vec<Vec<u8>>,
+    }
+    let mut beams: Vec<Beam> = vec![Beam {
+        out: seed_bytes.to_vec(),
+        score: 0.0,
+        recent: Vec::new(),
+    }];
+
+    for _ in 0..max_bytes {
+        let mut candidates: Vec<Beam> = Vec::new();
+        for beam in &beams {
+            if beam.out.len() >= max_bytes + seed_bytes.len() {
+                continue;
+            }
+            let window = window_of(&beam.out);
+            let direction = dir(&window);
+            let mut local: Vec<(f32, usize)> = Vec::new(); // (score, vocab_idx)
+            for (vi, lat) in vocab_lats.iter().enumerate() {
+                let patch = &patch_vocab[vi];
+                if beam.recent.iter().any(|r| r == patch) {
+                    continue;
+                }
+                let mut score = direction.cosine_similarity(lat);
+                if score < min_cos.max(0.0) {
+                    continue;
+                }
+                local.push((score, vi));
+            }
+            local.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            local.truncate(top_per_beam.max(1));
+            for (score, vi) in local {
+                let patch = &patch_vocab[vi];
+                let mut new_out = beam.out.clone();
+                new_out.extend_from_slice(patch);
+                let mut recent = beam.recent.clone();
+                recent.push(patch.clone());
+                if recent.len() > 4 {
+                    recent.remove(0);
+                }
+                candidates.push(Beam {
+                    out: new_out,
+                    score: beam.score + score - rep_penalty * recent.len() as f32,
+                    recent,
+                });
+            }
+        }
+        if candidates.is_empty() {
+            break;
+        }
+        // Отсекаем по кумулятивному баллу (beam_size лучших)
+        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(beam_size.max(1));
+        beams = candidates;
+        // Досрочный выход: все ветки исчерпали лимит
+        if beams.iter().all(|b| b.out.len() >= max_bytes + seed_bytes.len()) {
+            break;
+        }
+    }
+
+    // Лучшая ветка по баллу
+    beams.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    beams[0].out.clone()
+}
+
+/// Greedy декодер через BLT-патчи (top-1, обратная совместимость).
+pub fn tm_generate_megabyte_blt_greedy(
+    tm: &TemporalMemory,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    entropy: &BltEntropy,
+    threshold: f32,
+    patch_vocab: &[Vec<u8>],
+    top_k: usize,
+    min_cos: f32,
+) -> Vec<u8> {
+    tm_generate_megabyte_blt_beam(
+        tm, seed_bytes, max_bytes, entropy, threshold, patch_vocab,
+        /* beam_size */ 1, top_k, min_cos, 0.0,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -116,6 +116,11 @@ fn main() {
     // границы патчей вместо фиксированных 2 байт; старый путь не тронут).
     let use_blt = args.iter().any(|a| a == "--blt");
     let blt_threshold: f32 = arg(&args, "--blt-threshold", 0.85);
+    // Обучение на ПРОВЕРЕННЫХ гипотезах (SKILL 1: contract-first):
+    // патч-пара попадает в обучение ТОЛЬКО если косинус направления
+    // W_patch·x с целью t2 ≥ порога. Учитель (W_patch) верифицирует,
+    // ученик (W_patch) учится на подтверждённых. 0 = без фильтра.
+    let verify_cos: f32 = arg(&args, "--verify-cos", 0.0);
     // v7 Patch Graph Curriculum: λ-старт 0.4 → экспоненциальное затухание к
     // floor 0.10 (~1.5M). τ в шагах: λ(t) = floor + (start−floor)·exp(−t/τ).
     let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.4); // стартовый вес Patch Loss
@@ -233,6 +238,7 @@ fn main() {
         let probe_buf = probe_buf.clone();
         let use_blt = use_blt;
         let blt_threshold = blt_threshold;
+        let verify_cos = verify_cos;
         let blt_entropy = blt_entropy.clone();
         std::thread::spawn(move || {
             let corpora: Vec<String> = corpus
@@ -336,6 +342,20 @@ fn main() {
                     }
                 }
                 } // else: старый фиксированный 2-байтовый путь (без --blt)
+                // Фильтр «проверенных гипотез» (--verify-cos): патч-пара идёт в
+                // обучение ТОЛЬКО если косинус направления W_patch·x с целью t2
+                // ≥ порога. Учитель (W_patch) верифицирует, ученик учится.
+                if verify_cos > 0.0 && !x2.is_empty() && !t2.is_empty() {
+                    let dot: f32 = x2.iter().zip(t2.iter()).map(|(a, b)| a * b).sum();
+                    let nx: f32 = x2.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-9);
+                    let nt: f32 = t2.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-9);
+                    if dot / (nx * nt) < verify_cos {
+                        // гипотеза НЕВЕРИФИЦИРОВАНА — отбрасываем
+                        x2.clear();
+                        t2.clear();
+                        x2b.clear();
+                    }
+                }
                 (x.values, tv, x2, t2, x2b, xm, tm)
             };
             'outer: for corpus_file in &corpora {

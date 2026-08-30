@@ -75,6 +75,7 @@ fn main() {
     println!("[BLT] patch_vocab: {} (BLT-патчи переменной длины)", patch_vocab.len());
 
     // 4. BLT-патчи на сидах
+    let beam_size: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
     let seeds = [
         "fn main() {",
         "the force of gravity is",
@@ -89,10 +90,17 @@ fn main() {
         println!("\nseed: {:?}", seed);
         println!("  BLT-патчи: {:?} (сумма={})", lens, lens.iter().sum::<usize>());
 
-        // BLT-декодирование
-        let out = fuga::ai::blt_patch::tm_generate_megabyte_blt(
-            &tm, seed.as_bytes(), 100, &entropy, threshold, &patch_vocab, 8, 0.05,
-        );
+        // BLT-декодирование: greedy (beam=1) или Beam Search (K>1)
+        let out = if beam_size > 1 {
+            fuga::ai::blt_patch::tm_generate_megabyte_blt_beam(
+                &tm, seed.as_bytes(), 100, &entropy, threshold,
+                &patch_vocab, beam_size, 8, 0.05, 0.10,
+            )
+        } else {
+            fuga::ai::blt_patch::tm_generate_megabyte_blt(
+                &tm, seed.as_bytes(), 100, &entropy, threshold, &patch_vocab, 8, 0.05,
+            )
+        };
         let text: String = out.iter().map(|&b| {
             if b == b'\n' { '\n' } else if b == b'\t' { '\t' }
             else if (0x20..=0x7e).contains(&b) { b as char } else { '·' }
