@@ -1548,14 +1548,14 @@ mod tests {
         );
     }
 
-    /// Latent predictor must produce a finite 512-dim vector for any context.
+    /// Latent predictor must produce a finite LATENT_DIM-dim vector for any context.
     #[test]
     fn predict_latent_returns_512_dim_vector() {
         use crate::ai::sdr::encode_text;
         let tm = TemporalMemory::new(SDR_DIM, 4);
         let ctx = vec![encode_text("fn"), encode_text("main")];
         let latent = tm.predict_latent(&ctx);
-        assert_eq!(latent.values.len(), 512);
+        assert_eq!(latent.values.len(), crate::ai::latent_jepa::LATENT_DIM);
         assert!(latent.values.iter().all(|v| v.is_finite()));
     }
 
