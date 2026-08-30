@@ -35,9 +35,10 @@ class VSA_BLT_Memory:
         self.blt = BLTPatcher(threshold_hi=blt_threshold)
         # Память: HV-патч → список следующих HV-патчей
         self.transitions: dict[int, list[int]] = {}
-        # Кеш: патч-id → внутренний id, патч-id → HV
+        # Кеш: патч-id → внутренний id, патч-id → HV, патч-id → байты
         self.hv_cache: dict[int, int] = {}
         self.hv_by_id: dict[int, np.ndarray] = {}
+        self.bytes_by_id: dict[int, bytes] = {}
         self.next_id = 0
 
     def _patch_hv(self, patch: bytes) -> tuple[int, np.ndarray]:
@@ -54,6 +55,7 @@ class VSA_BLT_Memory:
         if pid not in self.hv_cache:
             self.hv_cache[pid] = len(self.hv_cache)
             self.hv_by_id[pid] = hv
+            self.bytes_by_id[pid] = patch
         return pid, hv
 
     def feed(self, text: str) -> None:
