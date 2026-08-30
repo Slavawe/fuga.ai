@@ -55,25 +55,24 @@ fn main() {
              (w.iter().map(|v| v * v).sum::<f32>()).sqrt(),
              (wp.iter().map(|v| v * v).sum::<f32>()).sqrt());
 
-    // 3. Patch-vocab: 2-байтовые окна корпуса (как трейнер)
+    // 3. Patch-vocab: BLT-патчи (переменной длины) — 1:1 с обучением --blt
     let mut patch_vocab: Vec<Vec<u8>> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let file = std::fs::File::open(corpus_path).unwrap();
     let reader = std::io::BufReader::new(file);
-    'outer: for line in reader.lines() {
-        if let Ok(l) = line {
-            let bytes = l.as_bytes();
-            for w2 in bytes.windows(2) {
-                if seen.insert(w2.to_vec()) && patch_vocab.len() < 5000 {
-                    patch_vocab.push(w2.to_vec());
-                }
-                if patch_vocab.len() >= 5000 {
-                    break 'outer;
-                }
+    for line in reader.lines().flatten() {
+        let bytes = line.as_bytes();
+        // BLT-патчи документа (те же границы, что в трейнере)
+        for p in fuga::ai::blt_patch::blt_patch(bytes, &entropy, threshold, 16) {
+            if seen.insert(p.clone()) && patch_vocab.len() < 5000 {
+                patch_vocab.push(p);
             }
         }
+        if patch_vocab.len() >= 5000 {
+            break;
+        }
     }
-    println!("[BLT] patch_vocab: {} (2-байтовые)", patch_vocab.len());
+    println!("[BLT] patch_vocab: {} (BLT-патчи переменной длины)", patch_vocab.len());
 
     // 4. BLT-патчи на сидах
     let seeds = [
