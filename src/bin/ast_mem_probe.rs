@@ -37,6 +37,7 @@ fn ast_node_ranges_probe(code: &[u8]) -> Vec<(usize, usize, Vec<u8>)> {
             }
         }
     }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
