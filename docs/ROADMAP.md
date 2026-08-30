@@ -155,3 +155,17 @@ python3 src/bin/name_metric.py <ckpt>     # точность имён
 - **ПРОРЫВ**: V2 «in the beginning» → **44B реального C-кода Linux**
   (`blkcg_gq`, `blkcg_oss_folkcg` — идентификаторы ядра!)
 - Чекпоинт: /tmp/multicode_1M_concept.fuga (с CONCEPT_W tag=8)
+
+## Масштабирование модели (29.08, ночь): 512 → 768 dim (~8.26M параметров)
+- **1024-dim (14.7M) — OOM ×2** на 7.5GB RAM (Firefox+omniroute едят 3.4GB)
+- **768-dim — РАБОЧИЙ МАСШТАБ**: batch=64, threads=1, 369 pairs/s, 0 OOM
+- Размеры: LOCAL_W 589824 + PATCH_W 589824 + OWM_P 589824 + KAN_C 3538944
+  + MACRO_W 589824 + CONCEPT_W 2364672 = **8,262,912 параметров**
+- **Результат 500K на multicode**: |W|=12.954 |Wp|=7.427, MSE=0
+  - V2 «the force of gravity is» → **129B С-кода**: `* bfqq->entity s re ue the`
+    (указатели `->`, идентификаторы `bfqq` из Linux `blkcg_gq`)
+  - **MB4 (макро+концепт) меняет выбор на ВСЕХ 4 сидах** — концепт-канал
+    интегрирован в полный декодер (βc=0.9)
+- Чекпоинт: /tmp/multicode_500k_768_concept.fuga (768-dim + CONCEPT_W)
+- **Урок**: масштаб ограничен RAM (7.5GB); 768 — потолок для текущей машины;
+  1024 требует 16GB+. Уменьшение batch=64 спасает от OOM.
