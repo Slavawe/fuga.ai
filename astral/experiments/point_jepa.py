@@ -159,6 +159,13 @@ class PointJEPA:
         """Предсказание следующего облака (латент)."""
         return self.w @ self.encoder.encode(cloud)
 
+    def predict_next_rust(self, rust: object, lat: np.ndarray) -> np.ndarray:
+        """Предсказание через Rust-ядро (fuga_core.point_jepa_predict).
+
+        Принимает УЖЕ закодированный латент (dim,).
+        """
+        return np.asarray(rust.point_jepa_predict(self.w, lat))
+
     def cos_pred(self, cloud: np.ndarray, actual_next: np.ndarray) -> float:
         """Косинус между предсказанием и фактическим следующим облаком."""
         pred = self.predict_next(cloud)

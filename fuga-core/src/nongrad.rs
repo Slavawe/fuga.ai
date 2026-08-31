@@ -181,3 +181,106 @@ pub fn stdp_oja_batch(
     }
     Ok(())
 }
+
+// ═══════════════════════════════════════════════════════════════
+// POINT-JEPA (Rust-порт): облако точек → фазовый HV, предиктор, обучение
+// ═══════════════════════════════════════════════════════════════
+
+/// Фазовый HV облака точек: sum exp(i·(x·ωx + y·ωy + z·ωz)) → sign → норм.
+///
+/// Args:
+///   points: (N, 3) координаты точек
+///   omega:  (3, dim) пространственные частоты [ωx; ωy; ωz]
+///
+/// Returns: биполярный латент (dim,), единичной нормы.
+#[pyfunction]
+pub fn point_cloud_encode<'py>(
+    py: Python<'py>,
+    points: &Bound<'_, PyArray2<f32>>,
+    omega: &Bound<'_, PyArray2<f32>>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let pshape = points.shape();
+    let n_pts = pshape[0];
+    let oshape = omega.shape();
+    let dim = oshape[1];
+    let pts = unsafe { points.as_slice()? };
+    let om = unsafe { omega.as_slice()? };
+
+    let mut re = vec![0.0f32; dim];
+    for p in 0..n_pts {
+        let x = pts[p * 3];
+        let y = pts[p * 3 + 1];
+        let z = pts[p * 3 + 2];
+        for d in 0..dim {
+            let angle = x * om[d] + y * om[oshape[1] + d] + z * om[2 * oshape[1] + d];
+            re[d] += angle.cos();
+        }
+    }
+    let mut lat = vec![0.0f32; dim];
+    for d in 0..dim {
+        lat[d] = if re[d] >= 0.0 { 1.0 } else { -1.0 };
+    }
+    let norm: f32 = lat.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+    for v in &mut lat {
+        *v /= norm;
+    }
+    Ok(lat.into_pyarray(py))
+}
+
+/// Point-JEPA предиктор: pred = W · lat.
+#[pyfunction]
+pub fn point_jepa_predict<'py>(
+    py: Python<'py>,
+    w: &Bound<'_, PyArray2<f32>>,
+    lat: &Bound<'_, PyArray1<f32>>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let shape = w.shape();
+    let dim = shape[0];
+    let w_s = unsafe { w.as_slice()? };
+    let l_s = unsafe { lat.as_slice()? };
+
+    let mut pred = vec![0.0f32; dim];
+    for i in 0..dim {
+        let mut acc = 0.0f32;
+        for j in 0..dim {
+            acc += w_s[i * dim + j] * l_s[j];
+        }
+        pred[i] = acc;
+    }
+    Ok(pred.into_pyarray(py))
+}
+
+/// Point-JEPA обучение: W += lr·(err⊗lat − |pred|²·W) (Widrow-Hoff + Oja).
+#[pyfunction]
+pub fn point_jepa_train(
+    w: &Bound<'_, PyArray2<f32>>,
+    lat: &Bound<'_, PyArray1<f32>>,
+    target: &Bound<'_, PyArray1<f32>>,
+    lr: f32,
+) -> PyResult<()> {
+    let shape = w.shape();
+    let dim = shape[0];
+    let w_s = unsafe { w.as_slice_mut()? };
+    let l_s = unsafe { lat.as_slice()? };
+    let t_s = unsafe { target.as_slice()? };
+
+    let mut pred = vec![0.0f32; dim];
+    for i in 0..dim {
+        let mut acc = 0.0f32;
+        for j in 0..dim {
+            acc += w_s[i * dim + j] * l_s[j];
+        }
+        pred[i] = acc;
+    }
+    let pred_norm2: f32 = pred.iter().map(|x| x * x).sum();
+
+    for i in 0..dim {
+        let err = t_s[i] - pred[i];
+        for j in 0..dim {
+            let hebb = lr * err * l_s[j];
+            let oja = lr * pred_norm2 * w_s[i * dim + j];
+            w_s[i * dim + j] += hebb - oja;
+        }
+    }
+    Ok(())
+}

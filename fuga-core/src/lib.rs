@@ -5,7 +5,10 @@ pub mod nongrad;
 pub mod symbolic_eval;
 
 // Re-export безградиентного ядра для PyO3-регистрации
-pub use nongrad::{lif_step, stdp_oja_batch, stdp_oja_update, vsa_cos, vsa_cos_batch, vsa_predict};
+pub use nongrad::{
+    lif_step, point_cloud_encode, point_jepa_predict, point_jepa_train,
+    stdp_oja_batch, stdp_oja_update, vsa_cos, vsa_cos_batch, vsa_predict,
+};
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use pyo3::prelude::*;
@@ -504,6 +507,9 @@ fn fuga_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(vsa_predict, m)?)?;
     m.add_function(wrap_pyfunction!(vsa_cos, m)?)?;
     m.add_function(wrap_pyfunction!(vsa_cos_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(point_cloud_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(point_jepa_predict, m)?)?;
+    m.add_function(wrap_pyfunction!(point_jepa_train, m)?)?;
     Ok(())
 }
 
