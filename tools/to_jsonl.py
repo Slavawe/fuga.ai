@@ -7,8 +7,8 @@
 
 Источники (файловые, ещё НЕ JSONL):
   - код:   corpus_sources/* (C/Go/Rust/C++ репозитории), corpus_ext/*,
-            /tmp/fuga_corpus_rs/* (7218 .rs сниппетов)
-  - текст: text_corpus_processed/*.txt, /tmp/fuga_corpus_text/*.txt
+            corpus_rs/* (сниппеты .rs; раньше /tmp/fuga_corpus_rs — аудит 15.10)
+  - текст: text_corpus_processed/*.txt, corpus_text/*.txt (раньше /tmp/fuga_corpus_text)
 
 Уже-готовые *.jsonl стеки (omni_corpus*, corpus*.jsonl, training_stack.jsonl)
 не трогаются — они уже JSONL в этой же схеме.
@@ -37,12 +37,12 @@ CODE_EXTS = set(EXT_LANG)
 CODE_DIRS = [
     ROOT / "corpus_sources",
     ROOT / "corpus_ext",
-    Path("/tmp/fuga_corpus_rs"),
+    ROOT / "corpus_rs",   # кроссплатформенно (аудит 15.10: было /tmp/fuga_corpus_rs)
 ]
 TEXT_DIRS = [
     ROOT / "text_corpus_processed",
     ROOT / "text_corpus",          # dialogue/ + literature/ (полные книги)
-    Path("/tmp/fuga_corpus_text"),
+    ROOT / "corpus_text",          # кроссплатформенно (аудит 15.10: было /tmp/fuga_corpus_text)
 ]
 SKIP_PARTS = ("target", "node_modules", ".git", "thirdparty", "build", "out")
 

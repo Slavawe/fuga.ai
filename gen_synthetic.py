@@ -1,6 +1,6 @@
 import os, random
 
-base = "/home/slava/fuga/text_corpus"
+base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "text_corpus")  # кроссплатформенно (аудит 15.10)
 dialogue_dir = os.path.join(base, "dialogue")
 literature_dir = os.path.join(base, "literature")
 os.makedirs(dialogue_dir, exist_ok=True)

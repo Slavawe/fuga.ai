@@ -1,10 +1,10 @@
 import os, random
 
-forum_dir = "/home/slava/fuga/text_corpus/forum"
+forum_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "text_corpus", "forum")  # кроссплатформенно (аудит 15.10)
 os.makedirs(forum_dir, exist_ok=True)
 
 comments = []
-corpus_dirs = ["/home/slava/fuga/src", "/home/slava/fuga/corpus_flat", "/home/slava/fuga/corpus_sources"]
+corpus_dirs = [os.path.join(os.path.dirname(os.path.abspath(__file__)), d) for d in ("src", "corpus_flat", "corpus_sources")]
 for cd in corpus_dirs:
     if not os.path.exists(cd): continue
     for root, dirs, files in os.walk(cd):

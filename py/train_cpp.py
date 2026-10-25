@@ -88,14 +88,14 @@ def main():
     p = sub.add_parser("train")
     p.add_argument("--jsonl", nargs="+", required=True)
     p.add_argument("--max-bytes", type=int, default=300000)
-    p.add_argument("--out", default="/tmp/fuga_model.fuga")
+    p.add_argument("--out", default="fuga_model.fuga")  # относительный (аудит 15.10: /tmp не кроссплатформенен)
     p.set_defaults(func=train)
 
     p = sub.add_parser("vocab")
     p.add_argument("--jsonl", nargs="+", required=True)
     p.add_argument("--psize", type=int, default=2)
     p.add_argument("--limit", type=int, default=4000)
-    p.add_argument("--out", default="/tmp/fuga_vocab.txt")
+    p.add_argument("--out", default="fuga_vocab.txt")  # относительный (аудит 15.10)
     p.set_defaults(func=vocab)
 
     p = sub.add_parser("decode")

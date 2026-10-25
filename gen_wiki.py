@@ -1,6 +1,6 @@
 import urllib.request, json, os, sys
 
-wiki_dir = "/home/slava/fuga/text_corpus/forum"
+wiki_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "text_corpus", "forum")  # кроссплатформенно (аудит 15.10)
 os.makedirs(wiki_dir, exist_ok=True)
 
 api = "https://ru.wikipedia.org/w/api.php"
