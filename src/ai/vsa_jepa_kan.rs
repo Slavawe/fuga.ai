@@ -56,7 +56,11 @@ impl HypervectorAdapter {
 }
 
 // Обёртка над KanTransition для совместимости API
-struct FastKanLayer {
+pub struct FastKanLayer {
+    // НАЙДЕНО АУДИТОМ 15.10: поле kan НИКОГДА не читается — FastKanLayer
+    // использует только Чебышёв-базис, KanTransition хранится впустую.
+    // Кандидат: включить в residual-путь или удалить (решение за пользователем).
+    #[allow(dead_code)]
     kan: KanTransition,
     in_features: usize,
     out_features: usize,

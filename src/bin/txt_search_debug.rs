@@ -14,7 +14,7 @@ fn main() {
     for q in queries {
         let hits = mem.search_by_text(q, 5);
         println!("\nQ: {}", q);
-        for (i, s, e) in &hits {
+        for (_i, s, e) in &hits {
             let fname = std::path::Path::new(&e.source_doc)
                 .file_name().and_then(|x| x.to_str()).unwrap_or("");
             println!("  lex={:.2} [{}] ({} байт)", s, fname, e.text.len());

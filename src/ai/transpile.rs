@@ -1048,7 +1048,7 @@ impl TranspileAccumulator {
             Self::state_push_str(&mut buf, s);
         }
         buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
-        let wc = (self.dim + 63) / 64;
+        let _wc = (self.dim + 63) / 64;
         for e in &self.entries {
             for w in &e.hv.words {
                 buf.extend_from_slice(&w.to_le_bytes());

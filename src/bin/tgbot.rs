@@ -557,7 +557,7 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
             let token_hvs: Vec<Hypervector> = token_infos
                 .iter()
                 .map(|ti| {
-                    use std::hash::{Hash, Hasher};
+                    use std::hash::Hash;
                     let mut h = std::collections::hash_map::DefaultHasher::new();
                     format!("token_{}", ti.id).hash(&mut h);
                     Hypervector::random(hjepa.dim)
@@ -786,7 +786,7 @@ impl<const N: usize, const S: usize> TgBot<N, S> {
                         let mut jepa = JepaPredictor::new(dim, cl);
 
                         let mut seqs: Vec<Vec<Hypervector>> = Vec::new();
-                        let mut rng = rand::thread_rng();
+                        let _rng = rand::thread_rng();
                         for _ in 0..50 {
                             let rv = Hypervector::random(dim);
                             let nearby: Vec<Hypervector> = self

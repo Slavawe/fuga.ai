@@ -1961,7 +1961,7 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             for v in &mut wts {
                 *v /= wsum;
             }
-            let mut r = (guard as f64 * 0.6180339887).fract() as f32;
+            let r = (guard as f64 * 0.6180339887).fract() as f32;
             let mut idx = 0;
             let mut acc = 0.0f32;
             for (i, wv) in wts.iter().enumerate() {
@@ -1982,6 +1982,44 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
         }
     }
     out
+}
+
+/// UTF-8-гейт кандидата (фикс 17.10): печатный ASCII/whitespace разрешён
+/// всегда; не-ASCII — только как валидное продолжение текущей UTF-8
+/// последовательности хвоста state (lead C2..F4 вне последовательности,
+/// continuation 80..BF внутри). Парность ведёт сама байтовая модель (как в
+/// V2 — там фильтра нет вовсе); гейт отлавливает структурные разрывы.
+fn utf8_candidate_ok(state: &[u8], cand: u8) -> bool {
+    let mut i = state.len();
+    let mut cont_seen = 0usize;
+    while i > 0 && (state[i - 1] & 0xC0) == 0x80 && cont_seen < 3 {
+        cont_seen += 1;
+        i -= 1;
+    }
+    let pending = if i == 0 {
+        0
+    } else {
+        let lead = state[i - 1];
+        let need: usize = if (0xF0..=0xF4).contains(&lead) {
+            3
+        } else if (0xE0..=0xEF).contains(&lead) {
+            2
+        } else if (0xC2..=0xDF).contains(&lead) {
+            1
+        } else {
+            0
+        };
+        need.saturating_sub(cont_seen)
+    };
+    if pending > 0 {
+        (0x80..=0xBF).contains(&cand)
+    } else {
+        cand == b'\n'
+            || cand == b'\t'
+            || cand == b'\r'
+            || (0x20..=0x7E).contains(&cand)
+            || (0xC2..=0xF4).contains(&cand)
+    }
 }
 
 pub fn tm_generate_megabyte_v3(
@@ -2008,14 +2046,17 @@ pub fn tm_generate_megabyte_v3(
     let encoder = &tm.predictor().encoder;
     let w = tm.predictor_w();
     let patch_w: Vec<f32> = tm.patch_predictor_w().to_vec();
-    let printable = |b: u8| b == b'\n' || b == b'\t' || b == b'\r' || (0x20..=0x7e).contains(&b);
+    // 17.10 фикс (кириллица в MB3): printable-фильтр исключал не-ASCII байты
+    // ИЗ ПОСТРОЕНИЯ (RU-сиды → 0B / ASCII-мусор). Теперь в кандидаты идут все
+    // 256 байтов, а валидность проверяется на каждом шаге относительно хвоста
+    // state: кандидат обязан корректно продолжать текущую UTF-8
+    // последовательность (см. utf8_candidate_ok).
     let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
         .map(|b| {
             let sdr = crate::ai::sdr::byte_basis(b as u8);
             let lat = encoder.encode(&sdr);
             (b as u8, lat)
         })
-        .filter(|(b, _)| printable(*b))
         .collect();
     let patch_latents: Vec<(Vec<u8>, crate::ai::latent_jepa::LatentVector)> = patch_vocab
         .iter()
@@ -2192,6 +2233,9 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
         let mut hybrid_cands: Vec<(u8, f32)> = Vec::new();
         let mut corridor_local_max: f32 = -1.0; // чистый локальный топ ВНУТРИ коридора
         for (byte, lat) in byte_latents.iter() {
+            if !utf8_candidate_ok(&state, *byte) {
+                continue;
+            }
             let sc0 = pred.cosine_similarity(lat);
             if sc0 < min_cos.max(0.0) {
                 continue;
@@ -2275,6 +2319,22 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             }
             continue;
         }
+        // DEBUG (FUGA_MB3_DEBUG=1, Gary 17.10 n.3): diagnostics of empty output -
+        // separates hypotheses (a) all scores negative / (b) NaN / (c) filtering.
+        if std::env::var("FUGA_MB3_DEBUG").as_deref() == Ok("1") && guard <= 3 {
+            let (zm_norm, zm_nan) = match &z_macro {
+                Some(z) => (
+                    z.values.iter().map(|v| v * v).sum::<f32>().sqrt(),
+                    z.values.iter().any(|v| v.is_nan()),
+                ),
+                None => (-1.0, false),
+            };
+            let mut top_sc: Vec<(u8, f32)> = scores.clone();
+            top_sc.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            top_sc.truncate(5);
+            eprintln!("  [mb3dbg] guard={} zm_norm={:.4} zm_nan={} patch_cands={} corridor={} byte_scores={} top5={:?}",
+                guard, zm_norm, zm_nan, cand.len(), corridor.len(), scores.len(), top_sc);
+        }
         if scores.is_empty() {
             break;
         }
@@ -2301,7 +2361,7 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
             for v in &mut wts {
                 *v /= wsum;
             }
-            let mut r = (guard as f64 * 0.6180339887).fract() as f32;
+            let r = (guard as f64 * 0.6180339887).fract() as f32;
             let mut idx = 0;
             let mut acc = 0.0f32;
             for (i, wv) in wts.iter().enumerate() {
@@ -2322,4 +2382,438 @@ while out.len() < max_bytes && guard < max_bytes * 4 {
         }
     }
     out
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// V3: Top-K/Top-P с температурой + динамический repetition penalty +
+// n-gram blocking + усиление W_macro (запрос пользователя 24.10).
+// База скоринга — V2 (cos W·x + β-патч-смещение), плюс:
+//   1) параметрический сэмплер вместо фиксированного GAP_SELECT;
+//   2) динамический штраф: sc /= 1 + rep_penalty·count(b, state) — растёт
+//      с числом повторов байта (HF-стиль, «dynamic»);
+//   3) n-gram blocking: кандидат, замыкающий N-грамм, уже встречавшийся в
+//      истории, исключается (жёстче любого штрафа);
+//   4) macro_boost: sc += boost·cos(W_macro·x_ctx, байт-латент) — прямой
+//      вклад макро-направления в ВЫБОР БАЙТА (в MB3 макро влиял только на
+//      выбор патча, здесь — на каждый байт).
+// UTF-8-гейт кандидатов (кириллица) — как в MB3 после фикса 24.10.
+// Детерминизм: семплинг от хэша state (тот же подход, что в V2).
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Параметры генерации v3.
+#[derive(Clone, Debug)]
+pub struct GenParams {
+    /// softmax-температура на косинусной шкале; 0.0 = чистый argmax
+    pub temperature: f32,
+    /// Top-K: оставить K старших кандидатов; 0 = без ограничения
+    pub top_k: usize,
+    /// Top-P (nucleus): минимальный набор с суммарной вероятностью >= p; 1.0 = выкл
+    pub top_p: f32,
+    /// Динамический repetition penalty: sc /= 1 + p*count(b, state); 0 = выкл
+    pub rep_penalty: f32,
+    /// N-gram blocking: запретить кандидата, замыкающего N-грамм из истории; 0 = выкл
+    pub ngram_block: usize,
+    /// Усиление W_macro: sc += boost*cos(W_macro*x, байт); 0 = выкл
+    pub macro_boost: f32,
+    /// Легаси v6.2: словесный repetition penalty (0 = выкл)
+    pub rep_word: f32,
+    /// Легаси v6.2: фразовый repetition penalty PHR_LEN=12 (0 = выкл)
+    pub rep_phrase: f32,
+    /// Отсечка слабых кандидатов по чистому косинусу
+    pub min_cos: f32,
+    /// Патч-смещение pred += beta*P_{t+1} (как в V2)
+    pub beta: f32,
+    /// Вес KAN в pred (как в V2: alpha)
+    pub alpha: f32,
+}
+
+impl Default for GenParams {
+    fn default() -> Self {
+        GenParams {
+            temperature: 0.02,
+            top_k: 8,
+            top_p: 0.95,
+            rep_penalty: 0.0,
+            ngram_block: 0,
+            macro_boost: 0.0,
+            rep_word: 0.0,
+            rep_phrase: 0.0,
+            min_cos: 0.001,
+            beta: 0.0,
+            alpha: 0.0,
+        }
+    }
+}
+
+/// N-граммная блокировка: true, если байт `cand` замыкает N-грамм, уже
+/// встречавшийся в `state` (чистая функция — покрыта тестом).
+fn ngram_blocked(state: &[u8], cand: u8, n: usize) -> bool {
+    if n == 0 || state.len() + 1 < n {
+        return false;
+    }
+    let suffix = &state[state.len() - (n - 1)..];
+    let mut gram: Vec<u8> = suffix.to_vec();
+    gram.push(cand);
+    // ищем этот N-грамм в истории, кроме хвостовой позиции (сам суффикс)
+    let last = state.len().saturating_sub(n - 1);
+    let mut i = 0usize;
+    while i + n <= state.len() {
+        if i != last && &state[i..i + n] == gram.as_slice() {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Выбор кандидата из отсортированных по убыванию скора (чистая функция).
+/// Применяет top_k, затем temperature (0 = argmax), затем top_p, затем
+/// детерминированный сэмпл по r в [0,1). None — если список пуст.
+fn v3_select(sorted: &[(u8, f32)], p: &GenParams, r: f32) -> Option<u8> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let mut cands: Vec<(u8, f32)> = sorted.to_vec();
+    if p.top_k > 0 && cands.len() > p.top_k {
+        cands.truncate(p.top_k);
+    }
+    if p.temperature <= 1e-6 || cands.len() == 1 {
+        return Some(cands[0].0);
+    }
+    let maxs = cands[0].1;
+    let mut wts: Vec<f32> = cands.iter().map(|(_, s)| ((s - maxs) / p.temperature).exp()).collect();
+    let wsum: f32 = wts.iter().sum();
+    if wsum <= 0.0 || !wsum.is_finite() {
+        return Some(cands[0].0);
+    }
+    for wv in wts.iter_mut() {
+        *wv /= wsum;
+    }
+    // Top-P (nucleus): минимальный префикс с суммой >= top_p (как минимум 1)
+    let mut keep = cands.len();
+    if p.top_p < 1.0 {
+        let mut cum = 0.0f32;
+        for (i, wv) in wts.iter().enumerate() {
+            cum += *wv;
+            if cum >= p.top_p {
+                keep = i + 1;
+                break;
+            }
+        }
+    }
+    let mut r = r;
+    for (i, wv) in wts.iter().enumerate().take(keep) {
+        r -= *wv;
+        if r <= 0.0 {
+            return Some(cands[i].0);
+        }
+    }
+    Some(cands[keep.min(cands.len()) - 1].0)
+}
+
+/// V3-декодер: скоринг V2 (cos W*x + alpha*KAN + beta*патч) + macro_boost +
+/// динамический rep-penalty + n-gram blocking + Top-K/Top-P/temperature.
+/// syntax: Some(guard) — Syntax Loss на декоде (tree-sitter-python демоция
+/// кандидатов, ломающих синтаксис код-сегмента; 25.10).
+pub fn tm_generate_cosine_gate_v3(
+    tm: &TemporalMemory,
+    kan: &crate::ai::kan::KanTransition,
+    seed_bytes: &[u8],
+    max_bytes: usize,
+    window_bytes: usize,
+    patch_len: usize,
+    patch_vocab: &[Vec<u8>],
+    macro_w: &[f32],
+    p: &GenParams,
+    syntax: Option<&crate::ai::syntax_guard::SyntaxGuard>,
+) -> Vec<u8> {
+    if seed_bytes.is_empty() {
+        return Vec::new();
+    }
+    let encoder = &tm.predictor().encoder;
+    let w = tm.predictor_w();
+    let plen = patch_len.max(1);
+    let patch_w: Vec<f32> = tm.patch_predictor_w().to_vec();
+    let byte_latents: Vec<(u8, crate::ai::latent_jepa::LatentVector)> = (0u16..=255)
+        .map(|b| {
+            let sdr = crate::ai::sdr::byte_basis(b as u8);
+            let lat = encoder.encode(&sdr);
+            (b as u8, lat)
+        })
+        .collect();
+    let start = seed_bytes.len().saturating_sub(window_bytes.max(1));
+    let mut window: Vec<u8> = seed_bytes[start..].to_vec();
+    let mut state: Vec<u8> = seed_bytes.to_vec();
+    let mut out: Vec<u8> = Vec::new();
+    let dim2 = crate::ai::latent_jepa::LATENT_DIM * crate::ai::latent_jepa::LATENT_DIM;
+    let macro_on = p.macro_boost > 0.0 && macro_w.len() == dim2;
+
+    while out.len() < max_bytes {
+        // --- pred = normalize(W*x + alpha*KAN(x) + beta*P_{t+1}) — как V2 ---
+        let win_lo = window.len().saturating_sub(window_bytes.max(1));
+        let win_tail = &window[win_lo..];
+        let window_sdrs: Vec<crate::ai::sdr::SdrVector> = win_tail
+            .iter()
+            .map(|&b| crate::ai::sdr::byte_basis(b))
+            .collect();
+        let x = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&window_sdrs));
+        let mut pred = crate::ai::latent_jepa::LatentVector::zero();
+        for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+            let row = o * crate::ai::latent_jepa::LATENT_DIM;
+            let mut acc = 0.0f32;
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                acc += w[row + i] * x.values[i];
+            }
+            pred.values[o] = acc;
+        }
+        if p.alpha > 0.0 {
+            let kan_out = kan.apply(&x);
+            for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                pred.values[i] += p.alpha * kan_out.values[i];
+            }
+        }
+        if p.beta > 0.0 {
+            let patches_v: Vec<Vec<u8>> = state
+                .chunks(plen)
+                .filter(|c| c.len() == plen)
+                .map(|c| c.to_vec())
+                .collect();
+            let patch_window: Vec<&[u8]> = patches_v
+                .iter()
+                .rev()
+                .take(4)
+                .rev()
+                .map(|q| q.as_slice())
+                .collect();
+            if !patch_window.is_empty() {
+                let xs: Vec<crate::ai::sdr::SdrVector> = patch_window
+                    .iter()
+                    .map(|q| crate::ai::sdr::encode_bytes_sdr(q))
+                    .collect();
+                let xp = encoder.encode(&crate::ai::sdr::structure_sdr_from_sdrs(&xs));
+                let mut pp = crate::ai::latent_jepa::LatentVector::zero();
+                for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                    let mut acc = 0.0f32;
+                    for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                        acc += patch_w[row + i] * xp.values[i];
+                    }
+                    pp.values[o] = acc;
+                }
+                let pn2 = pp.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+                for v in &mut pp.values {
+                    *v /= pn2;
+                }
+                for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    pred.values[i] += p.beta * pp.values[i];
+                }
+            }
+        }
+        let pn = pred.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+        for v in &mut pred.values {
+            *v /= pn;
+        }
+        // --- z_macro = normalize(W_macro*x) — усиление W_macro при генерации ---
+        let mut z_macro = crate::ai::latent_jepa::LatentVector::zero();
+        if macro_on {
+            for o in 0..crate::ai::latent_jepa::LATENT_DIM {
+                let row = o * crate::ai::latent_jepa::LATENT_DIM;
+                let mut acc = 0.0f32;
+                for i in 0..crate::ai::latent_jepa::LATENT_DIM {
+                    acc += macro_w[row + i] * x.values[i];
+                }
+                z_macro.values[o] = acc;
+            }
+            let zn = z_macro.values.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-8);
+            for v in &mut z_macro.values {
+                *v /= zn;
+            }
+        }
+
+        // --- скоринг байтов ---
+        let mut scores: Vec<(u8, f32)> = Vec::with_capacity(256);
+        for (b, lat) in byte_latents.iter() {
+            if !utf8_candidate_ok(&state, *b) {
+                continue;
+            }
+            let c = pred.cosine_similarity(lat);
+            if c < p.min_cos {
+                continue;
+            }
+            let mut sc = c;
+            if macro_on {
+                // УСИЛЕНИЕ W_MACRO: прямое макро-направление в выбор байта
+                sc += p.macro_boost * z_macro.cosine_similarity(lat);
+            }
+            if p.rep_penalty > 0.0 {
+                // ДИНАМИЧЕСКИЙ repetition penalty: множитель растёт с числом
+                // вхождений байта в историю (count по всему state <= 8KB)
+                let cnt = state.iter().filter(|&&s| s == *b).count() as f32;
+                if cnt > 0.0 {
+                    sc /= 1.0 + p.rep_penalty * cnt;
+                }
+            }
+            if p.ngram_block > 0 && ngram_blocked(&state, *b, p.ngram_block) {
+                continue;
+            }
+            if p.rep_word > 0.0 {
+                let word_start = state
+                    .iter()
+                    .rposition(|&q| q == b' ')
+                    .map(|q| q + 1)
+                    .unwrap_or(0);
+                let cur_word: Vec<u8> = state[word_start..].to_vec();
+                let words: Vec<Vec<u8>> = state
+                    .split(|&q| q == b' ')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_vec())
+                    .collect();
+                if *b == b' ' && !cur_word.is_empty() {
+                    let nw = words.len();
+                    if nw >= 2 && words[nw - 2] == cur_word {
+                        sc -= p.rep_word * 1.5;
+                    }
+                    let mut wcount = 0;
+                    for i in 0..nw.saturating_sub(1) {
+                        if words[i] == cur_word {
+                            wcount += 1;
+                        }
+                    }
+                    sc -= p.rep_word * 0.5 * wcount as f32;
+                }
+            }
+            if p.rep_phrase > 0.0 && state.len() >= 16 {
+                const PHR_L: usize = 12;
+                let start2 = state.len() - (PHR_L - 1);
+                let mut block: Vec<u8> = state[start2..].to_vec();
+                block.push(*b);
+                let hist_end = state.len().saturating_sub(2);
+                let mut hits = 0;
+                let mut k = 0;
+                while k + PHR_L <= hist_end {
+                    if state[k..k + PHR_L] == block[..] {
+                        hits += 1;
+                        k += PHR_L;
+                    } else {
+                        k += 1;
+                    }
+                }
+                if hits > 0 {
+                    sc -= p.rep_phrase * hits as f32;
+                }
+            }
+            scores.push((*b, sc));
+        }
+        if scores.is_empty() {
+            break;
+        }
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Syntax Loss на декоде: демоция кандидатов, ломающих Python-синтаксис
+        // код-сегмента (Compiler-in-the-Loop, шаг v8 «демоция, не только
+        // метрика» — реализован 25.10).
+        if let Some(g) = syntax {
+            g.demote(&state, &mut scores, 12);
+            if scores.is_empty() {
+                break;
+            }
+        }
+        // Защита от вырожденного тройного повтора (как V2)
+        if out.len() >= 2 && out[out.len() - 1] == scores[0].0 && out[out.len() - 2] == scores[0].0 {
+            scores.remove(0);
+            if scores.is_empty() {
+                break;
+            }
+        }
+        // Детерминированный r из хэша хвоста state (как в V2)
+        let r: f32 = {
+            let mut h = 0x9e3779b97f4a7c15u64;
+            for &b in state.iter().rev().take(8) {
+                h ^= b as u64;
+                h = h.wrapping_mul(0xbf58476d1ce4e5b9);
+            }
+            h ^= h >> 31;
+            (h & 0xFFFFFF) as f32 / 16_777_216.0
+        };
+        let pick = match v3_select(&scores, p, r) {
+            Some(b) => b,
+            None => break,
+        };
+        out.push(pick);
+        window.push(pick);
+        state.push(pick);
+        if window.len() > 4096 {
+            window.remove(0);
+        }
+        if state.len() > 8192 {
+            let cut = state.len() - 4096;
+            state.drain(0..cut);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod gen_v3_tests {
+    use super::*;
+
+    #[test]
+    fn v3_select_temperature_zero_is_argmax() {
+        let p = GenParams {
+            temperature: 0.0,
+            ..Default::default()
+        };
+        let s = vec![(b'a', 0.9), (b'b', 0.8), (b'c', 0.7)];
+        assert_eq!(v3_select(&s, &p, 0.0), Some(b'a'));
+        assert_eq!(v3_select(&s, &p, 0.999), Some(b'a'));
+    }
+
+    #[test]
+    fn v3_select_top_k_cuts_tail() {
+        // top_k=2: при высокой температуре 'c' недостижим никогда
+        let p = GenParams {
+            temperature: 1.0,
+            top_k: 2,
+            ..Default::default()
+        };
+        let s = vec![(b'a', 0.9), (b'b', 0.89), (b'c', 0.1)];
+        for i in 0..20 {
+            let r = i as f32 / 20.0;
+            assert_ne!(v3_select(&s, &p, r), Some(b'c'));
+        }
+    }
+
+    #[test]
+    fn v3_select_top_p_keeps_head_mass() {
+        // доминирующий кандидат: top_p=0.5 оставляет только его
+        let p = GenParams {
+            temperature: 1.0,
+            top_p: 0.5,
+            ..Default::default()
+        };
+        let s = vec![(b'a', 0.9), (b'b', 0.1), (b'c', 0.1)];
+        for i in 0..20 {
+            let r = i as f32 / 20.0;
+            assert_eq!(v3_select(&s, &p, r), Some(b'a'));
+        }
+    }
+
+    #[test]
+    fn v3_select_empty_is_none() {
+        let p = GenParams::default();
+        assert_eq!(v3_select(&[], &p, 0.5), None);
+    }
+
+    #[test]
+    fn ngram_blocking_catches_loop_completion() {
+        // «ab ab ab …»: хвост 'ab' + cand 'a' замыкает биграмм 'ab' из истории
+        let state = b"xabab".to_vec();
+        assert!(ngram_blocked(&state, b'a', 2));
+        assert!(!ngram_blocked(&state, b'c', 2));
+        // триграммная блокировка на том же состоянии: 'aba' уже была
+        assert!(ngram_blocked(&state, b'a', 3));
+        // N=0 выключено
+        assert!(!ngram_blocked(&state, b'a', 0));
+        // короткое состояние — не блокирует
+        assert!(!ngram_blocked(b"ab", b'a', 2));
+    }
 }

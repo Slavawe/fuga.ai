@@ -27,6 +27,7 @@ pub struct FugaText {
     phoneme_map: HashMap<String, Phoneme>,
     lexicon: HashMap<String, Vec<String>>,
     prosody_pitch: f64,
+    #[allow(dead_code)] // легаси speech: просодия вне активного пути
     prosody_rate: f64,
 }
 

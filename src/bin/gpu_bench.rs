@@ -8,9 +8,8 @@
 // что GPU не поднялся и стенд возвращает CPU-показатель.
 //
 // Usage: gpu_bench [--steps 200000]
-use std::time::Instant;
 
-use fuga::ai::gpu_ops::{GpuOps, DIM};
+use fuga::ai::gpu_ops::DIM;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let steps: usize = args

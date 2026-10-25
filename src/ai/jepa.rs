@@ -1,6 +1,7 @@
 use crate::core::hypervector::Hypervector;
 use rand::Rng;
 
+#[allow(dead_code)] // легаси jepa-эпохи: дим-константа вне активного пути
 const DEFAULT_DIM: usize = 8192;
 const MAX_CONTEXT: usize = 8;
 

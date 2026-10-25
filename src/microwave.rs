@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+#[allow(dead_code)] // легаси microwave: хелпер префиксов вне активного пути
 fn strip_prefix<'a>(s: &'a str) -> &'a str {
     let prefixes = [
         "pub ",

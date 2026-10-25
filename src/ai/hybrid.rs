@@ -87,10 +87,10 @@ impl HybridTransition {
             p
         };
         let mut err_w = LatentVector::zero();
-        let mut err_norm_w = 0.0f32;
+        let mut _err_norm_w = 0.0f32;
         for o in 0..LATENT_DIM {
             err_w.values[o] = t.values[o] - pred_w.values[o];
-            err_norm_w += err_w.values[o] * err_w.values[o];
+            _err_norm_w += err_w.values[o] * err_w.values[o];
         }
         // Widrow-Hoff: W += lr · err ⊗ x
         for o in 0..LATENT_DIM {

@@ -15,19 +15,41 @@ use std::collections::HashSet;
 use std::io::BufRead;
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    run(std::env::args().collect());
+}
+
+// run() отделён от main для включения talk_model как подкоманды единого
+// бинарника fuga.exe (24.10): `fuga talk ...` == `talk_model ...`.
+pub fn run(args: Vec<String>) {
     let ckpt = args.get(1).cloned().unwrap_or_else(|| "fuga_talk_10m.fuga".into());
-    let corpora: Vec<&str> = if args.len() > 2 {
-        args[2..].iter().map(|s| s.as_str()).collect()
-    } else {
-        vec![
+    let mut corpora: Vec<&str> = Vec::new();
+    // Аудит 15.10: --seed "..." (можно несколько) — кастомные сиды декода,
+    // для валидации чекпоинтов на корпус-специфичных стартах (например Python).
+    // Остальные позиционные аргументы после ckpt — корпуса для патч-словаря.
+    let mut custom_seeds: Vec<Vec<u8>> = Vec::new();
+    {
+        let mut i = 2;
+        while i < args.len() {
+            if args[i] == "--seed" {
+                if let Some(s) = args.get(i + 1) {
+                    custom_seeds.push(s.as_bytes().to_vec());
+                }
+                i += 2;
+            } else {
+                corpora.push(args[i].as_str());
+                i += 1;
+            }
+        }
+    }
+    if corpora.is_empty() {
+        corpora = vec![
             "fuga_unified_train.jsonl",
             "corpus_doc_code_pairs.jsonl",
             "training_stack.jsonl",
             "corpus.jsonl",
             "omni_corpus_full.jsonl",
-        ]
-    };
+        ];
+    }
 
     // 1. Загружаем единый чекпоинт (все секции: W + W_patch + OWM-P)
     let mut tm = TemporalMemory::new(64, 4);
@@ -115,13 +137,14 @@ fn main() {
     }
     let _ = &kan_c; // Option в кортеже (индексы: 0=w 1=patch 2=owm 3=meta 4=hjepa 5=kan)
 
-    // 4. «Говорящие» seed'ы: обычные фразы, не только код
-    let seeds: Vec<Vec<u8>> = vec![
+    // 4. «Говорящие» seed'ы: обычные фразы, не только код + кастомные из CLI
+    let mut seeds: Vec<Vec<u8>> = vec![
         b"fn main() {".to_vec(),
         b"the force of gravity is".to_vec(),
         b"in the beginning".to_vec(),
         b"let x = 4".to_vec(),
     ];
+    seeds.extend(custom_seeds);
 
     for seed in &seeds {
         let s = String::from_utf8_lossy(seed);

@@ -22,6 +22,7 @@ pub mod prompts;
 pub mod resonance_attention;
 pub mod router;
 pub mod sdr;
+pub mod syntax_guard; // Syntax Loss на декоде: tree-sitter-python демоция кандидатов (25.10)
 pub mod sdr_store;
 pub mod wave_mesh;
 pub mod world;

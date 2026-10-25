@@ -52,6 +52,9 @@ struct AstStats {
 
 pub struct SandboxHarness {
     temp_dir: std::path::PathBuf,
+    // НАЙДЕНО АУДИТОМ 15.10: rustc_timeout объявлен, но compile() его
+    // НЕ применяет — кандидат на реализацию (как в MorrisSandbox).
+    #[allow(dead_code)]
     rustc_timeout: Duration,
 }
 
@@ -453,6 +456,7 @@ struct CppCompileResult {
     success: bool,
     errors: usize,
     warnings: usize,
+    #[allow(dead_code)] // легаси: stderr дублирует вывод CppCompileResult
     stderr: String,
 }
 

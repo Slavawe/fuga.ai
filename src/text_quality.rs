@@ -35,6 +35,7 @@ pub struct TextQualityScore {
 }
 
 pub struct TextQualityFilter {
+    #[allow(dead_code)] // легаси: дим сохранён для полноты API
     dim: usize,
 }
 

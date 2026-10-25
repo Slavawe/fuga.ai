@@ -19,6 +19,7 @@ pub struct MultiEngineResult {
 }
 
 pub struct MultiEngine {
+    #[allow(dead_code)] // легаси omni-движка: дим сохранён для полноты API
     dim: usize,
     syntax_layer: MultiSyntaxLayer,
     semantic_layer: MultiSemanticLayer,

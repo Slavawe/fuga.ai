@@ -5,7 +5,10 @@ use std::sync::Mutex;
 
 // CUDA driver API: без явного #[link] линковщик не подключает libcuda —
 // бинари, дотягивающиеся до gpu_memory_search, падали с undefined cuMemAlloc.
-#[link(name = "cuda")]
+// Windows: cuda.lib нет — директиву убираем, символы дают заглушки из
+// cuda_stubs.c (собираются build.rs через cc; cuInit возвращает 100 =
+// CUDA_ERROR_NO_DEVICE → init() = None → штатный CPU-фолбэк).
+#[cfg_attr(not(windows), link(name = "cuda"))]
 unsafe extern "C" {
     fn cuInit(flags: u32) -> u32;
     fn cuDeviceGet(device: *mut i32, ordinal: i32) -> u32;
@@ -63,8 +66,12 @@ static PTX_SOURCE: &str = ""; // Заглушка
 
 pub struct GpuContext {
     pub available: bool,
+    // PTX-путь отключён (build.rs — заглушка для CPU): module/function_entropy
+    // инициализируются, но не читаются — легаси CUDA-канала resonance/entropy.
+    #[allow(dead_code)]
     module: u64,
     function_resonance: u64,
+    #[allow(dead_code)]
     function_entropy: u64,
     function_tensor_to_sdr: u64,
 }

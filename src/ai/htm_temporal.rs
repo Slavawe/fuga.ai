@@ -1212,6 +1212,7 @@ pub const TAG_META: u32 = 4;
 pub const TAG_HJEPA: u32 = 5;
 pub const TAG_KAN_C: u32 = 6;
 pub const TAG_MACRO_W: u32 = 7; // Byte-H-JEPA: макро-предиктор (Widrow-Hoff в эмбеддингах)
+pub const TAG_MACRO_W2: u32 = 9; // PC two-block: [Wz (512×512)][We (512×512)] — пруф macro_pc_proof +24.6%
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnifiedMeta {
@@ -1431,6 +1432,125 @@ pub fn load_unified(
         pos += len;
     }
     Some((local_w, patch_w, owm_p, meta, hjepa_flat, kan_c))
+}
+
+/// Сохранить единый файл с ДВУХБЛОЧНЫМ макро (tag=9: [Wz][We]) — PC two-block.
+/// Все секции идентичны save_unified_with_kan, кроме макро-части.
+pub fn save_unified_with_kan2(
+    path: &str,
+    local_w: &[f32],
+    patch_w: &[f32],
+    owm_p: &[f32],
+    meta: &UnifiedMeta,
+    hjepa_flat: Option<&[f32]>,
+    macro_wz: &[f32],
+    macro_we: &[f32],
+    kan_c: Option<&[f32]>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(UNIFIED_MAGIC)?;
+
+    let write_section = |f: &mut std::fs::File, tag: u32, vals: &[f32]| -> std::io::Result<()> {
+        f.write_all(&tag.to_le_bytes())?;
+        let len = (vals.len() * 4) as u32;
+        f.write_all(&len.to_le_bytes())?;
+        for v in vals {
+            f.write_all(&v.to_le_bytes())?;
+        }
+        Ok(())
+    };
+
+    write_section(&mut f, TAG_LOCAL_W, local_w)?;
+    write_section(&mut f, TAG_PATCH_W, patch_w)?;
+    write_section(&mut f, TAG_OWM_P, owm_p)?;
+
+    f.write_all(&TAG_META.to_le_bytes())?;
+    f.write_all(&24u32.to_le_bytes())?;
+    f.write_all(&meta.steps.to_le_bytes())?;
+    f.write_all(&meta.patch_steps.to_le_bytes())?;
+    f.write_all(&meta.ctx.to_le_bytes())?;
+    f.write_all(&meta.version.to_le_bytes())?;
+
+    if let Some(hjepa) = hjepa_flat {
+        if !hjepa.is_empty() {
+            write_section(&mut f, TAG_HJEPA, hjepa)?;
+        }
+    }
+    if !macro_wz.is_empty() && !macro_we.is_empty() {
+        let mut both = Vec::with_capacity(macro_wz.len() + macro_we.len());
+        both.extend_from_slice(macro_wz);
+        both.extend_from_slice(macro_we);
+        write_section(&mut f, TAG_MACRO_W2, &both)?;
+    }
+    if let Some(kan) = kan_c {
+        if !kan.is_empty() {
+            write_section(&mut f, TAG_KAN_C, kan)?;
+        }
+    }
+
+    f.write_all(&TAG_END.to_le_bytes())?;
+    f.write_all(&0u32.to_le_bytes())?;
+    Ok(())
+}
+
+/// Прочитать MACRO_W2 (tag=9: [Wz][We]) — для PC two-block. Fallback (Gary
+/// вопрос 4): если tag=9 нет — tag=7 → (flat, нули) — старые чекпоинты
+/// загружаются без паники, We=0 (PC включается по мере обучения).
+pub fn load_unified_macro2(path: &str) -> Option<(Vec<f32>, Vec<f32>)> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 5 || &data[..5] != UNIFIED_MAGIC {
+        return None;
+    }
+    let mut pos = 5;
+    let mut flat: Option<Vec<f32>> = None;
+    while pos + 8 <= data.len() {
+        let tag = u32::from_le_bytes(data[pos..pos + 4].try_into().ok()?);
+        let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        pos += 8;
+        if tag == TAG_END {
+            break;
+        }
+        if pos + len > data.len() {
+            break;
+        }
+        if tag == TAG_MACRO_W2 {
+            let section = &data[pos..pos + len];
+            let n = len / 4;
+            if n % 2 != 0 {
+                return None; // нечётное число f32 — файл повреждён
+            }
+            let half = n / 2;
+            let mut wz = Vec::with_capacity(half);
+            let mut we = Vec::with_capacity(half);
+            for i in 0..n {
+                let off = i * 4;
+                let v = f32::from_le_bytes(section[off..off + 4].try_into().ok()?);
+                if i < half {
+                    wz.push(v);
+                } else {
+                    we.push(v);
+                }
+            }
+            return Some((wz, we));
+        }
+        if tag == TAG_MACRO_W {
+            let section = &data[pos..pos + len];
+            let n = len / 4;
+            let mut vals = Vec::with_capacity(n);
+            for i in 0..n {
+                let off = i * 4;
+                vals.push(f32::from_le_bytes(section[off..off + 4].try_into().ok()?));
+            }
+            flat = Some(vals);
+        }
+        pos += len;
+    }
+    // Fallback: плоский tag=7 → (Wz = flat, We = 0)
+    flat.map(|f| {
+        let we = vec![0.0f32; f.len()];
+        (f, we)
+    })
 }
 
 #[cfg(test)]

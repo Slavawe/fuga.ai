@@ -61,7 +61,7 @@ fn main() {
 
     // Собственный LCG для шума — детерминированный.
     let mut rng: u64 = 0xC0FFEE;
-    let mut next_rand = |rng: &mut u64| -> f32 {
+    let next_rand = |rng: &mut u64| -> f32 {
         *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         ((*rng >> 33) % 1000) as f32 / 1000.0
     };

@@ -578,7 +578,7 @@ impl MemoryStore {
                 ));
             }
             let mut words = vec![0u64; wc];
-            for (i, w) in words.iter_mut().enumerate() {
+            for (_i, w) in words.iter_mut().enumerate() {
                 *w = rd_u64(data, &mut pos)?;
             }
             let vector = Hypervector { dim, words };

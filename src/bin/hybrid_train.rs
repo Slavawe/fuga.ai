@@ -74,7 +74,7 @@ fn main() {
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_kan: f32 = arg(&args, "--lr-kan", 0.2);
     let alpha: f32 = arg(&args, "--alpha", 1.0);
-    let out_path: String = arg(&args, "--out", "/tmp/hybrid.fuga".into());
+    let out_path: String = arg(&args, "--out", "hybrid.fuga".into());
     let seed: Vec<u8> = args
         .iter()
         .position(|a| a == "--seed")

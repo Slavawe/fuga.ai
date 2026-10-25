@@ -5,6 +5,7 @@ use crate::core::wave_cube::WaveCube;
 use crate::layers::{SyntaxViolation, ViolationKind};
 
 pub struct FixGenerator {
+    #[allow(dead_code)] // легаси autofix: куб инициализируется, не читается
     cube: WaveCube<3, 4>,
     dim: usize,
 }

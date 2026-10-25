@@ -85,6 +85,7 @@ impl VsaIndex {
         key
     }
 
+    #[allow(dead_code)] // легаси HNSW: зарезервировано для Hamming-метрик
     fn hamming_distance(a: &[u64], b: &[u64]) -> u32 {
         a.iter()
             .zip(b.iter())

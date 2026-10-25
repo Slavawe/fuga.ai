@@ -252,6 +252,7 @@ impl SelfMirror {
         self.source_snippet_for_path(&node.path, node.line, context_lines)
     }
 
+    #[allow(dead_code)] // легаси self_mirror: кэш узлов вне активного пути
     fn node_sdr(&mut self, name: &str) -> SdrVector {
         self.name_sdr_cache
             .entry(name.to_string())
@@ -305,7 +306,7 @@ impl SelfMirror {
         let mut total_cnt = 0usize;
         let mut sim_l0 = 0.0f64;
         let mut sim_l1 = 0.0f64;
-        let mut dbg_modes = self
+        let dbg_modes = self
             .predictor
             .hjepa
             .levels
@@ -856,8 +857,14 @@ impl SelfMirror {
         self.predictor.tm.cells.clear();
         self.predictor.tm.window.clear();
         self.predictor.tm.step = 0;
-        let allowed_dirs = ["/home/slava/fuga/src/", "/home/slava/neural-engine/"];
-        let rust_keywords: std::collections::HashSet<&str> = [
+        // Кроссплатформенный корень (аудит 15.10): FUGA_HOME переопределяет
+        // захардкоженный /home/slava; по умолчанию — текущий воркспейс.
+        let fuga_home = std::env::var("FUGA_HOME").unwrap_or_else(|_| ".".to_string());
+        let allowed_dirs = [
+            format!("{}/src/", fuga_home),
+            format!("{}/neural-engine/", fuga_home),
+        ];
+        let _rust_keywords: std::collections::HashSet<&str> = [
             "fn", "let", "mut", "pub", "struct", "impl", "use", "mod", "type", "enum", "match",
             "if", "else", "while", "loop", "for", "in", "return", "self", "Self", "as", "break",
             "continue", "const", "static", "ref", "where", "unsafe", "trait", "impl", "dyn",
@@ -871,8 +878,9 @@ impl SelfMirror {
             .map(|n| n.path.clone())
             .filter(|p| p.ends_with(".rs") && allowed_dirs.iter().any(|d| p.contains(d)))
             .collect();
+        let corpus_root = format!("{}/corpus_combined", fuga_home);
         for corpus_dir in ["crosvm", "sled", "smoltcp"] {
-            let base = format!("/home/slava/fuga/corpus_combined/{}", corpus_dir);
+            let base = format!("{}/{}", corpus_root, corpus_dir);
             for entry in walkdir::WalkDir::new(&base)
                 .into_iter()
                 .filter_map(|e| e.ok())

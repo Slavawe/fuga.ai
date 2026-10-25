@@ -280,6 +280,7 @@ pub fn peek_cube_header(path: &str) -> Result<(usize, usize, usize), String> {
     }
 }
 // SIMD-optimized popcount helpers — unrolled 4-wide for cache locality
+#[allow(dead_code)] // легаси: резерв под SIMD-попкаунт в волновых операциях
 fn popcount_chunks(words: &[u64]) -> u64 {
     let mut total: u64 = 0;
     let chunks = words.chunks_exact(4);
@@ -296,6 +297,7 @@ fn popcount_chunks(words: &[u64]) -> u64 {
     total
 }
 
+#[allow(dead_code)] // легаси: резерв под SIMD-попкаунт в волновых операциях
 fn popcount_xor_pair(a: &[u64], b: &[u64], n: usize) -> u64 {
     let limit = a.len().min(b.len()).min(n);
     let (a_main, a_rem) = a[..limit].split_at(limit / 4 * 4);

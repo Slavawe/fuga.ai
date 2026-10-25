@@ -36,7 +36,7 @@ fn unified_gpu_train_extract(line: &str) -> Vec<u8> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let ckpt = args.get(1).cloned().unwrap_or_else(|| "/tmp/ab_test.fuga".into());
+    let ckpt = args.get(1).cloned().unwrap_or_else(|| "ab_test.fuga".into());
     let raw = fuga::ai::htm_temporal::load_unified(&ckpt);
     match raw {
         Some((w, pw, p, meta, hj, kan)) => {

@@ -61,7 +61,7 @@ impl ByteLstm {
     pub fn new(rng: &mut u64) -> Self {
         let h = HIDDEN;
         let scale = (1.0 / (h as f32)).sqrt();
-        let mut rand_vec = |n: usize, rng: &mut u64| {
+        let rand_vec = |n: usize, rng: &mut u64| {
             (0..n).map(|_| (next_f32(rng) * 2.0 - 1.0) * scale).collect()
         };
         let n_ix = 4 * h * VOCAB;
@@ -152,8 +152,8 @@ impl ByteLstm {
         for t in 0..t_max {
             xs[t] = bytes[t] as usize;
             targets[t] = bytes[t + 1] as usize;
-            let mut gs = [0.0f32; 4 * HIDDEN];
-            let mut cs = [0.0f32; HIDDEN];
+            let gs = [0.0f32; 4 * HIDDEN];
+            let cs = [0.0f32; HIDDEN];
             let mut snap = (gs, cs);
             probs[t] = self.cell_step(xs[t], Some(&mut snap));
             gate_snap[t] = snap.0;
@@ -187,7 +187,7 @@ impl ByteLstm {
                 dlogits[u] = e;
             }
             // h at this step.
-            let h_t = self.h.clone(); // NOTE: overwritten below; recompute below.
+            let _h_t = self.h.clone(); // NOTE: overwritten below; recompute below.
             // We stored only gates+cell, not h; recompute h from snapshots.
             // h_t[j] = o * tanh(c_t[j]).
             let mut h_t_arr = [0.0f32; HIDDEN];
@@ -218,7 +218,7 @@ impl ByteLstm {
                 let o = sigmoid(go);
                 let tg = gg.tanh();
                 let c_j = cell_snap[t][j];
-                let h_j = o * c_j.tanh();
+                let _h_j = o * c_j.tanh();
                 // dL/dc_t (from h and from next cell).
                 let dtanh_c = 1.0 - c_j.tanh().powi(2);
                 dc[j] = dh[j] * o * dtanh_c + dc_next[j] * f;

@@ -18,6 +18,7 @@ pub struct LayerResults {
 }
 
 pub struct FugaEngine {
+    #[allow(dead_code)] // легаси omni-движка: дим сохранён для полноты API
     dim: usize,
     syntax_layer: SyntaxInvariantLayer,
     semantic_layer: SemanticLayer,

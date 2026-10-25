@@ -11,7 +11,7 @@
 // Честный CPU-путь: реально исполняется на этой машине (без CUDA).
 
 use fuga::ai::vsa_jepa_kan::HybridCore;
-use fuga::ai::latent_jepa::{LatentVector, SdrEncoder, LATENT_DIM};
+use fuga::ai::latent_jepa::{LatentVector, LATENT_DIM};
 use fuga::ai::sdr::{byte_basis, encode_bytes_sdr, structure_sdr_from_sdrs};
 use std::io::{BufRead, Write};
 use std::time::Instant;
@@ -56,7 +56,7 @@ fn main() {
     let ctxw: usize = arg(&args, "--ctx", 4);
     let patch_ctx: usize = arg(&args, "--patch-ctx", 8);
     let ckpt_every: usize = arg(&args, "--ckpt-every", 500_000);
-    let out_path: String = arg(&args, "--out", "/tmp/fuga_hybrid_v10.fuga".into());
+    let out_path: String = arg(&args, "--out", "fuga_hybrid_v10.fuga".into());
     let beta_vsa: f32 = arg(&args, "--beta-vsa", 0.0);
     let alpha_kan: f32 = arg(&args, "--alpha-kan", 1.0);
 

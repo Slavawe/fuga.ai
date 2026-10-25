@@ -236,16 +236,16 @@ pub fn generate<const N: usize, const S: usize>(
     // Sandbox validation: filter and score fragments
     let harness = SandboxHarness::new();
     let mut validated_fragments = Vec::new();
-    let mut total_reward = 0.0;
-    let mut total_weight = 0.0;
+    let mut _total_reward = 0.0;
+    let mut _total_weight = 0.0;
 
     for frag in fragments {
         let result = harness.evaluate(&frag, "fragment.rs");
         // Accept if compiles (even with warnings) and reward >= 0, or if no errors but warnings
         if result.compiles && result.reward >= 0.0 {
             validated_fragments.push(frag);
-            total_reward += result.reward.max(0.0);
-            total_weight += 1.0;
+            _total_reward += result.reward.max(0.0);
+            _total_weight += 1.0;
         }
     }
 

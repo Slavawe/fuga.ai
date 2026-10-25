@@ -589,7 +589,7 @@ fn handle_code_generate<const N: usize, const S: usize>(
     hits.retain(|(_, t)| seen.insert(t.clone()));
     hits.truncate(5);
 
-    let mut generated = assemble_code(prompt, &hits);
+    let generated = assemble_code(prompt, &hits);
 
     serde_json::json!({
         "domain": domain,
@@ -670,7 +670,7 @@ fn assemble_code(prompt: &str, hits: &[(f64, String)]) -> String {
     }
 
     let fname = extract_fn_name(prompt);
-    let mut out = match lang {
+    let out = match lang {
         "rust" => {
             let mut s = format!("fn {}() {{\n", fname);
             for l in &lines {
@@ -1653,7 +1653,7 @@ fn uuid_like() -> String {
     use fastrand;
     let mut h = String::with_capacity(24);
     let hex = b"0123456789abcdef";
-    for i in 0..24 {
+    for _i in 0..24 {
         h.push(hex[fastrand::usize(..16)] as char);
     }
     h

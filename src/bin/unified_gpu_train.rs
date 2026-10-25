@@ -25,7 +25,7 @@
 //                     [--batch 256] [--lr-w 0.05] [--lr-patch 0.1]
 //                     [--lr-kan 0.3] [--ctx 4] [--no-gpu]
 use fuga::ai::gpu_ops::GpuOps;
-use fuga::ai::htm_temporal::{save_unified_with_kan, UnifiedMeta};
+use fuga::ai::htm_temporal::{save_unified_with_kan, save_unified_with_kan2, UnifiedMeta};
 
 /// v8 Syntax Loss: число ERROR-узлов в декоде по tree-sitter C.
 /// 0 = валидное AST; >0 = синтаксис сломан. Compiler-in-the-Loop метрика.
@@ -105,13 +105,43 @@ fn arg<T: std::str::FromStr>(args: &[String], name: &str, def: T) -> T {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    run(std::env::args().collect());
+}
+
+// run() отделён от main для подкоманды `fuga train ...` единого бинарника (24.10).
+pub fn run(args: Vec<String>) {
     let corpus: String = arg(&args, "--jsonl", "corpus_doc_code_pairs.jsonl".into());
     let max_steps: usize = arg(&args, "--max-steps", 300_000);
     let batch: usize = arg(&args, "--batch", 256);
     let lr_w: f32 = arg(&args, "--lr-w", 0.05);
     let lr_patch: f32 = arg(&args, "--lr-patch", 0.1);
     let lr_macro: f32 = arg(&args, "--lr-macro", 0.05); // Byte-H-JEPA канал
+    // PC ERROR PROPAGATION (Rao-Ballard/Friston, пруф macro_pc_proof: +24.6%):
+    // вход макро дополняется каузальным остатком байтового уровня ПРЕДЫДУЩЕЙ
+    // пары e_{i-1} = t_{i-1} − W_local·x_{i-1} (известен в момент i, работает
+    // при генерации). --macro-pc-k — вес остатка (аддитивная версия: формат
+    // FUGA1 и DIM×DIM W_macro сохраняются; concat-версия — следующий шаг).
+    let macro_pc = args.iter().any(|a| a == "--macro-pc");
+    let macro_pc_k: f32 = arg(&args, "--macro-pc-k", 1.0);
+    // PC TWO-BLOCK (пруф macro_pc_proof +24.6%; shared-W опровергнут сеткой k):
+    // err = z_next − Wz·z_t − We·e_prev; два раздельных ΔW. W_e=0 на старте
+    // (= baseline flat, PC включается по мере обучения — Gary вопрос 3).
+    // Только CPU-fallback (GPU-путь требует download_err — отдельный коммит).
+    let macro_pc2 = args.iter().any(|a| a == "--macro-pc2");
+    let lr_e: f32 = arg(&args, "--lr-e", lr_macro);
+    // COSINE DECAY LR (Gary 17.10, phase 2.1): lr_w(t) = lr_min + 0.5*(lr_max-lr_min)*(1+cos(pi*t/T)).
+    // --lr-decay-steps 0 = off (fixed lr_w). Pre-registered A/B criterion:
+    // monotone val curve, range < 0.05 (fixed-LR baseline range was 0.156).
+    let lr_decay_steps: usize = arg(&args, "--lr-decay-steps", 0);
+    let lr_min: f32 = arg(&args, "--lr-min", 0.005);
+    let lr_w_now = |applied: usize| -> f32 {
+        if lr_decay_steps == 0 {
+            lr_w
+        } else {
+            let t = (applied as f32 / lr_decay_steps as f32).min(1.0);
+            lr_min + 0.5 * (lr_w - lr_min) * (1.0 + (std::f32::consts::PI * t).cos())
+        }
+    };
     // v7 Patch Graph Curriculum: λ-старт 0.4 → экспоненциальное затухание к
     // floor 0.10 (~1.5M). τ в шагах: λ(t) = floor + (start−floor)·exp(−t/τ).
     let lambda_patch: f32 = arg(&args, "--lambda-patch", 0.4); // стартовый вес Patch Loss
@@ -125,7 +155,7 @@ fn main() {
         l.max(lambda_floor).min(lambda_patch)
     };
     let lr_kan: f32 = arg(&args, "--lr-kan", 0.3);
-    let out_path: String = arg(&args, "--out", "/tmp/unified_gpu.fuga".into());
+    let out_path: String = arg(&args, "--out", "unified_gpu.fuga".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
     let ctxw: usize = arg(&args, "--ctx", 4);
     let patch_ctx: usize = arg(&args, "--patch-ctx", 8); // v8.1 горизонт 16 байт (компромисс)
@@ -159,6 +189,25 @@ fn main() {
     // mean cos(t, W·x) — контроль оверфитта (v6/v7-финалы переобучались,
     // решение о ранней остановке принималось вручную по декоду).
     let val_path: String = arg(&args, "--val", "".into());
+    // --init (25.10): тёплый старт с чекпоинта FUGA1 (код-фаза / файнтюн).
+    // --max-steps остаётся «шаги ЭТОГО прогона»; lr/λ и имена чекпоинтов
+    // считаются от init_steps + applied (низкий lr автоматически, если
+    // --lr-decay-steps совпадает с шагами исходного прогона).
+    let init_path: String = arg(&args, "--init", "".into());
+    // --shuffle-ctx (25.10, ревью п.3): детерминированная перестановка байтов
+    // ОКНА внутри пары (цель не трогается) — контроль «порядок vs частоты»:
+    // если точность со скрамблом ≈ обычной, предиктор не использует порядок.
+    let shuffle_ctx = args.iter().any(|a| a == "--shuffle-ctx");
+    // --reverse-ctx (ревью 25.10): РАЗВОРОТ окна — различает «вред порядка как
+    // такового» от «проблемы конкретного кодирования порядка».
+    let reverse_ctx = args.iter().any(|a| a == "--reverse-ctx");
+    // --shuffle-seed N: разные перестановки для оценки вариативности скрамбла.
+    let shuffle_seed: u64 = args
+        .iter()
+        .position(|a| a == "--shuffle-seed")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0x9E3779B97F4A7C15);
     let val_data: Option<Vec<u8>> = if val_path.is_empty() {
         None
     } else {
@@ -192,7 +241,7 @@ fn main() {
     let (tx, rx) = mpsc::sync_channel::<Pair5>(batch * 4);
     let stop = Arc::new(AtomicBool::new(false));
     // Кольцевой буфер последних (x, t) пар для метрики остатка на чекпоинтах.
-    let probe_buf: Arc<std::sync::Mutex<std::collections::VecDeque<(Vec<f32>, Vec<f32>)>>> =
+    let probe_buf: Arc<std::sync::Mutex<std::collections::VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)>>> =
         Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
 
     // --- Поток CPU: читать JSONL, готовить (x, err) пары, патч-канал ---
@@ -206,6 +255,9 @@ fn main() {
         let enc_patch = enc_patch.clone();
         let byte_cache = byte_cache.clone();
         let corpus = corpus.clone();
+        let shuffle_ctx = shuffle_ctx;
+        let reverse_ctx = reverse_ctx;
+        let shuffle_seed = shuffle_seed;
         let probe_buf = probe_buf.clone();
         std::thread::spawn(move || {
             let corpora: Vec<String> = corpus
@@ -220,7 +272,28 @@ fn main() {
             // ветка мёртвая — см. комментарий ниже.
             let make_pair = |data: &[u8], i: usize| -> Pair5 {
                 let win_lo = i.saturating_sub(ctxw);
-                let win: &[u8] = &data[win_lo..=i];
+                let winowned: Vec<u8> = if shuffle_ctx {
+                    // детерминированный скрамбл порядка байтов окна (цель —
+                    // data[i+1] — не трогается): xorshift от позиции i,
+                    // seed параметризован (--shuffle-seed) для вариативности
+                    let mut v = data[win_lo..=i].to_vec();
+                    let mut h = (i as u64).wrapping_mul(shuffle_seed) | 1;
+                    for j in (1..v.len()).rev() {
+                        h ^= h << 13;
+                        h ^= h >> 7;
+                        h ^= h << 17;
+                        let k = (h as usize) % (j + 1);
+                        v.swap(j, k);
+                    }
+                    v
+                } else if reverse_ctx {
+                    let mut v = data[win_lo..=i].to_vec();
+                    v.reverse();
+                    v
+                } else {
+                    data[win_lo..=i].to_vec()
+                };
+                let win: &[u8] = &winowned;
                 let nxt = data[i + 1];
                 let win_sdrs: Vec<fuga::SdrVector> = win
                     .iter()
@@ -271,7 +344,18 @@ fn main() {
                 }
                 (x.values, tv, x2, t2, x2b, xm, tm)
             };
-            'outer: for corpus_file in &corpora {
+            // ЦИКЛИЗАЦИЯ КОРПУСА (Fuga-1.0, 15.10): раньше — один проход по
+            // JSONL; для малых корпусов max-steps был недостижим. Теперь
+            // многопроходный цикл до max-steps (детерминированный порядок,
+            // файлы перечитываются каждую эпоху). Точки завершения
+            // (stop/send/max-steps) выходят через 'epochs.
+            let mut epoch = 0usize;
+            'epochs: loop {
+                epoch += 1;
+                if epoch > 1 {
+                    eprintln!("[epoch {}] корпус пройден, циклизация до max-steps", epoch);
+                }
+            for corpus_file in &corpora {
                 let path = Path::new(corpus_file);
                 if !path.exists() {
                     eprintln!("corpus missing: {}", corpus_file);
@@ -353,7 +437,7 @@ fn main() {
                         let mut b0 = 0usize;
                         while b0 < n {
                             if stop.load(Ordering::Relaxed) {
-                                break 'outer;
+                                break 'epochs;
                             }
                             let b1 = (b0 + PAR_BLOCK).min(n);
                             let pairs: Vec<Pair5> = (b0..b1)
@@ -362,22 +446,26 @@ fn main() {
                                 .collect();
                             for p in pairs {
                                 if stop.load(Ordering::Relaxed) {
-                                    break 'outer;
+                                    break 'epochs;
                                 }
                                 let xv = p.0.clone();
                                 let pv = p.1.clone();
+                                let x2v = p.2.clone();
+                                let t2v = p.3.clone();
+                                let xmv = p.5.clone();
+                                let tmv = p.6.clone();
                                 if tx.send(p).is_err() {
-                                    break 'outer;
+                                    break 'epochs;
                                 }
                                 if let Ok(mut pb) = probe_buf.lock() {
-                                    pb.push_back((xv, pv));
+                                    pb.push_back((xv, pv, x2v, t2v, xmv, tmv));
                                     while pb.len() > 512 {
                                         pb.pop_front();
                                     }
                                 }
                                 steps += 1;
                                 if steps >= max_steps {
-                                    break 'outer;
+                                    break 'epochs;
                                 }
                             }
                             b0 = b1;
@@ -385,28 +473,33 @@ fn main() {
                     } else {
                         for i in 0..n {
                             if stop.load(Ordering::Relaxed) {
-                                break 'outer;
+                                break 'epochs;
                             }
                             let p = make_pair(&data, i);
                             let xv = p.0.clone();
                             let pv = p.1.clone();
+                            let x2v = p.2.clone();
+                            let t2v = p.3.clone();
+                            let xmv = p.5.clone();
+                            let tmv = p.6.clone();
                             if tx.send(p).is_err() {
-                                break 'outer;
+                                break 'epochs;
                             }
                             if let Ok(mut pb) = probe_buf.lock() {
-                                pb.push_back((xv, pv));
+                                pb.push_back((xv, pv, x2v, t2v, xmv, tmv));
                                 while pb.len() > 512 {
                                     pb.pop_front();
                                 }
                             }
                             steps += 1;
                             if steps >= max_steps {
-                                break 'outer;
+                                break 'epochs;
                             }
                         }
                     }
                 }
             }
+            } // конец 'epochs (циклизация корпуса)
             steps
         })
     };
@@ -415,9 +508,53 @@ fn main() {
     let gpu = if use_gpu { fuga::ai::gpu_ops::try_new() } else { None };
     let mut w = vec![0.0f32; DIM * DIM];
     let mut w_patch: Vec<f32> = vec![0.0f32; DIM * DIM];
-    let mut w_macro: Vec<f32> = vec![0.0f32; DIM * DIM]; // Byte-H-JEPA: латент-предиктор
+    let mut w_macro: Vec<f32> = vec![0.0f32; DIM * DIM]; // Byte-H-JEPA: латент-предиктор (PC2: блок Wz)
+    let mut w_macro_e: Vec<f32> = if macro_pc2 {
+        vec![0.0f32; DIM * DIM] // PC2: блок We — нулевой на старте (Gary вопрос 3)
+    } else {
+        Vec::new()
+    };
     let mut kan_c: Vec<f32> = vec![0.0f32; DIM * DIM * 6];
     let mut applied: usize = 0;
+    let mut init_steps: usize = 0;
+    if !init_path.is_empty() {
+        match fuga::ai::htm_temporal::load_unified(&init_path) {
+            Some((iw, ip, _owm, meta, _hj, ik)) => {
+                if iw.len() == w.len() {
+                    w.clone_from(&iw);
+                }
+                if ip.len() == w_patch.len() {
+                    w_patch.clone_from(&ip);
+                }
+                if let Some(k) = &ik {
+                    if k.len() == kan_c.len() {
+                        kan_c.clone_from(k);
+                    }
+                }
+                init_steps = meta.steps as usize;
+                if let Some((wz, we)) = fuga::ai::htm_temporal::load_unified_macro2(&init_path) {
+                    if wz.len() == w_macro.len() {
+                        w_macro.clone_from(&wz);
+                    }
+                    if macro_pc2 && we.len() == w_macro_e.len() {
+                        w_macro_e.clone_from(&we);
+                    }
+                }
+                let nrm = |v: &[f32]| -> f32 { v.iter().map(|x| x * x).sum::<f32>().sqrt() };
+                println!(
+                    "[init] тёплый старт из {}: ||W_local||={:.3} ||W_patch||={:.3} ||W_macro||={:.3} steps={}",
+                    init_path,
+                    nrm(&w),
+                    nrm(&w_patch),
+                    nrm(&w_macro),
+                    init_steps
+                );
+            }
+            None => {
+                eprintln!("[init] чекпоинт не читается: {} — старт с нуля", init_path);
+            }
+        }
+    }
     let mut next_ckpt: usize = ckpt_every;
     let t0 = Instant::now();
     let mut ident_p: Vec<f32> = vec![0.0f32; DIM * DIM];
@@ -459,15 +596,15 @@ fn main() {
                         if xs.len() >= batch {
                             // Честный LMS: err = t − W·x на GPU, затем W+KAN-дельты.
                             for (xi, ti) in xs.iter().zip(ts.iter()) {
-                                g.hybrid_step(xi, ti, lr_w, lr_kan);
+                                g.hybrid_step(xi, ti, lr_w_now(init_steps + applied), lr_kan);
                             }
                             for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                                g.hybrid_step2(xi, ti, lr_patch * lambda_now(applied));
+                                g.hybrid_step2(xi, ti, lr_patch * lambda_now(init_steps + applied));
                             }
                             // v7 УПЛОТНЕНИЕ: перекрывающиеся окна с половинным λ
                             // (мягче, чтобы не перекачать W_patch на альт. рёбрах).
                             // Каждое окно учится на цели СВОЕЙ пары (как CPU-fallback).
-                            let lam2 = lr_patch * lambda_now(applied) * 0.5;
+                            let lam2 = lr_patch * lambda_now(init_steps + applied) * 0.5;
                             for (xi, ti) in xs2b.iter() {
                                 g.hybrid_step2(xi, ti, lam2);
                             }
@@ -475,7 +612,7 @@ fn main() {
                             // Byte-H-JEPA MACRO: Widrow-Hoff в эмбеддингах
                             // err = z_tgt − W_macro·z_ctx; λ_macro масштабирует.
                             if !xms.is_empty() {
-                                let lam_m = lr_macro * lambda_now(applied);
+                                let lam_m = lr_macro * lambda_now(init_steps + applied);
                                 for (xm_i, tm_i) in xms.iter().zip(tms.iter()) {
                                     let mut pred = vec![0.0f32; DIM];
                                     for r in 0..DIM {
@@ -514,29 +651,56 @@ fn main() {
                                 g.download_w(&mut cw);
                                 g.download_w2(&mut cw2);
                                 g.download_kan(&mut ck);
+                                // Нормы на чекпоинте (диагностика оверфита без догадок):
+                                let norm_w: f32 = cw.iter().map(|v| v * v).sum::<f32>().sqrt();
+                                let norm_wp: f32 = cw2.iter().map(|v| v * v).sum::<f32>().sqrt();
+                                println!(
+                                    "[diag-ckpt {}] ||W_local||={:.3} ||W_patch||={:.3}",
+                                    applied, norm_w, norm_wp
+                                );
                                 let cm = UnifiedMeta {
                                     steps: applied as u64,
                                     patch_steps: applied as u64,
                                     ctx: ctxw as u32,
                                     version: 2,
                                 };
-                                let ckpt_path = format!("{}.ckpt.fuga", out_path);
-                                save_unified_with_kan(
-                                    &ckpt_path,
-                                    &cw,
-                                    &cw2,
-                                    &ident_p,
-                                    &cm,
-                                    None,
-                                    Some(&w_macro),
-                                    Some(&ck)
-                                )
-                                .ok();
+                                // ВЕРСИОНИРОВАННЫЙ чекпоинт (план спасения Gary, фаза 2.1):
+                                // пик val нельзя потерять перезаписью — каждый шаг в имени.
+                                let ckpt_path = format!("{}.step{}.ckpt.fuga", out_path, init_steps + applied);
+                                if macro_pc2 {
+                                    save_unified_with_kan2(
+                                        &ckpt_path,
+                                        &cw,
+                                        &cw2,
+                                        &ident_p,
+                                        &cm,
+                                        None,
+                                        &w_macro,
+                                        &w_macro_e,
+                                        Some(&ck),
+                                    )
+                                    .ok();
+                                } else {
+                                    save_unified_with_kan(
+                                        &ckpt_path,
+                                        &cw,
+                                        &cw2,
+                                        &ident_p,
+                                        &cm,
+                                        None,
+                                        Some(&w_macro),
+                                        Some(&ck),
+                                    )
+                                    .ok();
+                                }
                                 // Метрика LMS-остатка: mean ||t − W·x|| по свежим парам.
+                                // Loss-декомпозиция (фаза 2.2): patch/macro на тех же парах.
+                                let mut pr_patch: Vec<f32> = Vec::new();
+                                let mut pr_macro: Vec<f32> = Vec::new();
                                 let residual = {
                                     let mut pr = Vec::new();
                                     if let Ok(pb) = probe_buf.lock() {
-                                        for (xv, tv) in pb.iter().take(64) {
+                                        for (xv, tv, x2v, t2v, xmv, tmv) in pb.iter().take(64) {
                                             let mut pred = [0.0f32; DIM];
                                             for o in 0..DIM {
                                                 let row = o * DIM;
@@ -554,6 +718,42 @@ fn main() {
                                                 tsq += tv[o] * tv[o];
                                             }
                                             pr.push((sq.sqrt(), tsq.sqrt()));
+                                            // Loss-декомпозиция (план Gary фаза 2.2): patch и macro
+                                            // на тех же probe-парах (без обновлений весов).
+                                            if !x2v.is_empty() && !t2v.is_empty() {
+                                                let mut p2 = [0.0f32; DIM];
+                                                for o in 0..DIM {
+                                                    let row = o * DIM;
+                                                    p2[o] = cw2[row..row + DIM]
+                                                        .iter()
+                                                        .zip(x2v.iter())
+                                                        .map(|(a, b)| a * b)
+                                                        .sum();
+                                                }
+                                                let e2n: f32 = t2v
+                                                    .iter()
+                                                    .zip(p2.iter())
+                                                    .map(|(a, b)| (a - b) * (a - b))
+                                                    .sum();
+                                                pr_patch.push(e2n.sqrt());
+                                            }
+                                            if !xmv.is_empty() && !tmv.is_empty() {
+                                                let mut pm = [0.0f32; DIM];
+                                                for o in 0..DIM {
+                                                    let row = o * DIM;
+                                                    pm[o] = w_macro[row..row + DIM]
+                                                        .iter()
+                                                        .zip(xmv.iter())
+                                                        .map(|(a, b)| a * b)
+                                                        .sum();
+                                                }
+                                                let em: f32 = tmv
+                                                    .iter()
+                                                    .zip(pm.iter())
+                                                    .map(|(a, b)| (a - b) * (a - b))
+                                                    .sum();
+                                                pr_macro.push(em.sqrt());
+                                            }
                                         }
                                     }
                                     pr
@@ -567,6 +767,15 @@ fn main() {
                                         "[ckpt] {} пар: ||t−Wx||_среднее={:.4} (||t||={:.4})",
                                         applied, mean_e, mean_t
                                     );
+                                    // Loss-декомпозиция: три канала на одних probe-парах.
+                                    if !pr_patch.is_empty() {
+                                        let mp: f32 = pr_patch.iter().sum::<f32>() / pr_patch.len() as f32;
+                                        println!("[loss] patch: ||t2−Wp·x2||={:.4} (n={})", mp, pr_patch.len());
+                                    }
+                                    if !pr_macro.is_empty() {
+                                        let mm: f32 = pr_macro.iter().sum::<f32>() / pr_macro.len() as f32;
+                                        println!("[loss] macro: ||tm−Wm·xm||={:.4} (n={})", mm, pr_macro.len());
+                                    }
                                 }
                                 // Val-сплит: честный контроль оверфитта —
                                 // предсказания БЕЗ обновлений весов.
@@ -667,10 +876,10 @@ fn main() {
             }
             if !xs.is_empty() {
                 for (xi, ti) in xs.iter().zip(ts.iter()) {
-                    g.hybrid_step(xi, ti, lr_w, lr_kan);
+                    g.hybrid_step(xi, ti, lr_w_now(init_steps + applied), lr_kan);
                 }
                 for (xi, ti) in xs2.iter().zip(ts2.iter()) {
-                    g.hybrid_step2(xi, ti, lr_patch * lambda_now(applied));
+                    g.hybrid_step2(xi, ti, lr_patch * lambda_now(init_steps + applied));
                 }
                 applied += xs.len();
             }
@@ -683,6 +892,10 @@ fn main() {
             // CPU fallback: честный Widrow-Hoff (reĭенс) + KAN на остатке.
             let mut kan = fuga::ai::kan::KanTransition::new();
             let mut recv = rx;
+            // PC/PC2: каузальный остаток байтового уровня предыдущей пары
+            // (macro_pc_proof: two-block +24.6%; известен в момент i — работает при генерации).
+            let mut prev_err: Option<Vec<f32>> =
+                if macro_pc || macro_pc2 { Some(vec![0.0f32; DIM]) } else { None };
             while let Ok((x, t, x2, t2, x2b, xm, tm)) = recv.recv() {
                 // pred = W·x (линейный вклад)
                 let mut pred = vec![0.0f32; DIM];
@@ -694,22 +907,69 @@ fn main() {
                     }
                     pred[o] = acc;
                 }
+                let mut err_v = vec![0.0f32; DIM]; // PC: остаток пары → вход следующей
                 for o in 0..DIM {
                     let err = t[o] - pred[o];
+                    err_v[o] = err;
                     let row = o * DIM;
                     for i in 0..DIM {
-                        w[row + i] += lr_w * err * x[i];
+                        w[row + i] += lr_w_now(init_steps + applied) * err * x[i];
                     }
                 }
                 // Byte-H-JEPA MACRO: Widrow-Hoff в эмбеддингах (CPU fallback)
                 if !xm.is_empty() && !tm.is_empty() {
-                    let lam_m = lr_macro * lambda_now(applied);
+                    let lam_m = lr_macro * lambda_now(init_steps + applied);
+                    if macro_pc2 {
+                        // PC TWO-BLOCK (точная архитектура пруфа, +24.6%):
+                        // err = z_next − Wz·z_t − We·e_prev; два раздельных ΔW.
+                        let pe = prev_err.as_deref().unwrap(); // всегда Some при pc2
+                        let mut pz = vec![0.0f32; DIM];
+                        let mut pp = vec![0.0f32; DIM];
+                        for o in 0..DIM {
+                            let rz = o * DIM;
+                            pz[o] = w_macro[rz..rz + DIM]
+                                .iter()
+                                .zip(xm.iter())
+                                .map(|(a, b)| a * b)
+                                .sum();
+                            let re = o * DIM;
+                            pp[o] = w_macro_e[re..re + DIM]
+                                .iter()
+                                .zip(pe.iter())
+                                .map(|(a, b)| a * b)
+                                .sum();
+                        }
+                        for o in 0..DIM {
+                            let err = tm[o] - pz[o] - pp[o];
+                            let rz = o * DIM;
+                            for i in 0..DIM {
+                                w_macro[rz + i] += lam_m * err * xm[i];
+                                w_macro_e[rz + i] += lr_e * lambda_now(init_steps + applied) * err * pe[i];
+                            }
+                        }
+                        if macro_pc || macro_pc2 {
+                            prev_err = Some(err_v);
+                        }
+                    } else {
+                    // PC: вход макро дополняется каузальным остатком e_{i-1}
+                    let xm_pc: Vec<f32> = if macro_pc {
+                        match &prev_err {
+                            Some(pe) => xm
+                                .iter()
+                                .zip(pe.iter())
+                                .map(|(a, b)| a + macro_pc_k * b)
+                                .collect(),
+                            None => xm.clone(),
+                        }
+                    } else {
+                        xm.clone()
+                    };
                     let mut pm = vec![0.0f32; DIM];
                     for o in 0..DIM {
                         let row = o * DIM;
                         let mut acc = 0.0f32;
                         for i in 0..DIM {
-                            acc += w_macro[row + i] * xm[i];
+                            acc += w_macro[row + i] * xm_pc[i];
                         }
                         pm[o] = acc;
                     }
@@ -717,8 +977,12 @@ fn main() {
                         let err = tm[o] - pm[o];
                         let row = o * DIM;
                         for i in 0..DIM {
-                            w_macro[row + i] += lam_m * err * xm[i];
+                            w_macro[row + i] += lam_m * err * xm_pc[i];
                         }
+                    }
+                    if macro_pc {
+                        prev_err = Some(err_v);
+                    }
                     }
                 }
                 // KAN на честном остатке t − W·x (как hybrid.learn_pair).
@@ -750,7 +1014,7 @@ fn main() {
                         }
                         let err = t2[o] - acc;
                         for i in 0..DIM {
-                            w_patch[row + i] += lr_patch * lambda_now(applied) * err * x2[i];
+                            w_patch[row + i] += lr_patch * lambda_now(init_steps + applied) * err * x2[i];
                         }
                     }
                     // v7 УПЛОТНЕНИЕ: перекрывающееся окно (сдвиг −1) с половинным λ
@@ -764,7 +1028,7 @@ fn main() {
                             let err = t2[o] - acc;
                             for i in 0..DIM {
                                 w_patch[row + i] +=
-                                    lr_patch * lambda_now(applied) * 0.5 * err * x2b[i];
+                                    lr_patch * lambda_now(init_steps + applied) * 0.5 * err * x2b[i];
                             }
                         }
                     }
@@ -807,7 +1071,21 @@ fn main() {
         let s2: f64 = w_patch.iter().take(64).map(|x| *x as f64).sum();
         println!("[diag] нормы перед save: local_W={:.3} patch_W={:.3} sum64={:.4}/{:.4}", n1, n2, s1, s2);
     }
-    save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, Some(&w_macro), Some(&kan_c))
+    if macro_pc2 {
+        save_unified_with_kan2(
+            &out_path,
+            &w,
+            &w_patch,
+            &owm_p,
+            &meta,
+            None,
+            &w_macro,
+            &w_macro_e,
+            Some(&kan_c),
+        )
+    } else {
+        save_unified_with_kan(&out_path, &w, &w_patch, &owm_p, &meta, None, Some(&w_macro), Some(&kan_c))
+    }
         .expect("save unified+kan");
 
     // ТОЧЕЧНЫЙ ТЕСТ СЕРИАЛИЗАЦИИ (по пользовательской методике):

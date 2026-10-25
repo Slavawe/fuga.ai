@@ -7,7 +7,6 @@
 // Метрика: avg cosine KAN-предсказания → следующий байт (2000 пар).
 //
 // Usage: kan_calib <corpus.jsonl> [lr] [max_steps] [--gpu] [--no-gpu] [--ckpt-every]
-use fuga::ai::gpu_ops::GpuOps;
 use fuga::ai::htm_temporal::TemporalMemory;
 use fuga::ai::kan::KanTransition;
 use fuga::ai::sdr::{byte_basis, structure_sdr_from_sdrs};

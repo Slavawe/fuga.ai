@@ -3,7 +3,7 @@
 use fuga::ai::htm_temporal::{save_unified, UnifiedMeta};
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/rust_written.fuga".into());
+    let path = std::env::args().nth(1).unwrap_or_else(|| "rust_written.fuga".into());
     let n = 512 * 512;
     // Различимые веса: local = 0.5*i/n, patch = -0.5*i/n, OWM-P = диагональ 2.0
     let local_w: Vec<f32> = (0..n).map(|i| 0.5 * (i as f32) / (n as f32)).collect();

@@ -203,7 +203,7 @@ pub fn vicreg_loss_and_grad(
 
     grad_zhat.fill(0.0);
     let n_f32 = n as f32;
-    let d_f32 = d as f32;
+    let _d_f32 = d as f32;
 
     let mut inv_loss = 0.0f32;
     for i in 0..n {

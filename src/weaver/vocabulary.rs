@@ -14,6 +14,7 @@ struct VocabEntry {
     pub id: u32,
     pub text: String,
     pub vector: Hypervector,
+    #[allow(dead_code)] // легаси weaver: роль токена вне активного пути
     pub role: TokenRole,
 }
 

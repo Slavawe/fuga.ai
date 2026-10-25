@@ -83,7 +83,7 @@ fn main() {
     let alpha: f32 = arg(&args, "--alpha", 1.0);
     let ctxw: usize = arg(&args, "--ctx", 4);
     let ckpt_every: usize = arg(&args, "--ckpt-every", 0); // 0 = сохранить только в конце
-    let out_path: String = arg(&args, "--out", "/tmp/unified.fuga".into());
+    let out_path: String = arg(&args, "--out", "unified.fuga".into());
     let code_seed: Vec<u8> = args
         .iter()
         .position(|a| a == "--code-seed")

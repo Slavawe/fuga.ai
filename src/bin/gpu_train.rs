@@ -13,7 +13,7 @@
 //   - В конце W скачивается и сохраняется в FBW1 (bin-совместим с Rust).
 //
 // Usage: gpu_train --jsonl "corpus.jsonl,corpus2.jsonl" [--max-steps 300000]
-//                  [--batch 512] [--out /tmp/gpu_w.bin] [--no-gpu]
+//                  [--batch 512] [--out gpu_train_w.bin] [--no-gpu]
 //                  [--ckpt-every 1000000] — периодический FUGA1-чекпоинт
 //                  (переживает перезагрузку: сейв идёт ПО ХОДУ, не в конце)
 use std::io::BufRead;
@@ -91,7 +91,7 @@ fn main() {
     let max_steps: usize = arg(&args, "--max-steps", 300_000);
     let batch: usize = arg(&args, "--batch", 256);
     let lr: f32 = arg(&args, "--lr", 0.05);
-    let out_path: String = arg(&args, "--out", "/tmp/gpu_train_w.bin".into());
+    let out_path: String = arg(&args, "--out", "gpu_train_w.bin".into());
     let use_gpu = !args.iter().any(|a| a == "--no-gpu");
     let ctxw: usize = arg(&args, "--ctx", 4);
     let ckpt_every: usize = arg(&args, "--ckpt-every", 1_000_000);

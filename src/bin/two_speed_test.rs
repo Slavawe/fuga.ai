@@ -11,7 +11,6 @@
 // AD-HOC verification stand — mirrors the two-speed byte production path.
 use fuga::ai::TemporalMemory;
 use fuga::tm_generate_latent_bytes;
-use fuga::tm_generate_two_speed;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -34,7 +33,7 @@ fn main() {
         .nth(5)
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(4); // context depth for W training (bytes & patches)
-    let gap_thresh = std::env::args()
+    let _gap_thresh = std::env::args()
         .nth(6)
         .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(0.60); // BLT entropy-gap threshold sweep point

@@ -1,6 +1,9 @@
 use crate::layers::syntax_layer::ViolationKind;
 use std::io::BufRead;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -34,6 +37,9 @@ impl SandboxOutcome {
 
 pub struct MorrisSandbox {
     temp_dir: PathBuf,
+    // НАЙДЕНО АУДИТОМ 15.10: таймаут компиляции объявлен, но compile() его
+    // НЕ применяет (cmd.output() без таймаута) — кандидат на реализацию.
+    #[allow(dead_code)]
     compile_timeout: Duration,
     exec_timeout: Duration,
 }
@@ -147,9 +153,8 @@ impl MorrisSandbox {
         let now = Instant::now();
         loop {
             if now.elapsed() >= self.exec_timeout {
-                let _ = std::process::Command::new("kill")
-                    .arg(child.id().to_string())
-                    .output();
+                // Кроссплатформенное завершение: внешней утилиты `kill` на Windows нет.
+                let _ = child.kill();
                 return None;
             }
             match child.try_wait() {

@@ -14,6 +14,7 @@ pub struct Room {
     pub query_pipeline: QueryPipeline,
     pub ccd_solver: CCDSolver,
     sphere_handle: Option<RigidBodyHandle>,
+    #[allow(dead_code)] // легаси spatial: хэндл коллайдера вне активного пути
     sphere_collider: Option<ColliderHandle>,
     pub room_size: f32,
 }

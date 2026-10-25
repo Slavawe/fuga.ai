@@ -123,6 +123,7 @@ impl MappedCube {
 pub struct MappedMemory {
     pub dim: usize,
     pub num_entries: usize,
+    #[allow(dead_code)] // легаси: счётчик слов вне активного пути
     word_count: usize,
     _mmap: Mmap,
     offsets: Vec<usize>,

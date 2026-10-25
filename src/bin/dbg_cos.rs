@@ -17,7 +17,7 @@ fn main() {
     for step in 0..6 {
         let win_lo = state.len().saturating_sub(5);
         let win = &state[win_lo..];
-        let wsdrs: Vec<fuga::SdrVector> = win.iter().map(|&b| fuga::ai::sdr::byte_basis(b)).collect();
+        let _wsdrs: Vec<fuga::SdrVector> = win.iter().map(|&b| fuga::ai::sdr::byte_basis(b)).collect();
         let pred = tm.predict_bytes_latent(win);
         let mut scores: Vec<(u8, f32)> = byte_lats.iter()
             .map(|(b, l)| (*b, pred.cosine_similarity(l)))

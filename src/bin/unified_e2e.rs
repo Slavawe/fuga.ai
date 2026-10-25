@@ -6,7 +6,7 @@ use fuga::ai::htm_temporal::TemporalMemory;
 use fuga::tm_generate_two_speed_entropy;
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/unified_test.fuga".into());
+    let path = std::env::args().nth(1).unwrap_or_else(|| "unified_test.fuga".into());
     let seed: Vec<u8> = b"fn main() {".to_vec();
 
     // 1. Применяем единый файл в TM (load_unified_fuga1 читает все секции)
