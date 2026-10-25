@@ -1,5 +1,8 @@
 # Fuga Omni — Project Summary
 
+> **LEGACY (omni-стек до байтового стандарта, эпоха CUDA-гипервизора)** — исторический документ,
+> не отражает текущий байтовый стек. Актуальное состояние — AGENTS.md и README.md.
+
 ## Objective
 - Transformer-less RSVP/VSA omni-assistant with MoE memory, GPU-accelerated (CUDA), Web UI, Telegram bot, generative UI, and autonomous zx agent loop.
 

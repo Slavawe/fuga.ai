@@ -22,9 +22,33 @@ nohup.out
 *.bin
 *.ckpt.*
 *.parquet
+*.pt
+*.fgc
+
+# Веса/фото, случайно закоммиченные в прошлом (аудит 15.10): уже в индексе,
+# правило защищает от появления НОВЫХ таких файлов
+*.jpg
+
+# Токены/секреты — никогда в репо
+fuga.token
+
+# Артефакты C++-ядра
+cpp/unify_check
 
 # IDE / OS
 .idea/
 .vscode/
 .DS_Store
 fuga_downloader
+
+# Большие воспроизводимые корпуса (собираются скриптами train_fuga1/build_corpus*.py)
+train_fuga1/corpus/*.jsonl
+train_one_py/*.jsonl
+!train_fuga1/corpus/heldout_tasks.jsonl
+
+# Локальные артефакты окружения (25.10)
+fuga_core.pyd
+target_val/
+.agents/
+.claude/
+skills-lock.json

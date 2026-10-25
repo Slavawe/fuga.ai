@@ -1,188 +1,123 @@
 # Fuga — Байтовое языковое моделирование без токенов
 
-**Статус:** v2.1.0 — HybridCore (VSA + H-JEPA + OWM + KAN) интегрирован ✅  
+**Статус:** v2.2 — линейка FUGA-1.x (FineWeb-Edu, диагностический протокол, единый бинарник `fuga1`)
 **Репозиторий:** https://github.com/Slavawe/fuga.ai
 
 ---
 
 ## 🎯 Что это?
 
-**Fuga** — экспериментальная архитектура для генерации кода на уровне байтов, без токенизации. Единый гибридный контур **HybridCore** объединяет четыре технологии:
+**Fuga** — экспериментальная архитектура языкового моделирования на уровне сырых байтов, без токенизации. Единый гибридный контур объединяет:
 
-- **VSA** (Vector Symbolic Architecture) — структурная память через гиперпространство
-- **H-JEPA** (Hierarchical Joint-Embedding Predictive Architecture) — иерархическое латентное предсказание
+- **VSA** (Vector Symbolic Architecture) — 512-мерные латентные представления через SDR-энкодер
+- **H-JEPA** — предсказание латента следующего окна (канал W_macro)
 - **OWM** (Orthogonal Weight Modification) — защита от catastrophic forgetting
-- **KAN** (Kolmogorov-Arnold Networks) — нелинейная аппроксимация через сплайны
+- **KAN** (Fast-KAN, базис Чебышева) — нелинейная аппроксимация на остатке
+
+Три канала предсказания (`W_local` Widrow-Hoff + `W_patch` two-speed + `W_macro` JEPA) обучаются на GPU (wgpu) из одного конвейера, всё сериализуется в единый формат **FUGA1** (бит-в-бит совместим C++/Rust).
 
 ---
 
-## 📊 Результаты (14 августа 2026)
+## 📊 Текущее состояние (25 октября 2026) — честно
 
-### Математические гарантии (экспериментально подтверждены)
-- **OWM подавление:** 730× (0.073 → 0.0004) — на 3 порядка лучше требуемого
-- **Widrow-Hoff сходимость:** 99.4% за 50 итераций
-- **Линейный рост норм:** без взрыва градиентов
+### Что работает (измерено протоколом с baseline'ами)
 
-### Производительность
-- **CPU standalone:** 552-608 pairs/s (+53-69% выше минимума)
-- **Память:** 8.4 MB на структуру (−7% vs v9)
-- **Hot-path:** нулевые аллокации
+| Способность | Метрика | Значение |
+|---|---|---|
+| Предсказание следующего байта (полный прогон 5M) | top-1 из предсказанного латента | **32.8%** код / **32.5%** ru (шанс 0.39%, bigram-таблица 29.8%) |
+| Латентное предсказание | cos(t, W·x) vs leak-free baseline | **+0.154±0.013** (значимо, бутстреп CI [+0.12; +0.18]) |
+| Русская речь (морфемные потоки) | MB3-декодер, cyr% | 97–100% на RU-сидах, 200B стабильно |
+| Доменное разделение RU/EN | cyr% на EN-сидах | 0.0 (латиница) — управляется маркерами [RU]/[EN]/[CODE] |
+| Валидация формата | сериализация | MSE=0, бит-в-бит, 147/147 тестов |
 
-### Тестирование
-```
-running 4 tests
-✅ forward_no_panic_zero_weights ... ok
-✅ owm_delta_orthogonal_to_old_activations ... ok  ← OWM работает!
-✅ learn_step_reduces_error ... ok
-⚠️ vsa_fusion_shifts_output ... FAILED (ожидаемо: KAN-заглушка)
+### Что НЕ работает (задокументировано, не скрыто)
 
-test result: 3 passed; 1 failed
-```
+| Ограничение | Измерение |
+|---|---|
+| Полезная кодогенерация | codetest на 20 отложенных задачах: **0/40** компилируется, 0 синтаксически чисты |
+| Превосходство над bigram на малом бюджете | 5 рук × 250K: 10–23% против **32.3%** у счётной таблицы |
+| Грамматика речи | морфемно-связные потоки, не слова/синтаксис (корпус ~100MB) |
 
----
+### Диагностический протокол (главный актив проекта)
 
-## 🏗️ Архитектура HybridCore
-
-### Компоненты
-
-**W_local** — байтовые переходы (Widrow-Hoff)
-- Горизонт: 9 байт
-- Роль: локальные паттерны (`e→r`, `i→n`)
-- Результат: точные имена API (`codepoint_to_utf8`)
-
-**W_patch** — патчевые переходы (two-speed)
-- Горизонт: 16 байт (4 патча × 4 байта)
-- Роль: структурные блоки (`fn main() {` → `let x =`)
-- Результат: циклы, условия, блоки
-
-**P_owm** — ортогональный проектор
-- Метод: Woodbury-форма инкрементальной консолидации
-- Гарантия: `ΔW · A_old ≈ 0` после консолидации
-- Результат: защита от catastrophic forgetting
-
-**FastKAN** — нелинейная аппроксимация
-- Базис: Чебышев (degree=4) или B-spline
-- Роль: нелинейные аттракторы на остатке
-- Результат: сложные паттерны вне линейного подпространства
-
-### Математика forward
-```
-z_fused = normalize(z_ctx + β_vsa · HypervectorAdapter(hv))
-px      = P_owm · z_fused
-ẑ       = normalize(W_local·px + α_kan·FastKAN(px))
-```
-
-### Математика backward (Widrow-Hoff)
-```
-err_w   = z_target − W_local·px
-ΔW_local = lr_w · err_w ⊗ px       (защита OWM встроена в px)
-
-residual = normalize(z_target − W_local·px)
-ΔW_kan   = lr_kan · (residual − KAN(px)) · T_k(px[i])
-```
+Любой чекпоинт оценивается воспроизводимо:
+- **leak-free baseline** — средний целевой вектор из гистограммы ТОЛЬКО train (`--hist`);
+- **бутстреп-CI** — парная разница модель−baseline по 32 чанкам, B=1000 ресемплов (`--boot 32 --reps 1000`);
+- **top-1 проба** — точность байта из предсказанного vs истинного латента (санити энкодера: 100.000% — цепочка encoder→decoder доказанно не повреждена; узкое место — предиктор);
+- **bigram-baseline** — счётная таблица переходов (`train_fuga1/bigram_baseline.py`);
+- **codetest** — отложенные задачи, tree-sitter-python + py_compile, base-рука (`fuga1 codetest`).
 
 ---
 
 ## 🚀 Быстрый старт
 
-### Компиляция
-
+### Сборка
 ```bash
-cargo build --release --lib
-cargo test --release --lib ai::vsa_jepa_kan::tests
+cargo build --release --bin fuga1
+cargo test --release --lib   # 147/147
 ```
 
-### Standalone трейнер (CPU)
+### Единый бинарник `fuga1`
+```bash
+fuga1 train --jsonl corpus.jsonl --max-steps 5000000 --ctx 8 --patch-ctx 8 \
+            --lr-decay-steps 5000000 --init <ckpt>          # обучение (+ --init тёплый старт)
+fuga1 val   <ckpt> val_code.bin --hist train_byte_hist.bin --boot 32 --reps 1000 --top1
+fuga1 cap   <ckpt> corpus.jsonl                              # скоркарта V2/MB3
+fuga1 chat  <ckpt> --mode v3|mb3 --ru --say "привет"        # чат (v3: --temp --top-k --top-p --rep --ngram --macro-boost --syntax)
+fuga1 filter corpus.jsonl out.jsonl --drop-quantile 0.15    # Syntax Guard как фильтр данных
+fuga1 codetest <ckpt> --base-ckpt <ckpt2>                    # решающий тест кодогенерации
+```
 
-См. документацию в [docs/PHASE4_REPORT.md](docs/PHASE4_REPORT.md)
+### Пример воспроизводимого прогона (FUGA-1.3)
+```bash
+fuga1 train --jsonl train_fuga1/corpus/fuga13_train.jsonl \
+            --val train_fuga1/corpus/val_all_v12.bin \
+            --max-steps 5000000 --ctx 8 --patch-ctx 8 \
+            --lambda-tau 500000 --lr-decay-steps 5000000 --lr-min 0.005 \
+            --ckpt-every 250000 --threads 4 --out runs/fuga_1_3/fuga_1_3.fuga
+```
+Корпус: FineWeb-Edu (score≥3) 78% + код 10% + ru 9% (маркеры [CODE]/[EN]/[RU] как control-input); 98MB, SHA256 `53fb3154b9d22393`.
+
+---
+
+## 🏗️ Архитектура
+
+**W_local** — байтовые переходы (Widrow-Hoff, окно 9 байт) · **W_patch** — структурный горизонт 16 байт (two-speed, λ-curriculum 0.4→0.1) · **W_macro** — JEPA-предсказание латента следующего окна (tag=7/9 в FUGA1) · **KAN** — сплайны на остатке · **OWM** — консолидация 16 направлений при сохранении.
+
+**Декодеры**: V2 (косинусный argmax + rep_word/rep_phrase — морфемные потоки), **MB3** (патч-каркас + макро-кондиционирование — доменное разделение, 200B на всех сидах), **V3** (`GenParams`: Top-K/Top-P + температура, динамический repetition penalty `sc /= 1+p·count`, n-gram blocking, macro_boost в выбор байта, UTF-8-гейт кириллицы).
+
+**Syntax Loss — три уровня**: (1) метрика tree-sitter (v8), (2) демоция кандидатов на декоде (`syntax_guard.rs`, `--syntax`), (3) фильтр обучающих данных (`fuga1 filter`, маркер-первая классификация, err/KB-квантиль).
+
+---
+
+## 📋 Хроника (журналы в [AGENTS.md](AGENTS.md))
+
+| Дата | Веха |
+|------|------|
+| 15.10 | Windows-порт, аудит, обучение на одном Python-файле, PyO3-мост |
+| 16–17.10 | FUGA-1.0 (RU/EN/код, 2M), PC-эксперименты, capability-скоркарта, MB3-диагностика |
+| 24.10 | Единый бинарник `fuga1`, MB3-кириллица (UTF-8 гейт), FUGA-1.1 (cosine-decay + маркеры доменов) |
+| 25.10 | FineWeb-Edu 5M (FUGA-1.2), Syntax Loss ×3 уровня, диагностический протокол, код-фаза (критерий code% сдан), контекстная матрица + скрамбл-парадокс |
+
+**Главный урок недели** (окно потребления): прогон потребляет ≈1 байт корпуса на шаг — экспериментально релевантные данные должны лежать внутри этого окна; два A/B были аннулированы этим правилом (фильтр-различия на 19MB при окне 5MB).
+
+---
+
+## 🎯 Следующие шаги
+
+1. **Объектив и структура предиктора** — латентный предиктор уступает счётной биграмме на равном бюджете; скрамбл-парадокс указывает на позиционное кодирование structure_sdr-фолдинга (скрамбл как аугментация даёт +5пп — в основную модель НЕ вносится до понимания причины).
+2. **Context-скейлинг** после починки объективa (ctx 32/128 не дали прироста на текущем предикторе).
+3. **Повтор codetest** на каждом новом чекпоинте (задачи/критерии зафиксированы).
 
 ---
 
 ## 📚 Документация
 
-### Основная
-- [VSA_JEPA_KAN_INTEGRATION.md](docs/VSA_JEPA_KAN_INTEGRATION.md) — пошаговый план фаз 1-5
-- [PHASE4_REPORT.md](docs/PHASE4_REPORT.md) — результаты smoke-теста
-- [FINAL_SUMMARY.md](docs/FINAL_SUMMARY.md) — итоговая сводка всех фаз
-- [DATASETS_GUIDE.md](docs/DATASETS_GUIDE.md) — руководство по датасетам
-
-### Исторические результаты
-- [README_v9.md](README_v9.md) — архитектура v9 (до HybridCore)
-- [docs/AGENTS_detailed_history_0809.md](docs/AGENTS_detailed_history_0809.md) — история v1-v9
-- [docs/FUGA_DOCS.md](docs/FUGA_DOCS.md) — техническая документация
-
----
-
-## 🔬 Ключевые инсайты
-
-### 1. Почему два канала (W_local + W_patch)?
-
-**Аналогия:** Wavelet decomposition — разделение по частоте даёт лучшее сжатие.
-
-- **W_local:** высокочастотные (локальные переходы `e→r`)
-- **W_patch:** низкочастотные (структурные блоки `fn` → `std`)
-
-### 2. OWM vs L2 регуляризация
-
-| Метод | Избирательность |
-|-------|-----------------|
-| **L2** | Uniform (все веса одинаково) |
-| **OWM** | Селективная (null-space защищён) |
-
-**Результат:** OWM аннулирует старые направления на 730×, L2 не может дать такой избирательности.
-
-### 3. Zero-Regression (β_vsa=0)
-
-При `β_vsa=0` VSA-подмес отключен → pass-through без аллокаций → обратная совместимость с v9.
-
----
-
-## 📋 Фазы разработки
-
-| Фаза | Задача | Статус |
-|------|--------|--------|
-| **1** | Спецификация контракта | ✅ Завершена |
-| **2** | OWM + Fast-KAN | ✅ Протестирована |
-| **3** | VSA → H-JEPA | ✅ Завершена |
-| **4A** | Standalone smoke-тест | ✅ Пройден |
-| **4B** | Интеграция в GitHub | ✅ Завершена |
-| **5** | Комплексный замер | ⏸️ Готов к запуску |
-
----
-
-## 🎯 Следующие шаги (Фаза 5)
-
-1. Интегрировать в `unified_gpu_train.rs` (замена 3 каналов → 1 HybridCore)
-2. Полный прогон 1.5M шагов
-3. Валидация: name_metric, HumanEval, MBPP
-4. A/B с v9
-
-**ETA:** ~1.5 часа (40 мин прогон + 30 мин валидация + 10 мин A/B)
-
----
-
-## 🔗 Ссылки
-
-- **Датасеты:**
-  - [The Stack](https://huggingface.co/datasets/bigcode/the-stack) (100K Python файлов)
-  - [CodeSearchNet](https://huggingface.co/datasets/code_search_net) (412K функций)
-  - [HumanEval](https://huggingface.co/datasets/openai_humaneval) (164 задачи)
-  - [MBPP](https://huggingface.co/datasets/mbpp) (974 задачи)
-
-- **Скрипт подготовки:** `scripts/prepare_corpora.py`
-
----
-
-## 📝 Цитирование
-
-```bibtex
-@misc{fuga_hybrid_core_2026,
-  title={Fuga: Unified Hybrid Core (VSA + H-JEPA + OWM + KAN)},
-  author={Slavawe},
-  year={2026},
-  url={https://github.com/Slavawe/fuga.ai}
-}
-```
+- [AGENTS.md](AGENTS.md) — полные журналы сессий, все решения и отрицательные результаты
+- [runs/fuga_1_2/MANIFEST.md](runs/fuga_1_2/MANIFEST.md), [runs/fuga_1_3/MANIFEST.md](runs/fuga_1_3/MANIFEST.md) — манифесты прогонов (хэши, конфиги, вал-кривые)
+- [docs/INCIDENT_2026-10-15.md](docs/INCIDENT_2026-10-15.md) — разбор инцидента удаления корпуса
+- [audit/](audit/) — аудит проекта 15.10 (ядро/бины/python/доки)
+- [docs/archive/](docs/archive/) — исторические отчёты (HybridCore фазы 1–5, FUGA_DOCS)
 
 ---
 
@@ -195,9 +130,3 @@ MIT License
 ## 👤 Автор
 
 **Slavawe** — [@Slavawe](https://github.com/Slavawe)
-
-**Co-developed with:** Claude Opus 4 (Anthropic)
-
----
-
-**Статус:** Фазы 1-4 завершены. Готов к Фазе 5 (комплексный замер). 🚀
