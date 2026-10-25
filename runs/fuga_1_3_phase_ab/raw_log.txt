@@ -1,0 +1,153 @@
+[val] train_fuga1/corpus/val_all_v12.bin — 0.7 MB (контроль оверфитта на чекпоинтах)
+[init] тёплый старт из runs/fuga_1_2/fuga_1_2.fuga: ||W_local||=7.514 ||W_patch||=4.723 ||W_macro||=3.739 steps=5000000
+  [gpu] applied 2048 pairs
+  [gpu] applied 4096 pairs
+  [gpu] applied 6144 pairs
+  [gpu] applied 8192 pairs
+  [gpu] applied 10240 pairs
+  [gpu] applied 12288 pairs
+  [gpu] applied 14336 pairs
+  [gpu] applied 16384 pairs
+  [gpu] applied 18432 pairs
+  [gpu] applied 20480 pairs
+  [gpu] applied 22528 pairs
+  [gpu] applied 24576 pairs
+  [gpu] applied 26624 pairs
+  [gpu] applied 28672 pairs
+  [gpu] applied 30720 pairs
+  [gpu] applied 32768 pairs
+  [gpu] applied 34816 pairs
+  [gpu] applied 36864 pairs
+  [gpu] applied 38912 pairs
+  [gpu] applied 40960 pairs
+  [gpu] applied 43008 pairs
+  [gpu] applied 45056 pairs
+  [gpu] applied 47104 pairs
+  [gpu] applied 49152 pairs
+  [gpu] applied 51200 pairs
+  [gpu] applied 53248 pairs
+  [gpu] applied 55296 pairs
+  [gpu] applied 57344 pairs
+  [gpu] applied 59392 pairs
+  [gpu] applied 61440 pairs
+  [gpu] applied 63488 pairs
+  [gpu] applied 65536 pairs
+  [gpu] applied 67584 pairs
+  [gpu] applied 69632 pairs
+  [gpu] applied 71680 pairs
+  [gpu] applied 73728 pairs
+  [gpu] applied 75776 pairs
+  [gpu] applied 77824 pairs
+  [gpu] applied 79872 pairs
+  [gpu] applied 81920 pairs
+  [gpu] applied 83968 pairs
+  [gpu] applied 86016 pairs
+  [gpu] applied 88064 pairs
+  [gpu] applied 90112 pairs
+  [gpu] applied 92160 pairs
+  [gpu] applied 94208 pairs
+  [gpu] applied 96256 pairs
+  [gpu] applied 98304 pairs
+  [gpu] applied 100352 pairs
+  [gpu] applied 102400 pairs
+  [gpu] applied 104448 pairs
+  [gpu] applied 106496 pairs
+  [gpu] applied 108544 pairs
+  [gpu] applied 110592 pairs
+  [gpu] applied 112640 pairs
+  [gpu] applied 114688 pairs
+  [gpu] applied 116736 pairs
+  [gpu] applied 118784 pairs
+  [gpu] applied 120832 pairs
+  [gpu] applied 122880 pairs
+  [gpu] applied 124928 pairs
+[diag-ckpt 125184] ||W_local||=7.528 ||W_patch||=5.324
+[ckpt] 125184 пар: ||t−Wx||_среднее=0.7819 (||t||=1.0000)
+[loss] patch: ||t2−Wp·x2||=0.8097 (n=64)
+[loss] macro: ||tm−Wm·xm||=0.8386 (n=64)
+[val] 4096 пар (val): ||t−Wx||=0.9067 (||t||=1.0000) cos(t,Wx)=0.3699
+  [ckpt-decode] naive TEXT=1B " " | CODE=1B " "
+  [ckpt] 125184 пар -> runs/fuga_1_3_phase_ab/small_raw.fuga.step5125184.ckpt.fuga
+  [syntax] C-AST errors=0 (0 = валидное дерево)
+  [gpu] applied 126976 pairs
+  [gpu] applied 129024 pairs
+  [gpu] applied 131072 pairs
+  [gpu] applied 133120 pairs
+  [gpu] applied 135168 pairs
+  [gpu] applied 137216 pairs
+  [gpu] applied 139264 pairs
+  [gpu] applied 141312 pairs
+  [gpu] applied 143360 pairs
+  [gpu] applied 145408 pairs
+  [gpu] applied 147456 pairs
+  [gpu] applied 149504 pairs
+  [gpu] applied 151552 pairs
+  [gpu] applied 153600 pairs
+  [gpu] applied 155648 pairs
+  [gpu] applied 157696 pairs
+  [gpu] applied 159744 pairs
+  [gpu] applied 161792 pairs
+  [gpu] applied 163840 pairs
+  [gpu] applied 165888 pairs
+  [gpu] applied 167936 pairs
+  [gpu] applied 169984 pairs
+  [gpu] applied 172032 pairs
+  [gpu] applied 174080 pairs
+  [gpu] applied 176128 pairs
+  [gpu] applied 178176 pairs
+  [gpu] applied 180224 pairs
+  [gpu] applied 182272 pairs
+  [gpu] applied 184320 pairs
+  [gpu] applied 186368 pairs
+  [gpu] applied 188416 pairs
+  [gpu] applied 190464 pairs
+  [gpu] applied 192512 pairs
+  [gpu] applied 194560 pairs
+  [gpu] applied 196608 pairs
+  [gpu] applied 198656 pairs
+  [gpu] applied 200704 pairs
+  [gpu] applied 202752 pairs
+  [gpu] applied 204800 pairs
+  [gpu] applied 206848 pairs
+  [gpu] applied 208896 pairs
+  [gpu] applied 210944 pairs
+  [gpu] applied 212992 pairs
+  [gpu] applied 215040 pairs
+  [gpu] applied 217088 pairs
+  [gpu] applied 219136 pairs
+  [gpu] applied 221184 pairs
+  [gpu] applied 223232 pairs
+  [gpu] applied 225280 pairs
+  [gpu] applied 227328 pairs
+  [gpu] applied 229376 pairs
+  [gpu] applied 231424 pairs
+  [gpu] applied 233472 pairs
+  [gpu] applied 235520 pairs
+  [gpu] applied 237568 pairs
+  [gpu] applied 239616 pairs
+  [gpu] applied 241664 pairs
+  [gpu] applied 243712 pairs
+  [gpu] applied 245760 pairs
+  [gpu] applied 247808 pairs
+  [gpu] applied 249856 pairs
+OWM: consolidated 16 directions
+[diag] нормы перед save: local_W=7.887 patch_W=6.246 sum64=0.1745/0.2567
+[SERIAL] local_W: MSE=0.000e0 maxdiff=0.000e0 несовпадающих=0/262144 — БИНАРНО ИДЕНТИЧЕН
+[SERIAL] patch_W: MSE=0.000e0 несовпадающих=0/262144 — БИНАРНО ИДЕНТИЧЕН
+saved runs/fuga_1_3_phase_ab/small_raw.fuga (LOCAL_W 262144 + PATCH_W 262144 + OWM_P 262144 + KAN_C 1572864)
+[diag] patch_vocab.size=3516
+
+--- TEXT SEED "the force of gravity is" ---
+  naive       (2 B): "t "
+  entropy-mem   (200 B): "vity isiity isitty isitty isitty isitty isitty isitty isitty"
+  entropy-file  (3 B): "   "
+  hybrid W+K  (1 B): " "
+
+--- CODE SEED "fn main() {" ---
+  naive       (1 B): " "
+  entropy-mem   (3 B): "   "
+  entropy-file  (3 B): "   "
+  hybrid W+K  (1 B): " "
+=== UNIFIED GPU/CPU PIPELINE COMPLETE ===
+  cpu_prepared=250000 gpu_applied=250000 in 352.4s (709 pairs/s)
+  единый файл всех технологий: runs/fuga_1_3_phase_ab/small_raw.fuga

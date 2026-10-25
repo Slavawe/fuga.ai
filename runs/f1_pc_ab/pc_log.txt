@@ -1,0 +1,29 @@
+﻿.\target\release\unified_gpu_train.exe : [val] train_fuga1/corpus/val_all.bin — 0.2 MB (контроль оверфитта на 
+чекпоинтах)
+строка:1 знак:376
++ ... ne_log.txt; .\target\release\unified_gpu_train.exe --jsonl train_fuga ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([val] train_fug... на чекпоинтах):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+OWM: consolidated 16 directions
+[diag] нормы перед save: local_W=8.848 patch_W=6.137 sum64=0.1341/-0.0782
+[SERIAL] local_W: MSE=0.000e0 maxdiff=0.000e0 несовпадающих=0/262144 — БИНАРНО ИДЕНТИЧЕН
+[SERIAL] patch_W: MSE=0.000e0 несовпадающих=0/262144 — БИНАРНО ИДЕНТИЧЕН
+saved runs\f1_pc_ab\pc_250k.fuga (LOCAL_W 262144 + PATCH_W 262144 + OWM_P 262144 + KAN_C 1572864)
+[diag] patch_vocab.size=5000
+
+--- TEXT SEED "the force of gravity is" ---
+  naive       (120 B): "анаеноенаеноенаеноенаеноенаеноенаеноенаеноенаеноенаеноенаено"
+  entropy-mem   (201 B): "vity isvity �isvity �isvity �isvity �isvity �isvity �isvity "
+  entropy-file  (200 B): " �иeаЀе� алкЀалЉоаЉк� алкЀалЉоаЉк� алкЀалЉоаЉк� алкЀалЉоаЉк�"
+  hybrid W+K  (6 B): "МММ"
+
+--- CODE SEED "fn main() {" ---
+  naive       (5 B): "оо�"
+  entropy-mem   (200 B): "ain() {ain() {ain() {ain() {ain() {ain() {ain() {ain() {ain("
+  entropy-file  (200 B): "е аЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ� ЉаЀ�"
+  hybrid W+K  (4 B): "ММ"
+=== UNIFIED GPU/CPU PIPELINE COMPLETE ===
+  cpu_prepared=250000 gpu_applied=250000 in 2381.6s (105 pairs/s)
+  единый файл всех технологий: runs\f1_pc_ab\pc_250k.fuga
